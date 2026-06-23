@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#0f1419" />
   <meta name="mobile-web-app-capable" content="yes" />
   <title>CriptoTools — панель управления</title>
-  <link rel="stylesheet" href="styles.css?v=20260630e" />
+  <link rel="stylesheet" href="styles.css?v=20260618a" />
 </head>
 <body>
   <div id="login-screen" class="screen">
@@ -16,7 +16,6 @@
       <label>Логин<input id="login-user" type="text" autocomplete="username" /></label>
       <label>Пароль<input id="login-pass" type="password" autocomplete="current-password" /></label>
       <button id="login-btn" class="btn primary">Войти</button>
-      <p class="login-alt muted"><a href="/frequi/" target="_blank" rel="noopener">Открыть FreqUI (классический)</a></p>
       <p id="login-error" class="error hidden"></p>
     </div>
   </div>
@@ -43,13 +42,9 @@
       </div>
       <nav class="topbar-menu" id="topbar-menu">
         <div id="trades-summary" class="trades-summary" aria-live="polite">—</div>
-        <p class="muted menu-desc">FreqUI, настройки пар, обновление</p>
+        <p class="muted menu-desc">Настройки пар, статистика, обновление</p>
         <div class="topbar-actions">
           <div class="toolbar-row toolbar-main">
-            <a class="btn ghost btn-icon-text" href="/frequi/" target="_blank" rel="noopener">
-              <span class="lbl-full">FreqUI (классический)</span>
-              <span class="lbl-short">FreqUI</span>
-            </a>
             <button id="stats-btn" class="btn btn-icon-text" type="button">
               <span class="lbl-full">Статистика</span>
               <span class="lbl-short">📊</span>
@@ -291,6 +286,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=20260630i"></script>
+  <script src="app.js?v=20260618a"></script>
 </body>
 </html>

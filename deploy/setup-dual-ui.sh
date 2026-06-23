@@ -11,6 +11,12 @@ fi
 rm -rf "$UI_DIR/custom-ui"
 chown -R www-data:www-data "$UI_DIR" 2>/dev/null || chown -R root:root "$UI_DIR"
 
+# Remove bundled FreqUI — only CriptoTools custom panel is used
+FREQUI_DIR=/home/freqtrade/freqtrade/freqtrade/rpc/api_server/ui/installed
+if [ -d "$FREQUI_DIR" ]; then
+  rm -rf "$FREQUI_DIR"/*
+fi
+
 install -m 644 /tmp/nginx-freqtrade.conf /etc/nginx/sites-available/freqtrade
 ln -sf /etc/nginx/sites-available/freqtrade /etc/nginx/sites-enabled/freqtrade
 rm -f /etc/nginx/sites-enabled/default

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Restore network (if wgcf broke routing) + nginx HTTPS for FreqUI on port 8443
+# Restore network (if wgcf broke routing) + nginx HTTPS for CriptoTools UI on port 8443
 set -e
 export DEBIAN_FRONTEND=noninteractive
 
@@ -22,6 +22,12 @@ if [ ! -f /etc/nginx/ssl/freqtrade.crt ]; then
     -subj "/CN=freqtrade"
 fi
 
+UI_DIR=/var/www/criptotools-ui
+mkdir -p "$UI_DIR"
+if [ -d /tmp/custom-ui ]; then
+  cp /tmp/custom-ui/index.html /tmp/custom-ui/app.js /tmp/custom-ui/styles.css "$UI_DIR/"
+fi
+
 install -m 644 /tmp/nginx-freqtrade.conf /etc/nginx/sites-available/freqtrade
 ln -sf /etc/nginx/sites-available/freqtrade /etc/nginx/sites-enabled/freqtrade
 rm -f /etc/nginx/sites-enabled/default
@@ -32,23 +38,18 @@ systemctl restart nginx
 echo "=== 3. Firewall ==="
 if command -v ufw >/dev/null 2>&1; then
   ufw allow OpenSSH
-  ufw allow 8443/tcp comment 'FreqUI HTTPS'
+  ufw allow 8443/tcp comment 'CriptoTools HTTPS'
   ufw --force enable || true
 fi
 
-echo "=== 4. Freqtrade API (localhost only) ==="
-mkdir -p /etc/systemd/system/freqtrade.service.d
-rm -f /etc/systemd/system/freqtrade.service.d/network.conf
-rm -f /etc/systemd/system/freqtrade.service.d/warp.conf
-
-systemctl daemon-reload
-systemctl restart freqtrade
-sleep 8
+echo "=== 4. Remove bundled FreqUI ==="
+FREQUI_DIR=/home/freqtrade/freqtrade/freqtrade/rpc/api_server/ui/installed
+if [ -d "$FREQUI_DIR" ]; then
+  rm -rf "$FREQUI_DIR"/*
+fi
 
 echo "=== 5. Status ==="
 systemctl is-active nginx
-systemctl is-active freqtrade
-curl -sS --connect-timeout 5 http://127.0.0.1:8080/api/v1/ping || true
 echo ""
-echo "FreqUI: https://$(curl -sS --connect-timeout 3 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}'):8443"
+echo "CriptoTools UI: https://$(curl -sS --connect-timeout 3 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}'):8443"
 echo "Login/password: see FREQUI_* in /home/freqtrade/.freqtrade.env"
