@@ -1,0 +1,17 @@
+[Unit]
+Description=Freqtrade grid bot (BB+ADX) — max 2 trades
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=freqtrade
+Group=freqtrade
+WorkingDirectory=/home/freqtrade/freqtrade
+ExecStart=/bin/bash -lc 'source /home/freqtrade/freqtrade/scripts/load_env.sh /home/freqtrade/.freqtrade.env && exec /home/freqtrade/freqtrade/.venv/bin/freqtrade trade --config user_data/config_grid.json --logfile user_data/logs/freqtrade-grid.log'
+Restart=on-failure
+RestartSec=30
+MemoryMax=2G
+
+[Install]
+WantedBy=multi-user.target

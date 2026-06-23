@@ -1,0 +1,18 @@
+[Unit]
+Description=Scan Bybit for ranging pairs and update Grid bot whitelist
+After=network-online.target freqtrade-grid.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=freqtrade
+Group=freqtrade
+WorkingDirectory=/home/freqtrade/freqtrade
+Environment=FT_BASE=/home/freqtrade/freqtrade
+Environment=FT_ENV=/home/freqtrade/.freqtrade.env
+ExecStart=/bin/bash /home/freqtrade/freqtrade/scripts/run_ranging_scan.sh
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

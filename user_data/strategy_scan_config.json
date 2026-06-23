@@ -1,0 +1,76 @@
+{
+    "timeframe": "5m",
+    "bb_period": 20,
+    "adx_period": 14,
+    "rsi_period": 14,
+    "min_turnover24h_usd": 3000000,
+    "scan_top_volume": 150,
+    "max_pairs": 12,
+    "pairs_per_strategy": null,
+    "lookback_candles": 48,
+    "exclude_symbols": ["USDCUSDT", "USDEUSDT"],
+    "exclude_bases": ["BTC", "ETH"],
+    "enabled_strategies_file": "user_data/enabled_strategies.json",
+    "strategy_config": "user_data/config_strategy.json",
+    "strategy_pairs_file": "user_data/strategy_pairs.json",
+    "strategy_reload_url": "http://127.0.0.1:8081/api/v1/reload_config",
+    "keep_open_trade_pairs": true,
+    "strategy_profiles": {
+        "CriptoPairsStrategy": {
+            "min_adx": 12,
+            "max_adx": 38,
+            "min_bb_width": 0.01,
+            "max_bb_width": 0.1,
+            "rsi_min": 28,
+            "rsi_max": 72,
+            "min_active_ratio": 0.45,
+            "min_rsi_swing": 6
+        },
+        "SupertrendStrategy": {
+            "min_adx": 20,
+            "max_adx": 50,
+            "min_bb_width": 0.015,
+            "max_bb_width": 0.12,
+            "rsi_min": 40,
+            "rsi_max": 70,
+            "min_active_ratio": 0.5,
+            "adx_sweet": 28
+        },
+        "MacdEmaStrategy": {
+            "min_adx": 18,
+            "max_adx": 45,
+            "min_bb_width": 0.012,
+            "max_bb_width": 0.11,
+            "min_ema200_dist": 0.004,
+            "min_ema200_slope": 0.0008,
+            "min_active_ratio": 0.45
+        },
+        "TripleEmaStrategy": {
+            "min_adx": 15,
+            "max_adx": 42,
+            "min_bb_width": 0.012,
+            "max_bb_width": 0.1,
+            "min_stack_ratio": 0.55,
+            "min_active_ratio": 0.4
+        },
+        "BollingerRsiStrategy": {
+            "min_adx": 8,
+            "max_adx": 26,
+            "min_bb_width": 0.012,
+            "max_bb_width": 0.065,
+            "rsi_min": 25,
+            "rsi_max": 75,
+            "min_rsi_swing": 8,
+            "min_active_ratio": 0.5
+        },
+        "AdxMomentumStrategy": {
+            "min_adx": 25,
+            "max_adx": 55,
+            "min_bb_width": 0.012,
+            "max_bb_width": 0.12,
+            "min_di_spread": 4,
+            "min_active_ratio": 0.45,
+            "adx_sweet": 32
+        }
+    }
+}

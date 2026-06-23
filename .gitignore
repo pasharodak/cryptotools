@@ -1,0 +1,17 @@
+.env
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.log
+logfile.txt
+__pycache__/
+*.pyc
+.idea/
+.vscode/
+grid_trades_*
+user_data/grid_trades_*
+user_data/*.csv
+user_data/enabled_strategies.json
+user_data/pair_config_state.json
+user_data/logs/
+deploy/*.tgz
