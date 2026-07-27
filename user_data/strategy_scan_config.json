@@ -1,15 +1,54 @@
 {
+    "apply_whitelist": false,
     "timeframe": "5m",
     "bb_period": 20,
     "adx_period": 14,
     "rsi_period": 14,
-    "min_turnover24h_usd": 3000000,
+    "min_turnover24h_usd": 8000000,
     "scan_top_volume": 150,
     "max_pairs": 12,
     "pairs_per_strategy": null,
     "lookback_candles": 48,
-    "exclude_symbols": ["USDCUSDT", "USDEUSDT"],
-    "exclude_bases": ["BTC", "ETH"],
+    "exclude_symbols": [
+        "USDCUSDT",
+        "USDEUSDT"
+    ],
+    "exclude_bases": [
+        "BTC",
+        "ETH",
+        "H",
+        "FOLKS",
+        "UB",
+        "BLESS",
+        "ESPORTS",
+        "FARTCOIN",
+        "SOXL",
+        "MYX",
+        "HEI",
+        "SAHARA",
+        "LIGHT",
+        "SKHYNIX",
+        "MAVIA",
+        "RAVE",
+        "XPL",
+        "BEAT",
+        "TNSR",
+        "RESOLV",
+        "LIT",
+        "LAB",
+        "ARX",
+        "GRASS",
+        "OPG",
+        "BEL",
+        "BILL",
+        "SLX",
+        "AERO",
+        "LUMIA",
+        "JUP",
+        "SPK",
+        "BLEND",
+        "AAVE"
+    ],
     "enabled_strategies_file": "user_data/enabled_strategies.json",
     "strategy_config": "user_data/config_strategy.json",
     "strategy_pairs_file": "user_data/strategy_pairs.json",
@@ -45,6 +84,14 @@
             "min_ema200_slope": 0.0008,
             "min_active_ratio": 0.45
         },
+        "FibPullbackStrategy": {
+            "min_adx": 18,
+            "max_adx": 42,
+            "min_bb_width": 0.012,
+            "max_bb_width": 0.1,
+            "min_stack_ratio": 0.5,
+            "min_active_ratio": 0.4
+        },
         "TripleEmaStrategy": {
             "min_adx": 15,
             "max_adx": 42,
@@ -71,6 +118,23 @@
             "min_di_spread": 4,
             "min_active_ratio": 0.45,
             "adx_sweet": 32
+        },
+        "LiteIntradayStrategy": {
+            "min_adx": 15,
+            "max_adx": 24,
+            "min_bb_width": 0.012,
+            "max_bb_width": 0.08,
+            "min_active_ratio": 0.45,
+            "adx_sweet": 19
+        },
+        "LiteRangeStrategy": {
+            "min_adx": 6,
+            "max_adx": 18,
+            "min_bb_width": 0.015,
+            "max_bb_width": 0.055,
+            "rsi_min": 30,
+            "rsi_max": 70,
+            "min_active_ratio": 0.5
         }
     }
 }

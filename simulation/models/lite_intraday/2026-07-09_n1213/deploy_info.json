@@ -1,0 +1,21 @@
+{
+  "model_id": "lite_intraday",
+  "version": "2026-07-09_n1213",
+  "archived_at": "2026-07-09T20:50:31.944354+00:00",
+  "note": "per-scenario lite_intraday",
+  "source_joblib": "D:\\cryptotools\\site\\simulation\\results\\trade_db\\models\\by_scenario\\lite_intraday\\pnl_classifier.joblib",
+  "sha256_16": "eae97b600c9c4c28",
+  "characteristics": {
+    "model_key": "lightgbm",
+    "trained_at": "2026-07-09T20:13:43.993231+00:00",
+    "n_trades": 1213,
+    "n_train": 970,
+    "n_test": 243,
+    "accuracy": 0.6255,
+    "roc_auc": 0.6345,
+    "loss_recall": 0.8889,
+    "profit_recall": 0.2424,
+    "macro_f1": 0.5415,
+    "train_source": null
+  }
+}

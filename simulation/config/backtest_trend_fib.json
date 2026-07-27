@@ -1,0 +1,37 @@
+{
+    "$schema": "https://schema.freqtrade.io/schema.json",
+    "max_open_trades": 2,
+    "stake_currency": "USDT",
+    "stake_amount": 15,
+    "dry_run": true,
+    "dry_run_wallet": 200,
+    "db_url": "sqlite:///simulation/data/sim-trend-fib.sqlite",
+    "timeframe": "5m",
+    "trading_mode": "futures",
+    "margin_mode": "isolated",
+    "position_adjustment_enable": true,
+    "minimal_roi": {"0": 0.03, "240": 0.015, "720": 0.008, "1440": 0},
+    "stoploss": -0.03,
+    "trailing_stop": false,
+    "use_exit_signal": true,
+    "pairlists": [{"method": "StaticPairList"}],
+    "exchange": {
+        "name": "bybit",
+        "key": "",
+        "secret": "",
+        "pair_whitelist": [],
+        "pair_blacklist": ["SKHYNIX/USDT:USDT"]
+    },
+    "telegram": {"enabled": false, "token": "sim", "chat_id": "0"},
+    "api_server": {
+        "enabled": false,
+        "listen_ip_address": "127.0.0.1",
+        "listen_port": 8101,
+        "username": "sim",
+        "password": "sim",
+        "jwt_secret_key": "simulation-jwt-secret-key-32chars-min"
+    },
+    "bot_name": "sim-trend-fib",
+    "strategy": "SimFibPullback",
+    "initial_state": "stopped"
+}

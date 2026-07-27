@@ -1,0 +1,5 @@
+{
+    "ranging": {},
+    "strategy": {},
+    "notes": "Deprecated — use sim_player_scan.json. Kept for optional fine overrides."
+}

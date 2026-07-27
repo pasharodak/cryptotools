@@ -1,0 +1,84 @@
+{
+  "scenario_id": "lite_intraday",
+  "model": "lightgbm + isotonic",
+  "model_key": "lightgbm",
+  "trained_at": "2026-07-09T20:13:43.993231+00:00",
+  "n_trades": 1213,
+  "n_train": 970,
+  "n_test": 243,
+  "market_coverage": {
+    "total": 1213,
+    "with_market": 1213,
+    "pct": 1.0
+  },
+  "accuracy": 0.6255,
+  "roc_auc": 0.6345,
+  "loss_recall": 0.8889,
+  "loss_precision": 0.6305,
+  "profit_recall": 0.2424,
+  "profit_precision": 0.6,
+  "macro_f1": 0.5415,
+  "confusion_matrix": [
+    [
+      128,
+      16
+    ],
+    [
+      75,
+      24
+    ]
+  ],
+  "classification_report": {
+    "loss": {
+      "precision": 0.6305418719211823,
+      "recall": 0.8888888888888888,
+      "f1-score": 0.7377521613832853,
+      "support": 144.0
+    },
+    "profit": {
+      "precision": 0.6,
+      "recall": 0.24242424242424243,
+      "f1-score": 0.34532374100719426,
+      "support": 99.0
+    },
+    "accuracy": 0.6255144032921811,
+    "macro avg": {
+      "precision": 0.6152709359605911,
+      "recall": 0.5656565656565656,
+      "f1-score": 0.5415379511952397,
+      "support": 243.0
+    },
+    "weighted avg": {
+      "precision": 0.6180988870644043,
+      "recall": 0.6255144032921811,
+      "f1-score": 0.5778739160448778,
+      "support": 243.0
+    }
+  },
+  "features": [
+    "scenario_id",
+    "pair_base",
+    "scan_type",
+    "group",
+    "strategy",
+    "is_short",
+    "stake_usdt",
+    "stoploss",
+    "roi_at_entry",
+    "hour_utc",
+    "dow_utc",
+    "mins_since_armed",
+    "log_open_rate",
+    "rsi_14",
+    "atr_pct_14",
+    "adx_14",
+    "vol_ratio_20",
+    "ret_1",
+    "ret_4",
+    "ret_12",
+    "ema_spread_pct",
+    "range_pct",
+    "dist_high_20_pct",
+    "dist_low_20_pct"
+  ]
+}

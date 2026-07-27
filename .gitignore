@@ -1,4 +1,6 @@
 .env
+.env.*
+!.env.example
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
@@ -8,10 +10,25 @@ __pycache__/
 *.pyc
 .idea/
 .vscode/
+.venv/
+site/.venv/
+user_data/
+.venv
+
+# Root junctions point at site/ — track real files under site/ only
+/user_data/
+/.venv/
+
+# Local dumps / artifacts
 grid_trades_*
 user_data/grid_trades_*
 user_data/*.csv
-user_data/enabled_strategies.json
-user_data/pair_config_state.json
-user_data/logs/
 deploy/*.tgz
+deploy/*.tar.gz
+deploy/*.zip
+
+# SSH keys (never commit)
+**/id_rsa
+**/id_rsa.pub
+**/id_rsa/
+site/deploy/id_rsa/

@@ -1,0 +1,10 @@
+# Simulation artifacts — never commit live DB copies or candle data
+data/
+results/
+logs/
+__pycache__/
+.env
+.env.*
+!.env.example
+!data/.gitkeep
+!results/.gitkeep

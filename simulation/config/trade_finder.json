@@ -1,0 +1,24 @@
+{
+    "timeframe": "5m",
+    "tp_atr_mult": 2.0,
+    "sl_atr_mult": 0.8,
+    "max_bars": 48,
+    "sample_stride": 12,
+    "scan_stride": 2,
+    "min_confidence": 0.52,
+    "stake_usdt": 10,
+    "cooldown_bars": 12,
+    "invert_signal": true,
+    "train_timerange": "20251101-20260531",
+    "train_mode": "trade_db_mixed",
+    "random_negative_ratio": 0.5,
+    "model": "xgboost",
+    "train_pairs_source": "player_pair_pool",
+    "classifier_gate": {
+        "enabled": true,
+        "scenario_id": "trend_ema",
+        "gate_mode": "profit_only",
+        "min_confidence": 0.6,
+        "armed_offset_ms": 3600000
+    }
+}

@@ -1,0 +1,21 @@
+{
+  "model_id": "trend_breakout",
+  "version": "2026-07-09_n7911",
+  "archived_at": "2026-07-09T20:50:31.981438+00:00",
+  "note": "per-scenario trend_breakout",
+  "source_joblib": "D:\\cryptotools\\site\\simulation\\results\\trade_db\\models\\by_scenario\\trend_breakout\\pnl_classifier.joblib",
+  "sha256_16": "67a7f0975af04f99",
+  "characteristics": {
+    "model_key": "lightgbm",
+    "trained_at": "2026-07-09T20:11:53.036981+00:00",
+    "n_trades": 7911,
+    "n_train": 6328,
+    "n_test": 1583,
+    "accuracy": 0.7587,
+    "roc_auc": 0.7588,
+    "loss_recall": 0.2643,
+    "profit_recall": 0.9575,
+    "macro_f1": 0.6178,
+    "train_source": null
+  }
+}

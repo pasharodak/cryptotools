@@ -1,0 +1,15 @@
+{
+  "pairs": [
+    "NEAR/USDT:USDT",
+    "WIF/USDT:USDT",
+    "HEI/USDT:USDT",
+    "RENDER/USDT:USDT",
+    "LINK/USDT:USDT",
+    "SOL/USDT:USDT",
+    "AVAX/USDT:USDT",
+    "DOGE/USDT:USDT",
+    "ADA/USDT:USDT",
+    "ARB/USDT:USDT"
+  ],
+  "note": "Historical grid winners from trade_db — fast full-period export"
+}

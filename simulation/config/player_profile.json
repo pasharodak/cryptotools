@@ -1,0 +1,21 @@
+{
+    "wallet_usdt": 100,
+    "stake_usdt": 50,
+    "stake_mode": "scenario",
+    "max_open_trades": 2,
+    "target_monthly_pct": 15,
+    "default_leverage": 5,
+    "pair_selection": {
+        "mode": "scanner",
+        "min_grid_pnl_usdt": 0.5,
+        "min_safe_grid_pnl_usdt": 0.2,
+        "min_lite_pnl_usdt": 0.08,
+        "max_grid_pairs": 10,
+        "max_safe_grid_pairs": 5,
+        "max_lite_pairs": 2,
+        "probe_stake_grid": 50,
+        "probe_stake_grid_safe": 30,
+        "probe_stake_lite": 12,
+        "use_probe_cache": true
+    }
+}

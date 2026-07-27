@@ -1,0 +1,55 @@
+{
+    "ranging": {
+        "lookback_candles": 96,
+        "adx_max": 26,
+        "bb_width_min": 0.012,
+        "bb_width_max": 0.065,
+        "min_ranging_ratio": 0.58,
+        "min_inside_bb_ratio": 0.68,
+        "min_range_stability": 0.5,
+        "min_midline_crosses": 2,
+        "max_pairs": 4,
+        "rolling_whitelist": true,
+        "whitelist_grace_scans": 2,
+        "pnl_circuit_breaker": true,
+        "pnl_circuit_window_ms": 604800000,
+        "mtf_enabled": true,
+        "mtf_required": false,
+        "priority_bases": [
+            "RENDER",
+            "HEI",
+            "SOL",
+            "AVAX",
+            "XRP",
+            "DOGE",
+            "LINK",
+            "ADA"
+        ],
+        "priority_score_boost": 1.35,
+        "exclude_bases": [
+            "BTC",
+            "ETH",
+            "BNB",
+            "INJ",
+            "TIA",
+            "SEI",
+            "OP",
+            "APT",
+            "SUI"
+        ],
+        "trade_skip_loss_streak": 2,
+        "trade_skip_min_cum_loss_usdt": 0.55,
+        "trade_loss_window_ms": 604800000,
+        "pnl_circuit_min_loss_usdt": 0.5
+    },
+    "scan_interval_minutes": 30,
+    "strategy": {
+        "max_pairs": 5,
+        "lookback_candles": 48,
+        "exclude_bases": [
+            "BTC",
+            "ETH"
+        ]
+    },
+    "notes": "Rolling top-N whitelist each scan — grid ML export uses 10m via --scan-interval-min."
+}

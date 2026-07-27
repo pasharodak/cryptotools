@@ -1,0 +1,21 @@
+{
+  "model_id": "trend_ema",
+  "version": "2026-07-09_n4487",
+  "archived_at": "2026-07-09T20:50:32.022144+00:00",
+  "note": "per-scenario trend_ema",
+  "source_joblib": "D:\\cryptotools\\site\\simulation\\results\\trade_db\\models\\by_scenario\\trend_ema\\pnl_classifier.joblib",
+  "sha256_16": "13f7ce594e62819c",
+  "characteristics": {
+    "model_key": "lightgbm",
+    "trained_at": "2026-07-09T20:12:30.606985+00:00",
+    "n_trades": 4487,
+    "n_train": 3589,
+    "n_test": 898,
+    "accuracy": 0.6715,
+    "roc_auc": 0.7157,
+    "loss_recall": 0.8187,
+    "profit_recall": 0.4753,
+    "macro_f1": 0.6469,
+    "train_source": null
+  }
+}

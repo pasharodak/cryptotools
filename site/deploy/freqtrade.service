@@ -1,0 +1,17 @@
+[Unit]
+Description=Freqtrade ML Finder bot (Bybit) — max 3 trades
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=freqtrade
+Group=freqtrade
+WorkingDirectory=/home/freqtrade/freqtrade
+ExecStart=/bin/bash -lc 'source /home/freqtrade/freqtrade/scripts/load_env.sh /home/freqtrade/.freqtrade.env && exec /home/freqtrade/freqtrade/.venv/bin/freqtrade trade --config user_data/config.json --strategy TradeFinderStrategy --logfile user_data/logs/freqtrade-finder.log'
+Restart=on-failure
+RestartSec=30
+MemoryMax=5G
+
+[Install]
+WantedBy=multi-user.target

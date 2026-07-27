@@ -1,0 +1,1238 @@
+{
+  "fetched_at": "2026-07-12T13:11:12.290306+00:00",
+  "source": "bybit_linear_volume",
+  "number_assets": 200,
+  "min_turnover_usdt": 500000.0,
+  "blacklist_excluded": [
+    "AAVE/USDT:USDT",
+    "AERO/USDT:USDT",
+    "BEAT/USDT:USDT",
+    "BEL/USDT:USDT",
+    "BILL/USDT:USDT",
+    "BLEND/USDT:USDT",
+    "BLESS/USDT:USDT",
+    "ESPORTS/USDT:USDT",
+    "FARTCOIN/USDT:USDT",
+    "FOLKS/USDT:USDT",
+    "GRASS/USDT:USDT",
+    "H/USDT:USDT",
+    "JUP/USDT:USDT",
+    "LIT/USDT:USDT",
+    "LUMIA/USDT:USDT",
+    "MAVIA/USDT:USDT",
+    "OPG/USDT:USDT",
+    "RAVE/USDT:USDT",
+    "RESOLV/USDT:USDT",
+    "SAHARA/USDT:USDT",
+    "SKHYNIX/USDT:USDT",
+    "SLX/USDT:USDT",
+    "SPK/USDT:USDT",
+    "TNSR/USDT:USDT",
+    "UB/USDT:USDT",
+    "XPL/USDT:USDT"
+  ],
+  "pairs": [
+    "BTC/USDT:USDT",
+    "ETH/USDT:USDT",
+    "SOL/USDT:USDT",
+    "XRP/USDT:USDT",
+    "T/USDT:USDT",
+    "ZEC/USDT:USDT",
+    "HYPE/USDT:USDT",
+    "LAB/USDT:USDT",
+    "EVAA/USDT:USDT",
+    "ADA/USDT:USDT",
+    "DOGE/USDT:USDT",
+    "WLD/USDT:USDT",
+    "B/USDT:USDT",
+    "XAU/USDT:USDT",
+    "ARB/USDT:USDT",
+    "SXT/USDT:USDT",
+    "ENA/USDT:USDT",
+    "1000PEPE/USDT:USDT",
+    "AVAX/USDT:USDT",
+    "SUI/USDT:USDT",
+    "NEAR/USDT:USDT",
+    "DEXE/USDT:USDT",
+    "AVGO/USDT:USDT",
+    "UNI/USDT:USDT",
+    "BNB/USDT:USDT",
+    "CL/USDT:USDT",
+    "VIRTUAL/USDT:USDT",
+    "LINK/USDT:USDT",
+    "VANRY/USDT:USDT",
+    "CLO/USDT:USDT",
+    "XLM/USDT:USDT",
+    "XPIN/USDT:USDT",
+    "TAO/USDT:USDT",
+    "ONDO/USDT:USDT",
+    "LTC/USDT:USDT",
+    "HBAR/USDT:USDT",
+    "BCH/USDT:USDT",
+    "GWEI/USDT:USDT",
+    "ALLO/USDT:USDT",
+    "SPCX/USDT:USDT",
+    "PUMPFUN/USDT:USDT",
+    "BLAST/USDT:USDT",
+    "LDO/USDT:USDT",
+    "DOT/USDT:USDT",
+    "APT/USDT:USDT",
+    "MMT/USDT:USDT",
+    "ETHFI/USDT:USDT",
+    "GRAM/USDT:USDT",
+    "TIA/USDT:USDT",
+    "XMR/USDT:USDT",
+    "INJ/USDT:USDT",
+    "OP/USDT:USDT",
+    "WIF/USDT:USDT",
+    "SOXL/USDT:USDT",
+    "SKL/USDT:USDT",
+    "EDGE/USDT:USDT",
+    "MOODENG/USDT:USDT",
+    "PARTI/USDT:USDT",
+    "TRUMP/USDT:USDT",
+    "NVDA/USDT:USDT",
+    "XAUT/USDT:USDT",
+    "ASTER/USDT:USDT",
+    "ICP/USDT:USDT",
+    "PENGU/USDT:USDT",
+    "TRX/USDT:USDT",
+    "KAITO/USDT:USDT",
+    "HMSTR/USDT:USDT",
+    "1000BONK/USDT:USDT",
+    "US/USDT:USDT",
+    "MORPHO/USDT:USDT",
+    "MNT/USDT:USDT",
+    "ANKR/USDT:USDT",
+    "TLM/USDT:USDT",
+    "XAG/USDT:USDT",
+    "TRIA/USDT:USDT",
+    "CRV/USDT:USDT",
+    "JTO/USDT:USDT",
+    "B3/USDT:USDT",
+    "WLFI/USDT:USDT",
+    "1000000BABYDOGE/USDT:USDT",
+    "EPIC/USDT:USDT",
+    "THETA/USDT:USDT",
+    "VELVET/USDT:USDT",
+    "ELSA/USDT:USDT",
+    "SNDK/USDT:USDT",
+    "PURR/USDT:USDT",
+    "EGLD/USDT:USDT",
+    "AGLD/USDT:USDT",
+    "EIGEN/USDT:USDT",
+    "SHIB1000/USDT:USDT",
+    "ORDI/USDT:USDT",
+    "ATOM/USDT:USDT",
+    "BANK/USDT:USDT",
+    "TAC/USDT:USDT",
+    "FIL/USDT:USDT",
+    "DASH/USDT:USDT",
+    "PYTH/USDT:USDT",
+    "VVV/USDT:USDT",
+    "STRK/USDT:USDT",
+    "ALGO/USDT:USDT",
+    "BASED/USDT:USDT",
+    "SEI/USDT:USDT",
+    "RIVER/USDT:USDT",
+    "HIGH/USDT:USDT",
+    "CTR/USDT:USDT",
+    "CHR/USDT:USDT",
+    "ETC/USDT:USDT",
+    "BZ/USDT:USDT",
+    "DYDX/USDT:USDT",
+    "KAT/USDT:USDT",
+    "MU/USDT:USDT",
+    "FHE/USDT:USDT",
+    "O/USDT:USDT",
+    "POL/USDT:USDT",
+    "GALA/USDT:USDT",
+    "CAP/USDT:USDT",
+    "SKY/USDT:USDT",
+    "PAXG/USDT:USDT",
+    "PENDLE/USDT:USDT",
+    "RENDER/USDT:USDT",
+    "MRVL/USDT:USDT",
+    "Q/USDT:USDT",
+    "MON/USDT:USDT",
+    "UAI/USDT:USDT",
+    "RE/USDT:USDT",
+    "CAKE/USDT:USDT",
+    "ZRO/USDT:USDT",
+    "BLUR/USDT:USDT",
+    "ALT/USDT:USDT",
+    "TUT/USDT:USDT",
+    "POPCAT/USDT:USDT",
+    "APE/USDT:USDT",
+    "ARX/USDT:USDT",
+    "AMAT/USDT:USDT",
+    "M/USDT:USDT",
+    "ID/USDT:USDT",
+    "SPX/USDT:USDT",
+    "USELESS/USDT:USDT",
+    "BSB/USDT:USDT",
+    "SKYAI1/USDT:USDT",
+    "OGN/USDT:USDT",
+    "SIREN/USDT:USDT",
+    "10000NEX/USDT:USDT",
+    "MAGMA/USDT:USDT",
+    "IOTA/USDT:USDT",
+    "SNOW/USDT:USDT",
+    "BTW/USDT:USDT",
+    "SENT/USDT:USDT",
+    "1000TAG/USDT:USDT",
+    "W/USDT:USDT",
+    "OG/USDT:USDT",
+    "PIPPIN/USDT:USDT",
+    "AXL/USDT:USDT",
+    "TREE/USDT:USDT",
+    "MYX/USDT:USDT",
+    "POWER/USDT:USDT",
+    "VET/USDT:USDT",
+    "BLUAI/USDT:USDT",
+    "KAIA/USDT:USDT",
+    "INTC/USDT:USDT",
+    "USUAL/USDT:USDT",
+    "ATH/USDT:USDT",
+    "UMA/USDT:USDT",
+    "DATA/USDT:USDT",
+    "C98/USDT:USDT",
+    "SYRUP/USDT:USDT",
+    "A/USDT:USDT",
+    "CC/USDT:USDT",
+    "SAND/USDT:USDT",
+    "CRCL/USDT:USDT",
+    "KAS/USDT:USDT",
+    "GMT/USDT:USDT",
+    "JASMY/USDT:USDT",
+    "PUNDIX/USDT:USDT",
+    "VRT/USDT:USDT",
+    "STX/USDT:USDT",
+    "ETHBTC/USDT:USDT",
+    "BERA/USDT:USDT",
+    "PLUME/USDT:USDT",
+    "CHIP/USDT:USDT",
+    "ZAMA/USDT:USDT",
+    "MEGA/USDT:USDT",
+    "TRB/USDT:USDT",
+    "SNX/USDT:USDT",
+    "ZK/USDT:USDT",
+    "AIO/USDT:USDT",
+    "WHITEWHALE/USDT:USDT",
+    "AKE/USDT:USDT",
+    "HOLO/USDT:USDT",
+    "BMNR/USDT:USDT",
+    "PORTAL/USDT:USDT",
+    "TAIKO/USDT:USDT",
+    "AXS/USDT:USDT",
+    "1000FLOKI/USDT:USDT",
+    "BIO/USDT:USDT",
+    "NBIS/USDT:USDT",
+    "ZBT/USDT:USDT",
+    "DRAM/USDT:USDT",
+    "EWY/USDT:USDT",
+    "ENSO/USDT:USDT"
+  ],
+  "details": [
+    {
+      "pair": "BTC/USDT:USDT",
+      "symbol": "BTCUSDT",
+      "turnover24h": 2138309515.07
+    },
+    {
+      "pair": "ETH/USDT:USDT",
+      "symbol": "ETHUSDT",
+      "turnover24h": 1428520208.0
+    },
+    {
+      "pair": "SOL/USDT:USDT",
+      "symbol": "SOLUSDT",
+      "turnover24h": 411906939.12
+    },
+    {
+      "pair": "XRP/USDT:USDT",
+      "symbol": "XRPUSDT",
+      "turnover24h": 169295700.6
+    },
+    {
+      "pair": "T/USDT:USDT",
+      "symbol": "TUSDT",
+      "turnover24h": 139594751.39
+    },
+    {
+      "pair": "ZEC/USDT:USDT",
+      "symbol": "ZECUSDT",
+      "turnover24h": 116083595.67
+    },
+    {
+      "pair": "HYPE/USDT:USDT",
+      "symbol": "HYPEUSDT",
+      "turnover24h": 110527419.89
+    },
+    {
+      "pair": "LAB/USDT:USDT",
+      "symbol": "LABUSDT",
+      "turnover24h": 89242828.05
+    },
+    {
+      "pair": "EVAA/USDT:USDT",
+      "symbol": "EVAAUSDT",
+      "turnover24h": 83368052.31
+    },
+    {
+      "pair": "ADA/USDT:USDT",
+      "symbol": "ADAUSDT",
+      "turnover24h": 66740105.08
+    },
+    {
+      "pair": "DOGE/USDT:USDT",
+      "symbol": "DOGEUSDT",
+      "turnover24h": 65426960.78
+    },
+    {
+      "pair": "WLD/USDT:USDT",
+      "symbol": "WLDUSDT",
+      "turnover24h": 58825207.51
+    },
+    {
+      "pair": "B/USDT:USDT",
+      "symbol": "BUSDT",
+      "turnover24h": 55231787.81
+    },
+    {
+      "pair": "XAU/USDT:USDT",
+      "symbol": "XAUUSDT",
+      "turnover24h": 52593949.9
+    },
+    {
+      "pair": "ARB/USDT:USDT",
+      "symbol": "ARBUSDT",
+      "turnover24h": 44914470.09
+    },
+    {
+      "pair": "SXT/USDT:USDT",
+      "symbol": "SXTUSDT",
+      "turnover24h": 39278261.99
+    },
+    {
+      "pair": "ENA/USDT:USDT",
+      "symbol": "ENAUSDT",
+      "turnover24h": 38466572.09
+    },
+    {
+      "pair": "1000PEPE/USDT:USDT",
+      "symbol": "1000PEPEUSDT",
+      "turnover24h": 36835262.33
+    },
+    {
+      "pair": "AVAX/USDT:USDT",
+      "symbol": "AVAXUSDT",
+      "turnover24h": 34326418.22
+    },
+    {
+      "pair": "SUI/USDT:USDT",
+      "symbol": "SUIUSDT",
+      "turnover24h": 34272399.65
+    },
+    {
+      "pair": "NEAR/USDT:USDT",
+      "symbol": "NEARUSDT",
+      "turnover24h": 33970724.15
+    },
+    {
+      "pair": "DEXE/USDT:USDT",
+      "symbol": "DEXEUSDT",
+      "turnover24h": 32960912.11
+    },
+    {
+      "pair": "AVGO/USDT:USDT",
+      "symbol": "AVGOUSDT",
+      "turnover24h": 30156113.9
+    },
+    {
+      "pair": "UNI/USDT:USDT",
+      "symbol": "UNIUSDT",
+      "turnover24h": 29317147.07
+    },
+    {
+      "pair": "BNB/USDT:USDT",
+      "symbol": "BNBUSDT",
+      "turnover24h": 22699281.22
+    },
+    {
+      "pair": "CL/USDT:USDT",
+      "symbol": "CLUSDT",
+      "turnover24h": 21586794.78
+    },
+    {
+      "pair": "VIRTUAL/USDT:USDT",
+      "symbol": "VIRTUALUSDT",
+      "turnover24h": 21404846.88
+    },
+    {
+      "pair": "LINK/USDT:USDT",
+      "symbol": "LINKUSDT",
+      "turnover24h": 21062654.86
+    },
+    {
+      "pair": "VANRY/USDT:USDT",
+      "symbol": "VANRYUSDT",
+      "turnover24h": 20172447.67
+    },
+    {
+      "pair": "CLO/USDT:USDT",
+      "symbol": "CLOUSDT",
+      "turnover24h": 19028010.69
+    },
+    {
+      "pair": "XLM/USDT:USDT",
+      "symbol": "XLMUSDT",
+      "turnover24h": 17615261.2
+    },
+    {
+      "pair": "XPIN/USDT:USDT",
+      "symbol": "XPINUSDT",
+      "turnover24h": 16899657.03
+    },
+    {
+      "pair": "TAO/USDT:USDT",
+      "symbol": "TAOUSDT",
+      "turnover24h": 16084283.35
+    },
+    {
+      "pair": "ONDO/USDT:USDT",
+      "symbol": "ONDOUSDT",
+      "turnover24h": 14967901.23
+    },
+    {
+      "pair": "LTC/USDT:USDT",
+      "symbol": "LTCUSDT",
+      "turnover24h": 12845166.83
+    },
+    {
+      "pair": "HBAR/USDT:USDT",
+      "symbol": "HBARUSDT",
+      "turnover24h": 12052384.32
+    },
+    {
+      "pair": "BCH/USDT:USDT",
+      "symbol": "BCHUSDT",
+      "turnover24h": 12040060.12
+    },
+    {
+      "pair": "GWEI/USDT:USDT",
+      "symbol": "GWEIUSDT",
+      "turnover24h": 11321323.46
+    },
+    {
+      "pair": "ALLO/USDT:USDT",
+      "symbol": "ALLOUSDT",
+      "turnover24h": 10646683.7
+    },
+    {
+      "pair": "SPCX/USDT:USDT",
+      "symbol": "SPCXUSDT",
+      "turnover24h": 10533891.17
+    },
+    {
+      "pair": "PUMPFUN/USDT:USDT",
+      "symbol": "PUMPFUNUSDT",
+      "turnover24h": 9988619.16
+    },
+    {
+      "pair": "BLAST/USDT:USDT",
+      "symbol": "BLASTUSDT",
+      "turnover24h": 9448199.06
+    },
+    {
+      "pair": "LDO/USDT:USDT",
+      "symbol": "LDOUSDT",
+      "turnover24h": 8894683.57
+    },
+    {
+      "pair": "DOT/USDT:USDT",
+      "symbol": "DOTUSDT",
+      "turnover24h": 8582486.08
+    },
+    {
+      "pair": "APT/USDT:USDT",
+      "symbol": "APTUSDT",
+      "turnover24h": 8534669.58
+    },
+    {
+      "pair": "MMT/USDT:USDT",
+      "symbol": "MMTUSDT",
+      "turnover24h": 8534138.06
+    },
+    {
+      "pair": "ETHFI/USDT:USDT",
+      "symbol": "ETHFIUSDT",
+      "turnover24h": 8498166.72
+    },
+    {
+      "pair": "GRAM/USDT:USDT",
+      "symbol": "GRAMUSDT",
+      "turnover24h": 8448023.27
+    },
+    {
+      "pair": "TIA/USDT:USDT",
+      "symbol": "TIAUSDT",
+      "turnover24h": 8422335.8
+    },
+    {
+      "pair": "XMR/USDT:USDT",
+      "symbol": "XMRUSDT",
+      "turnover24h": 8390471.84
+    },
+    {
+      "pair": "INJ/USDT:USDT",
+      "symbol": "INJUSDT",
+      "turnover24h": 8324223.27
+    },
+    {
+      "pair": "OP/USDT:USDT",
+      "symbol": "OPUSDT",
+      "turnover24h": 8206879.45
+    },
+    {
+      "pair": "WIF/USDT:USDT",
+      "symbol": "WIFUSDT",
+      "turnover24h": 8021620.03
+    },
+    {
+      "pair": "SOXL/USDT:USDT",
+      "symbol": "SOXLUSDT",
+      "turnover24h": 7911996.57
+    },
+    {
+      "pair": "SKL/USDT:USDT",
+      "symbol": "SKLUSDT",
+      "turnover24h": 7903139.06
+    },
+    {
+      "pair": "EDGE/USDT:USDT",
+      "symbol": "EDGEUSDT",
+      "turnover24h": 7507661.34
+    },
+    {
+      "pair": "MOODENG/USDT:USDT",
+      "symbol": "MOODENGUSDT",
+      "turnover24h": 7427740.96
+    },
+    {
+      "pair": "PARTI/USDT:USDT",
+      "symbol": "PARTIUSDT",
+      "turnover24h": 7182116.37
+    },
+    {
+      "pair": "TRUMP/USDT:USDT",
+      "symbol": "TRUMPUSDT",
+      "turnover24h": 6786543.75
+    },
+    {
+      "pair": "NVDA/USDT:USDT",
+      "symbol": "NVDAUSDT",
+      "turnover24h": 6492623.44
+    },
+    {
+      "pair": "XAUT/USDT:USDT",
+      "symbol": "XAUTUSDT",
+      "turnover24h": 6449806.62
+    },
+    {
+      "pair": "ASTER/USDT:USDT",
+      "symbol": "ASTERUSDT",
+      "turnover24h": 6225484.04
+    },
+    {
+      "pair": "ICP/USDT:USDT",
+      "symbol": "ICPUSDT",
+      "turnover24h": 6148127.06
+    },
+    {
+      "pair": "PENGU/USDT:USDT",
+      "symbol": "PENGUUSDT",
+      "turnover24h": 6141043.4
+    },
+    {
+      "pair": "TRX/USDT:USDT",
+      "symbol": "TRXUSDT",
+      "turnover24h": 5931278.01
+    },
+    {
+      "pair": "KAITO/USDT:USDT",
+      "symbol": "KAITOUSDT",
+      "turnover24h": 5914661.85
+    },
+    {
+      "pair": "HMSTR/USDT:USDT",
+      "symbol": "HMSTRUSDT",
+      "turnover24h": 5897059.27
+    },
+    {
+      "pair": "1000BONK/USDT:USDT",
+      "symbol": "1000BONKUSDT",
+      "turnover24h": 5882482.14
+    },
+    {
+      "pair": "US/USDT:USDT",
+      "symbol": "USUSDT",
+      "turnover24h": 5729608.46
+    },
+    {
+      "pair": "MORPHO/USDT:USDT",
+      "symbol": "MORPHOUSDT",
+      "turnover24h": 5682351.95
+    },
+    {
+      "pair": "MNT/USDT:USDT",
+      "symbol": "MNTUSDT",
+      "turnover24h": 5481558.16
+    },
+    {
+      "pair": "ANKR/USDT:USDT",
+      "symbol": "ANKRUSDT",
+      "turnover24h": 5246475.77
+    },
+    {
+      "pair": "TLM/USDT:USDT",
+      "symbol": "TLMUSDT",
+      "turnover24h": 5151414.19
+    },
+    {
+      "pair": "XAG/USDT:USDT",
+      "symbol": "XAGUSDT",
+      "turnover24h": 5085163.35
+    },
+    {
+      "pair": "TRIA/USDT:USDT",
+      "symbol": "TRIAUSDT",
+      "turnover24h": 5064708.76
+    },
+    {
+      "pair": "CRV/USDT:USDT",
+      "symbol": "CRVUSDT",
+      "turnover24h": 4963182.36
+    },
+    {
+      "pair": "JTO/USDT:USDT",
+      "symbol": "JTOUSDT",
+      "turnover24h": 4865887.92
+    },
+    {
+      "pair": "B3/USDT:USDT",
+      "symbol": "B3USDT",
+      "turnover24h": 4701605.91
+    },
+    {
+      "pair": "WLFI/USDT:USDT",
+      "symbol": "WLFIUSDT",
+      "turnover24h": 4618670.52
+    },
+    {
+      "pair": "1000000BABYDOGE/USDT:USDT",
+      "symbol": "1000000BABYDOGEUSDT",
+      "turnover24h": 4465093.14
+    },
+    {
+      "pair": "EPIC/USDT:USDT",
+      "symbol": "EPICUSDT",
+      "turnover24h": 4444152.09
+    },
+    {
+      "pair": "THETA/USDT:USDT",
+      "symbol": "THETAUSDT",
+      "turnover24h": 4427531.24
+    },
+    {
+      "pair": "VELVET/USDT:USDT",
+      "symbol": "VELVETUSDT",
+      "turnover24h": 4400325.52
+    },
+    {
+      "pair": "ELSA/USDT:USDT",
+      "symbol": "ELSAUSDT",
+      "turnover24h": 4391811.93
+    },
+    {
+      "pair": "SNDK/USDT:USDT",
+      "symbol": "SNDKUSDT",
+      "turnover24h": 4375615.4
+    },
+    {
+      "pair": "PURR/USDT:USDT",
+      "symbol": "PURRUSDT",
+      "turnover24h": 4345250.11
+    },
+    {
+      "pair": "EGLD/USDT:USDT",
+      "symbol": "EGLDUSDT",
+      "turnover24h": 4336056.5
+    },
+    {
+      "pair": "AGLD/USDT:USDT",
+      "symbol": "AGLDUSDT",
+      "turnover24h": 4262222.48
+    },
+    {
+      "pair": "EIGEN/USDT:USDT",
+      "symbol": "EIGENUSDT",
+      "turnover24h": 4235031.17
+    },
+    {
+      "pair": "SHIB1000/USDT:USDT",
+      "symbol": "SHIB1000USDT",
+      "turnover24h": 4132010.82
+    },
+    {
+      "pair": "ORDI/USDT:USDT",
+      "symbol": "ORDIUSDT",
+      "turnover24h": 3948427.67
+    },
+    {
+      "pair": "ATOM/USDT:USDT",
+      "symbol": "ATOMUSDT",
+      "turnover24h": 3938748.62
+    },
+    {
+      "pair": "BANK/USDT:USDT",
+      "symbol": "BANKUSDT",
+      "turnover24h": 3905889.59
+    },
+    {
+      "pair": "TAC/USDT:USDT",
+      "symbol": "TACUSDT",
+      "turnover24h": 3884967.6
+    },
+    {
+      "pair": "FIL/USDT:USDT",
+      "symbol": "FILUSDT",
+      "turnover24h": 3714370.46
+    },
+    {
+      "pair": "DASH/USDT:USDT",
+      "symbol": "DASHUSDT",
+      "turnover24h": 3537922.73
+    },
+    {
+      "pair": "PYTH/USDT:USDT",
+      "symbol": "PYTHUSDT",
+      "turnover24h": 3269079.3
+    },
+    {
+      "pair": "VVV/USDT:USDT",
+      "symbol": "VVVUSDT",
+      "turnover24h": 3265500.04
+    },
+    {
+      "pair": "STRK/USDT:USDT",
+      "symbol": "STRKUSDT",
+      "turnover24h": 3245924.91
+    },
+    {
+      "pair": "ALGO/USDT:USDT",
+      "symbol": "ALGOUSDT",
+      "turnover24h": 3212643.95
+    },
+    {
+      "pair": "BASED/USDT:USDT",
+      "symbol": "BASEDUSDT",
+      "turnover24h": 3206797.07
+    },
+    {
+      "pair": "SEI/USDT:USDT",
+      "symbol": "SEIUSDT",
+      "turnover24h": 3205958.94
+    },
+    {
+      "pair": "RIVER/USDT:USDT",
+      "symbol": "RIVERUSDT",
+      "turnover24h": 3159545.67
+    },
+    {
+      "pair": "HIGH/USDT:USDT",
+      "symbol": "HIGHUSDT",
+      "turnover24h": 3116041.45
+    },
+    {
+      "pair": "CTR/USDT:USDT",
+      "symbol": "CTRUSDT",
+      "turnover24h": 2961305.13
+    },
+    {
+      "pair": "CHR/USDT:USDT",
+      "symbol": "CHRUSDT",
+      "turnover24h": 2960637.42
+    },
+    {
+      "pair": "ETC/USDT:USDT",
+      "symbol": "ETCUSDT",
+      "turnover24h": 2824624.62
+    },
+    {
+      "pair": "BZ/USDT:USDT",
+      "symbol": "BZUSDT",
+      "turnover24h": 2800097.24
+    },
+    {
+      "pair": "DYDX/USDT:USDT",
+      "symbol": "DYDXUSDT",
+      "turnover24h": 2799500.37
+    },
+    {
+      "pair": "KAT/USDT:USDT",
+      "symbol": "KATUSDT",
+      "turnover24h": 2748024.53
+    },
+    {
+      "pair": "MU/USDT:USDT",
+      "symbol": "MUUSDT",
+      "turnover24h": 2745625.74
+    },
+    {
+      "pair": "FHE/USDT:USDT",
+      "symbol": "FHEUSDT",
+      "turnover24h": 2585163.83
+    },
+    {
+      "pair": "O/USDT:USDT",
+      "symbol": "OUSDT",
+      "turnover24h": 2497598.34
+    },
+    {
+      "pair": "POL/USDT:USDT",
+      "symbol": "POLUSDT",
+      "turnover24h": 2494357.66
+    },
+    {
+      "pair": "GALA/USDT:USDT",
+      "symbol": "GALAUSDT",
+      "turnover24h": 2462983.37
+    },
+    {
+      "pair": "CAP/USDT:USDT",
+      "symbol": "CAPUSDT",
+      "turnover24h": 2432272.38
+    },
+    {
+      "pair": "SKY/USDT:USDT",
+      "symbol": "SKYUSDT",
+      "turnover24h": 2428583.66
+    },
+    {
+      "pair": "PAXG/USDT:USDT",
+      "symbol": "PAXGUSDT",
+      "turnover24h": 2387618.87
+    },
+    {
+      "pair": "PENDLE/USDT:USDT",
+      "symbol": "PENDLEUSDT",
+      "turnover24h": 2361081.92
+    },
+    {
+      "pair": "RENDER/USDT:USDT",
+      "symbol": "RENDERUSDT",
+      "turnover24h": 2330675.03
+    },
+    {
+      "pair": "MRVL/USDT:USDT",
+      "symbol": "MRVLUSDT",
+      "turnover24h": 2274711.64
+    },
+    {
+      "pair": "Q/USDT:USDT",
+      "symbol": "QUSDT",
+      "turnover24h": 2188253.82
+    },
+    {
+      "pair": "MON/USDT:USDT",
+      "symbol": "MONUSDT",
+      "turnover24h": 2153578.99
+    },
+    {
+      "pair": "UAI/USDT:USDT",
+      "symbol": "UAIUSDT",
+      "turnover24h": 2138318.89
+    },
+    {
+      "pair": "RE/USDT:USDT",
+      "symbol": "REUSDT",
+      "turnover24h": 2120632.81
+    },
+    {
+      "pair": "CAKE/USDT:USDT",
+      "symbol": "CAKEUSDT",
+      "turnover24h": 2085569.77
+    },
+    {
+      "pair": "ZRO/USDT:USDT",
+      "symbol": "ZROUSDT",
+      "turnover24h": 1990395.06
+    },
+    {
+      "pair": "BLUR/USDT:USDT",
+      "symbol": "BLURUSDT",
+      "turnover24h": 1989836.04
+    },
+    {
+      "pair": "ALT/USDT:USDT",
+      "symbol": "ALTUSDT",
+      "turnover24h": 1984714.12
+    },
+    {
+      "pair": "TUT/USDT:USDT",
+      "symbol": "TUTUSDT",
+      "turnover24h": 1969205.1
+    },
+    {
+      "pair": "POPCAT/USDT:USDT",
+      "symbol": "POPCATUSDT",
+      "turnover24h": 1942393.63
+    },
+    {
+      "pair": "APE/USDT:USDT",
+      "symbol": "APEUSDT",
+      "turnover24h": 1913358.97
+    },
+    {
+      "pair": "ARX/USDT:USDT",
+      "symbol": "ARXUSDT",
+      "turnover24h": 1844318.38
+    },
+    {
+      "pair": "AMAT/USDT:USDT",
+      "symbol": "AMATUSDT",
+      "turnover24h": 1808478.19
+    },
+    {
+      "pair": "M/USDT:USDT",
+      "symbol": "MUSDT",
+      "turnover24h": 1799911.27
+    },
+    {
+      "pair": "ID/USDT:USDT",
+      "symbol": "IDUSDT",
+      "turnover24h": 1783827.44
+    },
+    {
+      "pair": "SPX/USDT:USDT",
+      "symbol": "SPXUSDT",
+      "turnover24h": 1760160.01
+    },
+    {
+      "pair": "USELESS/USDT:USDT",
+      "symbol": "USELESSUSDT",
+      "turnover24h": 1718758.49
+    },
+    {
+      "pair": "BSB/USDT:USDT",
+      "symbol": "BSBUSDT",
+      "turnover24h": 1689009.31
+    },
+    {
+      "pair": "SKYAI1/USDT:USDT",
+      "symbol": "SKYAI1USDT",
+      "turnover24h": 1648064.45
+    },
+    {
+      "pair": "OGN/USDT:USDT",
+      "symbol": "OGNUSDT",
+      "turnover24h": 1630610.83
+    },
+    {
+      "pair": "SIREN/USDT:USDT",
+      "symbol": "SIRENUSDT",
+      "turnover24h": 1622909.49
+    },
+    {
+      "pair": "10000NEX/USDT:USDT",
+      "symbol": "10000NEXUSDT",
+      "turnover24h": 1616665.27
+    },
+    {
+      "pair": "MAGMA/USDT:USDT",
+      "symbol": "MAGMAUSDT",
+      "turnover24h": 1544204.87
+    },
+    {
+      "pair": "IOTA/USDT:USDT",
+      "symbol": "IOTAUSDT",
+      "turnover24h": 1513428.65
+    },
+    {
+      "pair": "SNOW/USDT:USDT",
+      "symbol": "SNOWUSDT",
+      "turnover24h": 1412602.11
+    },
+    {
+      "pair": "BTW/USDT:USDT",
+      "symbol": "BTWUSDT",
+      "turnover24h": 1390671.03
+    },
+    {
+      "pair": "SENT/USDT:USDT",
+      "symbol": "SENTUSDT",
+      "turnover24h": 1366204.91
+    },
+    {
+      "pair": "1000TAG/USDT:USDT",
+      "symbol": "1000TAGUSDT",
+      "turnover24h": 1364741.13
+    },
+    {
+      "pair": "W/USDT:USDT",
+      "symbol": "WUSDT",
+      "turnover24h": 1364017.74
+    },
+    {
+      "pair": "OG/USDT:USDT",
+      "symbol": "OGUSDT",
+      "turnover24h": 1266043.25
+    },
+    {
+      "pair": "PIPPIN/USDT:USDT",
+      "symbol": "PIPPINUSDT",
+      "turnover24h": 1246019.21
+    },
+    {
+      "pair": "AXL/USDT:USDT",
+      "symbol": "AXLUSDT",
+      "turnover24h": 1225317.8
+    },
+    {
+      "pair": "TREE/USDT:USDT",
+      "symbol": "TREEUSDT",
+      "turnover24h": 1205503.35
+    },
+    {
+      "pair": "MYX/USDT:USDT",
+      "symbol": "MYXUSDT",
+      "turnover24h": 1204890.61
+    },
+    {
+      "pair": "POWER/USDT:USDT",
+      "symbol": "POWERUSDT",
+      "turnover24h": 1201822.81
+    },
+    {
+      "pair": "VET/USDT:USDT",
+      "symbol": "VETUSDT",
+      "turnover24h": 1201146.38
+    },
+    {
+      "pair": "BLUAI/USDT:USDT",
+      "symbol": "BLUAIUSDT",
+      "turnover24h": 1192067.93
+    },
+    {
+      "pair": "KAIA/USDT:USDT",
+      "symbol": "KAIAUSDT",
+      "turnover24h": 1191856.85
+    },
+    {
+      "pair": "INTC/USDT:USDT",
+      "symbol": "INTCUSDT",
+      "turnover24h": 1190262.25
+    },
+    {
+      "pair": "USUAL/USDT:USDT",
+      "symbol": "USUALUSDT",
+      "turnover24h": 1185666.46
+    },
+    {
+      "pair": "ATH/USDT:USDT",
+      "symbol": "ATHUSDT",
+      "turnover24h": 1170949.56
+    },
+    {
+      "pair": "UMA/USDT:USDT",
+      "symbol": "UMAUSDT",
+      "turnover24h": 1168990.49
+    },
+    {
+      "pair": "DATA/USDT:USDT",
+      "symbol": "DATAUSDT",
+      "turnover24h": 1148946.16
+    },
+    {
+      "pair": "C98/USDT:USDT",
+      "symbol": "C98USDT",
+      "turnover24h": 1138220.83
+    },
+    {
+      "pair": "SYRUP/USDT:USDT",
+      "symbol": "SYRUPUSDT",
+      "turnover24h": 1120559.88
+    },
+    {
+      "pair": "A/USDT:USDT",
+      "symbol": "AUSDT",
+      "turnover24h": 1110123.97
+    },
+    {
+      "pair": "CC/USDT:USDT",
+      "symbol": "CCUSDT",
+      "turnover24h": 1093053.03
+    },
+    {
+      "pair": "SAND/USDT:USDT",
+      "symbol": "SANDUSDT",
+      "turnover24h": 1082213.98
+    },
+    {
+      "pair": "CRCL/USDT:USDT",
+      "symbol": "CRCLUSDT",
+      "turnover24h": 1077979.55
+    },
+    {
+      "pair": "KAS/USDT:USDT",
+      "symbol": "KASUSDT",
+      "turnover24h": 1070000.98
+    },
+    {
+      "pair": "GMT/USDT:USDT",
+      "symbol": "GMTUSDT",
+      "turnover24h": 1057437.61
+    },
+    {
+      "pair": "JASMY/USDT:USDT",
+      "symbol": "JASMYUSDT",
+      "turnover24h": 1052437.38
+    },
+    {
+      "pair": "PUNDIX/USDT:USDT",
+      "symbol": "PUNDIXUSDT",
+      "turnover24h": 1051893.1
+    },
+    {
+      "pair": "VRT/USDT:USDT",
+      "symbol": "VRTUSDT",
+      "turnover24h": 1051581.04
+    },
+    {
+      "pair": "STX/USDT:USDT",
+      "symbol": "STXUSDT",
+      "turnover24h": 1046724.04
+    },
+    {
+      "pair": "ETHBTC/USDT:USDT",
+      "symbol": "ETHBTCUSDT",
+      "turnover24h": 1028883.57
+    },
+    {
+      "pair": "BERA/USDT:USDT",
+      "symbol": "BERAUSDT",
+      "turnover24h": 1024036.53
+    },
+    {
+      "pair": "PLUME/USDT:USDT",
+      "symbol": "PLUMEUSDT",
+      "turnover24h": 1023062.2
+    },
+    {
+      "pair": "CHIP/USDT:USDT",
+      "symbol": "CHIPUSDT",
+      "turnover24h": 1013771.98
+    },
+    {
+      "pair": "ZAMA/USDT:USDT",
+      "symbol": "ZAMAUSDT",
+      "turnover24h": 1009016.5
+    },
+    {
+      "pair": "MEGA/USDT:USDT",
+      "symbol": "MEGAUSDT",
+      "turnover24h": 994284.79
+    },
+    {
+      "pair": "TRB/USDT:USDT",
+      "symbol": "TRBUSDT",
+      "turnover24h": 977692.22
+    },
+    {
+      "pair": "SNX/USDT:USDT",
+      "symbol": "SNXUSDT",
+      "turnover24h": 971279.43
+    },
+    {
+      "pair": "ZK/USDT:USDT",
+      "symbol": "ZKUSDT",
+      "turnover24h": 955568.41
+    },
+    {
+      "pair": "AIO/USDT:USDT",
+      "symbol": "AIOUSDT",
+      "turnover24h": 947526.88
+    },
+    {
+      "pair": "WHITEWHALE/USDT:USDT",
+      "symbol": "WHITEWHALEUSDT",
+      "turnover24h": 944717.2
+    },
+    {
+      "pair": "AKE/USDT:USDT",
+      "symbol": "AKEUSDT",
+      "turnover24h": 932548.66
+    },
+    {
+      "pair": "HOLO/USDT:USDT",
+      "symbol": "HOLOUSDT",
+      "turnover24h": 927110.41
+    },
+    {
+      "pair": "BMNR/USDT:USDT",
+      "symbol": "BMNRUSDT",
+      "turnover24h": 903058.04
+    },
+    {
+      "pair": "PORTAL/USDT:USDT",
+      "symbol": "PORTALUSDT",
+      "turnover24h": 882301.49
+    },
+    {
+      "pair": "TAIKO/USDT:USDT",
+      "symbol": "TAIKOUSDT",
+      "turnover24h": 876581.54
+    },
+    {
+      "pair": "AXS/USDT:USDT",
+      "symbol": "AXSUSDT",
+      "turnover24h": 861632.63
+    },
+    {
+      "pair": "1000FLOKI/USDT:USDT",
+      "symbol": "1000FLOKIUSDT",
+      "turnover24h": 852548.98
+    },
+    {
+      "pair": "BIO/USDT:USDT",
+      "symbol": "BIOUSDT",
+      "turnover24h": 849459.88
+    },
+    {
+      "pair": "NBIS/USDT:USDT",
+      "symbol": "NBISUSDT",
+      "turnover24h": 849375.32
+    },
+    {
+      "pair": "ZBT/USDT:USDT",
+      "symbol": "ZBTUSDT",
+      "turnover24h": 849001.05
+    },
+    {
+      "pair": "DRAM/USDT:USDT",
+      "symbol": "DRAMUSDT",
+      "turnover24h": 846834.97
+    },
+    {
+      "pair": "EWY/USDT:USDT",
+      "symbol": "EWYUSDT",
+      "turnover24h": 835960.64
+    },
+    {
+      "pair": "ENSO/USDT:USDT",
+      "symbol": "ENSOUSDT",
+      "turnover24h": 835894.28
+    }
+  ]
+}

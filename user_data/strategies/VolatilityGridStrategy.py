@@ -1,7 +1,9 @@
 # pragma pylint: disable=missing-docstring, invalid-name
 """Volatility Grid — Bollinger Bands + ADX, grid DCA и частичный TP по середине BB."""
 
+import sys
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from pandas import DataFrame
 
@@ -9,6 +11,20 @@ import talib.abstract as ta
 from freqtrade.persistence import Trade
 from freqtrade.strategy import IStrategy
 from technical import qtpylib
+
+_USER_DATA = Path(__file__).resolve().parent.parent
+if str(_USER_DATA) not in sys.path:
+    sys.path.insert(0, str(_USER_DATA))
+from ml.gate import allow_trade_entry, pop_entry_ml, save_ml_to_trade  # noqa: E402
+from _sim_live import PROD_MINIMAL_ROI, PROD_STOPLOSS  # noqa: E402
+
+GRID_SCENARIO = {
+    "scenario_id": "live_grid",
+    "scan_type": "grid",
+    "group": "live",
+    "strategy": "VolatilityGridStrategy",
+    "label": "Grid (live)",
+}
 
 
 class VolatilityGridStrategy(IStrategy):
@@ -19,35 +35,27 @@ class VolatilityGridStrategy(IStrategy):
     process_only_new_candles = True
     startup_candle_count = 50
 
-    position_adjustment_enable = True
-    max_entry_position_adjustment = 1  # 1 initial + 1 DCA max
+    position_adjustment_enable = False
+    use_exit_signal = False
+    trailing_stop = False
 
-    adx_max = 28
-    bb_width_min = 0.018
-    grid_step = 0.012
-    partial_tp_profit = 0.004
-    pair_cooldown_minutes = 120
+    adx_max = 22
+    bb_width_min = 0.022
+    pair_cooldown_minutes = 240
 
-    # ROI from config closes only the *remaining* slice after DCA/stop — can tag "roi"
-    # while total trade is negative (leverage + realized stoploss). Exits: BB mid / partial TP.
-    minimal_roi = {}
-
-    def _stoploss_was_filled(self, trade: Trade) -> bool:
-        return any(
-            o.ft_order_side == "stoploss"
-            and o.status == "closed"
-            and (o.filled or 0) > 0
-            for o in trade.orders
-        )
+    stoploss = PROD_STOPLOSS
+    minimal_roi = PROD_MINIMAL_ROI
 
     def _pair_in_cooldown(self, pair: str, current_time: datetime) -> bool:
         """Block re-entry after stoploss / emergency exit on the same pair."""
-        last = (
-            Trade.get_trades([Trade.pair == pair, Trade.is_open.is_(False)])
-            .order_by(Trade.close_date.desc())
-            .first()
+        closed = Trade.get_trades_proxy(pair=pair, is_open=False)
+        if not closed:
+            return False
+        last = max(
+            closed,
+            key=lambda t: t.close_date or datetime.min.replace(tzinfo=UTC),
         )
-        if last is None or not last.close_date:
+        if not last.close_date:
             return False
         reason = (last.exit_reason or "").lower()
         if "stoploss" not in reason and reason != "emergency_exit":
@@ -72,7 +80,34 @@ class VolatilityGridStrategy(IStrategy):
     ) -> bool:
         if self._pair_in_cooldown(pair, current_time):
             return False
-        return True
+        df, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+        stake = float(self.config.get("stake_amount") or 0)
+        return allow_trade_entry(
+            scenario=GRID_SCENARIO,
+            pair=pair,
+            rate=rate,
+            side=side,
+            current_time=current_time,
+            stake_usdt=stake,
+            stoploss=float(self.stoploss),
+            minimal_roi=dict(self.minimal_roi),
+            timeframe=self.timeframe,
+            ohlcv_df=df,
+        )
+
+    def order_filled(
+        self,
+        pair: str,
+        trade: Trade,
+        order,
+        current_time: datetime,
+        **kwargs,
+    ) -> None:
+        if order.ft_order_side != trade.entry_side:
+            return
+        side = "short" if trade.is_short else "long"
+        ml = pop_entry_ml(pair, side, GRID_SCENARIO["scenario_id"])
+        save_ml_to_trade(trade, ml)
 
     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         bollinger = qtpylib.bollinger_bands(dataframe["close"], window=20, stds=2)
@@ -111,77 +146,9 @@ class VolatilityGridStrategy(IStrategy):
         return dataframe
 
     def populate_exit_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
-        trend_break = dataframe["adx"] > (self.adx_max + 7)
-
-        dataframe.loc[
-            (dataframe["close"] >= dataframe["bb_mid"]) | trend_break,
-            "exit_long",
-        ] = 1
-
-        dataframe.loc[
-            (dataframe["close"] <= dataframe["bb_mid"]) | trend_break,
-            "exit_short",
-        ] = 1
-
+        dataframe["exit_long"] = 0
+        dataframe["exit_short"] = 0
         return dataframe
-
-    def adjust_trade_position(
-        self,
-        trade: Trade,
-        current_time: datetime,
-        current_rate: float,
-        current_profit: float,
-        min_stake: float | None,
-        max_stake: float,
-        current_entry_rate: float,
-        current_exit_rate: float,
-        current_entry_profit: float,
-        current_exit_profit: float,
-        **kwargs,
-    ) -> float | None | tuple[float | None, str | None]:
-        dataframe, _ = self.dp.get_analyzed_dataframe(trade.pair, self.timeframe)
-        if dataframe.empty:
-            return None
-
-        last = dataframe.iloc[-1]
-        filled_entries = trade.select_filled_orders(trade.entry_side)
-        if not filled_entries:
-            return None
-
-        initial_stake = filled_entries[0].stake_amount
-        exit_orders = [
-            o for o in trade.orders if o.ft_order_side == trade.exit_side and o.status == "closed"
-        ]
-        partial_done = any(o.ft_order_tag == "partial_tp_bb_mid" for o in exit_orders)
-
-        if (
-            not partial_done
-            and current_profit > self.partial_tp_profit
-        ):
-            at_mid = (
-                last["close"] >= last["bb_mid"] * 0.998
-                and last["close"] <= last["bb_mid"] * 1.002
-            )
-            if at_mid:
-                partial_stake = trade.stake_amount * 0.5
-                if min_stake and partial_stake < min_stake:
-                    return None
-                return (-partial_stake, "partial_tp_bb_mid")
-
-        if self._stoploss_was_filled(trade):
-            return None
-
-        if trade.nr_of_successful_entries > self.max_entry_position_adjustment:
-            return None
-
-        adverse_move = -self.grid_step * trade.nr_of_successful_entries
-        if current_profit > adverse_move:
-            return None
-
-        add_stake = min(initial_stake, max_stake)
-        if min_stake and add_stake < min_stake:
-            return None
-        return (add_stake, "grid_dca")
 
     def leverage(
         self,

@@ -1,0 +1,65 @@
+{
+    "updated": "2026-07-13",
+    "ml_gate": {
+        "enabled": true,
+        "gate_mode": "block_loss",
+        "block_predicted": "loss",
+        "min_confidence": 0.0,
+        "grid_bots": {
+            "gate_mode": "profit_only",
+            "min_confidence": 0.7
+        },
+        "finder_bots": {
+            "gate_mode": "profit_only",
+            "min_confidence": 0.6
+        },
+        "strategy_bots": {
+            "gate_mode": "profit_only",
+            "min_confidence": 0.6
+        }
+    },
+    "min_ml_pnl_usdt": 5.0,
+    "enabled_scenarios": [
+        "live_grid",
+        "trend_breakout",
+        "trend_ema",
+        "lite_mean_rev",
+        "lite_intraday",
+        "lite_range"
+    ],
+    "prod_strategy_bots": [
+        "trend_supertrend",
+        "trend_macd_ema",
+        "trend_fib"
+    ],
+    "extended_training_scenarios": [
+        "trend_supertrend",
+        "trend_macd_ema",
+        "lite_rsi_ema",
+        "lite_swing",
+        "lite_scalp",
+        "lite_hft",
+        "lite_arbitrage",
+        "lite_position",
+        "trend_fib",
+        "trend_liquidity",
+        "trend_channel"
+    ],
+    "disabled_scenarios": {
+        "trend_liquidity": "ML PnL -10.40 USDT",
+        "lite_swing": "ML PnL -2.24 USDT",
+        "lite_position": "no trades",
+        "lite_arbitrage": "ML PnL +0.77 minimal",
+        "trend_channel": "ML PnL +1.50, scanner better",
+        "lite_hft": "ML PnL +3.84 minimal",
+        "lite_scalp": "ML PnL +4.51 minimal",
+        "live_grid_safe": "duplicate grid — keep live_grid only",
+        "live_freqai": "replaced — old FreqAI prod bot",
+        "live_strategy": "replaced — old strategy prod bot"
+    },
+    "live_vps": {
+        "keep_services": ["freqtrade-grid", "freqtrade-strategy"],
+        "disable_services": ["freqtrade"],
+        "update_services": ["freqtrade-strategy", "freqtrade-grid"]
+    }
+}

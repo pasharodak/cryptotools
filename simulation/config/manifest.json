@@ -1,0 +1,29 @@
+{
+    "live_project_root": "D:/cryptotools/site",
+    "sim_project_root": "D:/cryptotools/simulation",
+    "timerange": "20250101-20260706",
+    "player_timerange": "20250101-20260706",
+    "sim_tuning": "simulation/config/sim_tuning.json",
+    "player_pairs": [],
+    "player_pair_selection": "scan_ranging",
+    "starting_balance_usdt": 100,
+    "stake_currency": "USDT",
+    "timeframe": "5m",
+    "player_timeframe": "1s",
+    "exchange": "bybit",
+    "trading_mode": "futures",
+    "sim_exchange_api": "http://127.0.0.1:18999",
+    "sim_player_port": 18999,
+    "freqtrade_datadir": "simulation/data/freqtrade",
+    "results_dir": "simulation/results",
+    "live_dbs": {
+        "freqai": "simulation/data/live_dbs/tradesv3-freqai.sqlite",
+        "strategy": "simulation/data/live_dbs/tradesv3-strategy.sqlite",
+        "grid": "simulation/data/live_dbs/tradesv3-grid.sqlite"
+    },
+    "vps": {
+        "host": "root@77.222.35.209",
+        "remote_base": "/home/freqtrade/freqtrade",
+        "ssh_key": "D:/cryptotools/site/deploy/id_rsa/id_rsa"
+    }
+}

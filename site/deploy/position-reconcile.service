@@ -1,0 +1,12 @@
+[Unit]
+Description=Reconcile Freqtrade open trades with Bybit positions
+After=network-online.target freqtrade.service freqtrade-strategy.service freqtrade-grid.service pair-config.service
+
+[Service]
+Type=oneshot
+User=freqtrade
+Group=freqtrade
+WorkingDirectory=/home/freqtrade/freqtrade
+Environment=FT_BASE=/home/freqtrade/freqtrade
+Environment=FT_ENV=/home/freqtrade/.freqtrade.env
+ExecStart=/home/freqtrade/freqtrade/.venv/bin/python3 /home/freqtrade/freqtrade/scripts/reconcile_positions.py --fix --json

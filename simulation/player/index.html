@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sim Player — CriptoTools</title>
+  <link rel="stylesheet" href="/static/styles.css?v=14" />
+  <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <h1>Sim Player</h1>
+    <span class="badge">7 ботов вкл. · переключатели у стратегий</span>
+    <span id="connStatus" class="conn off">offline</span>
+  </header>
+
+  <section class="controls">
+    <label>
+      Пара
+      <select id="pairSelect"></select>
+    </label>
+    <label>
+      От
+      <input type="datetime-local" id="dateFrom" step="1" />
+    </label>
+    <label>
+      До
+      <input type="datetime-local" id="dateTo" step="1" />
+    </label>
+    <label>
+      Стейк
+      <select id="stakeModeSelect" title="По стратегии — из конфига каждого бота; Единый — один размер для всех">
+        <option value="scenario">По стратегии</option>
+        <option value="uniform">Единый</option>
+      </select>
+    </label>
+    <label id="stakeAmountWrap">
+      USDT
+      <input type="number" id="stakeAmountInput" min="1" max="500" step="1" value="50" title="Размер одной сделки" />
+    </label>
+    <button id="btnStakeApply" class="btn sm" type="button" title="Сохранить стейк">Стейк ✓</button>
+    <button id="btnLoad" class="btn primary">Загрузить график</button>
+    <div class="player-btns">
+      <button id="btnPlay" class="btn success">▶ Play</button>
+      <button id="btnPrgon" class="btn success" title="Быстрый прогон всех ботов без часов">⚡ Прогон</button>
+      <button id="btnPause" class="btn">⏸ Pause</button>
+      <button id="btnStop" class="btn danger">⏹ Stop</button>
+      <button id="btnPairs" class="btn" type="button" title="Пары для симуляции">Пары (…)</button>
+      <label class="ml-gate-toggle" title="XGBoost: не входить, если модель предсказывает loss">
+        <input type="checkbox" id="mlGateToggle" checked />
+        ML gate
+      </label>
+      <div class="menu-wrap">
+        <button id="btnMenu" class="btn" type="button" aria-haspopup="true">Сброс ▾</button>
+        <div id="resetMenu" class="dropdown-menu hidden" role="menu">
+          <button type="button" data-reset="replay">↺ К началу периода</button>
+          <button type="button" data-reset="bots">🗑 Сбросить ботов</button>
+          <button type="button" data-reset="reprepare">↻ Пересчитать симуляцию</button>
+          <button type="button" data-reset="all">⟲ Полный сброс</button>
+          <button type="button" data-reset="probe">⌁ Сброс probe-кэша</button>
+        </div>
+      </div>
+    </div>
+    <div class="speed-group">
+      <span>Скорость:</span>
+      <button class="btn speed" data-speed="2">×2</button>
+      <button class="btn speed" data-speed="5">×5</button>
+      <button class="btn speed" data-speed="100">×100</button>
+      <button class="btn speed" data-speed="3600">×3600</button>
+      <span id="speedLabel" class="speed-label">1 sim-с/с</span>
+    </div>
+  </section>
+
+  <section class="status-bar">
+    <div><b>Время:</b> <span id="clockLabel">—</span></div>
+    <div><b>Close:</b> <span id="priceLabel">—</span></div>
+    <div><b>Equity:</b> <span id="equityLabel">—</span></div>
+    <div><b>Депозит:</b> <span id="portfolioLabel" class="muted">—</span></div>
+    <div><b>Стейки:</b> <span id="stakeLabel" class="muted">50 USDT · 5x · max 2 поз.</span></div>
+    <div><b>Статус:</b> <span id="statusLabel">stopped</span></div>
+    <div id="slTpLabel" class="sltp hidden"><b>SL/TP:</b> <span>—</span></div>
+  </section>
+
+  <main class="layout">
+    <div class="main-col">
+      <div class="chart-wrap">
+        <div id="chart" class="chart"></div>
+        <div id="tradeHighlights" class="trade-highlights"></div>
+      </div>
+
+      <section class="strategies-section">
+        <h2 class="section-title">Стратегии и боты</h2>
+        <p class="section-hint muted"><b>Play</b> — replay с часами по парам. <b>Прогон</b> — все боты параллельно, сделки сразу в карточки (без realtime).</p>
+        <div id="strategyPanels" class="strategy-panels"></div>
+      </section>
+    </div>
+
+    <aside class="sidebar">
+      <h3>Боты <span id="botsCount" class="muted"></span></h3>
+      <div id="botsPanel" class="bots-panel">Нажмите ▶ Play</div>
+      <div id="botDetail" class="bot-detail hidden"></div>
+      <h3>Лог</h3>
+      <pre id="logBox" class="log-box"></pre>
+    </aside>
+  </main>
+
+  <div id="pairsModal" class="modal hidden" role="dialog" aria-labelledby="pairsModalTitle">
+    <div class="modal-backdrop" data-close="pairs"></div>
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2 id="pairsModalTitle">Пары для симуляции</h2>
+        <button type="button" class="btn icon" data-close="pairs" aria-label="Закрыть">✕</button>
+      </div>
+      <p class="muted modal-hint">Backtest и сканер только по выбранным парам. Вход — когда сканер выбрал пару (ADX, BB, score).</p>
+      <div class="modal-toolbar">
+        <button type="button" class="btn sm" id="pairsSelectAll">Все</button>
+        <button type="button" class="btn sm" id="pairsSelectNone">Ничего</button>
+        <span id="pairsSelectedCount" class="muted"></span>
+      </div>
+      <div id="pairsChecklist" class="pairs-checklist"></div>
+      <div class="modal-foot">
+        <button type="button" class="btn" data-close="pairs">Отмена</button>
+        <button type="button" class="btn primary" id="pairsSave">Применить</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js?v=42"></script>
+</body>
+</html>

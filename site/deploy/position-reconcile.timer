@@ -1,0 +1,10 @@
+[Unit]
+Description=Periodic FT vs Bybit position reconcile
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

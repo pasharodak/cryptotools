@@ -1,0 +1,21 @@
+{
+  "model_id": "lite_mean_rev",
+  "version": "2026-07-09_n7671",
+  "archived_at": "2026-07-09T20:50:31.869902+00:00",
+  "note": "per-scenario lite_mean_rev",
+  "source_joblib": "D:\\cryptotools\\site\\simulation\\results\\trade_db\\models\\by_scenario\\lite_mean_rev\\pnl_classifier.joblib",
+  "sha256_16": "9aa09d3d14d168d9",
+  "characteristics": {
+    "model_key": "lightgbm",
+    "trained_at": "2026-07-09T20:13:12.928200+00:00",
+    "n_trades": 7671,
+    "n_train": 6136,
+    "n_test": 1535,
+    "accuracy": 0.7902,
+    "roc_auc": 0.8558,
+    "loss_recall": 0.5128,
+    "profit_recall": 0.9279,
+    "macro_f1": 0.7369,
+    "train_source": null
+  }
+}

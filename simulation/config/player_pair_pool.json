@@ -1,0 +1,24 @@
+{
+    "pairs": [
+        "SOL/USDT:USDT",
+        "AVAX/USDT:USDT",
+        "XRP/USDT:USDT",
+        "HEI/USDT:USDT",
+        "SEI/USDT:USDT",
+        "DOGE/USDT:USDT",
+        "LINK/USDT:USDT",
+        "ADA/USDT:USDT",
+        "SUI/USDT:USDT",
+        "NEAR/USDT:USDT",
+        "BTC/USDT:USDT",
+        "ETH/USDT:USDT",
+        "BNB/USDT:USDT",
+        "WIF/USDT:USDT",
+        "APT/USDT:USDT",
+        "ARB/USDT:USDT",
+        "OP/USDT:USDT",
+        "INJ/USDT:USDT",
+        "TIA/USDT:USDT",
+        "RENDER/USDT:USDT"
+    ]
+}

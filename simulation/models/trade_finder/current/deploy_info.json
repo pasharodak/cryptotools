@@ -1,0 +1,21 @@
+{
+  "model_id": "trade_finder",
+  "version": "2026-07-04_n0",
+  "archived_at": "2026-07-09T20:50:31.834375+00:00",
+  "note": "full registry sync",
+  "source_joblib": "D:\\cryptotools\\site\\simulation\\results\\trade_db\\models\\trade_finder.joblib",
+  "sha256_16": "be0dcc208afefb3c",
+  "characteristics": {
+    "model_key": "xgboost",
+    "trained_at": "2026-07-04T21:16:40.256906+00:00",
+    "n_trades": null,
+    "n_train": 7083,
+    "n_test": 1771,
+    "accuracy": 0.5997,
+    "roc_auc": 0.6706,
+    "loss_recall": 0.7418,
+    "profit_recall": 0.5056,
+    "macro_f1": 0.5996,
+    "train_source": "Market-only features; ATR triple-barrier labels; time-based split"
+  }
+}

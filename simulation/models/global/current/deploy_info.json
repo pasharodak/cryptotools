@@ -1,0 +1,21 @@
+{
+  "model_id": "global",
+  "version": "2026-07-09_n26339",
+  "archived_at": "2026-07-09T20:50:31.759989+00:00",
+  "note": "full registry sync",
+  "source_joblib": "D:\\cryptotools\\site\\simulation\\results\\trade_db\\models\\pnl_classifier.joblib",
+  "sha256_16": "a26f385d10b4930c",
+  "characteristics": {
+    "model_key": "lightgbm",
+    "trained_at": "2026-07-09T20:10:43.722799+00:00",
+    "n_trades": 26339,
+    "n_train": 21071,
+    "n_test": 5268,
+    "accuracy": 0.7287,
+    "roc_auc": 0.7928,
+    "loss_recall": 0.5339,
+    "profit_recall": 0.856,
+    "macro_f1": 0.7005,
+    "train_source": "all"
+  }
+}

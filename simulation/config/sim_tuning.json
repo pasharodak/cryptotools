@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "description": "Simulation-only tuning (live bots unchanged)",
+  "player_timerange": "20260620-20260625",
+  "baseline": {
+    "grid": "VolatilityGridStrategy ADX<22 SL -3%",
+    "grid_net_usdt": -0.7446,
+    "grid_trades": 40,
+    "strategy_net_usdt": 0.0994,
+    "combined_net_usdt": -0.6452
+  },
+  "tuned": {
+    "grid_strategy": "SimVolatilityGridStrategy",
+    "grid_config": "simulation/config/backtest_grid_improved.json",
+    "grid_params": "ADX<18, BB>=2.8%, partial TP 0.5%, cooldown 360m, SL -3% (sim-only class)",
+    "scan_overrides": "simulation/config/sim_scan_overrides.json",
+    "expected_grid_net_usdt": 0.098,
+    "expected_strategy_net_usdt": 0.099,
+    "expected_combined_net_usdt": 0.197
+  },
+  "worst_pairs_baseline_grid": ["HEI", "NEAR", "AVAX", "SEI"]
+}

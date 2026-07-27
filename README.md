@@ -1,32 +1,61 @@
-# CryptoTools — Freqtrade dual-bot stack
+﻿# CryptoTools
 
-Custom deployment for three Freqtrade bots (FreqAI, Strategy, Grid) with a unified web UI, pair scanners, and VPS automation.
+Торговые боты на **Freqtrade** + **Bybit USDT Perpetual**, веб-панель и симулятор.
 
-## Components
+| Папка | Назначение |
+|-------|------------|
+| `site/` | Прод: стратегии, ML-gate, custom UI, деплой на VPS |
+| `simulation/` | Симулятор биржи, replay, обучение ML-моделей |
 
-| Path | Description |
-|------|-------------|
-| `custom-ui/` | Web UI (3 panels, scan controls, logs) |
-| `deploy/` | VPS setup (`setup-dual-ui.sh`, systemd units) |
-| `scripts/` | Pair config API, ranging/strategy scanners, deploy helpers |
-| `user_data/strategies/` | Grid and multi-strategy implementations |
-| `user_data/config*.json` | Bot configs (API keys empty — fill locally) |
-| `user_data/*_scan_config.json` | Scanner settings |
+Корень `user_data/` и `.venv/` — junction на `site/` (удобные ярлыки на ПК, в git не входят).
 
-## Quick start
+## Прод (site)
 
-1. Install [Freqtrade](https://www.freqtrade.io/) (stable) on the server.
-2. Copy `user_data/` into your Freqtrade install.
-3. Run `deploy/setup-dual-ui.sh` on the VPS (see `SERVER_SETUP.md`).
-4. Fill exchange and API credentials in `config.json`, `config_strategy.json`, `config_grid.json`.
+```powershell
+cd D:\cryptotools\site
+.\scripts\load_env.ps1
+.\.venv\Scripts\freqtrade.exe trade --config user_data\config_strategy.json --strategy MultiStrategyRouter
+```
 
-## Bots
+Деплой на VPS:
 
-- **FreqAI** — port 8080, `config.json`
-- **Strategy** — port 8081, `config_strategy.json`, `MultiStrategyRouter`
-- **Grid** — port 8082, `config_grid.json`, `VolatilityGridStrategy` (3× leverage, DCA limit, pair cooldown)
+```powershell
+cd D:\cryptotools\site\scripts
+.\deploy_prod_ml.ps1
+```
 
-## Scanners
+Секреты: `site/.env` (не в git). SSH-ключ: `site/deploy/id_rsa/` (не в git).
 
-- `scripts/scan_strategy_pairs.py` — top 150 volume pairs per enabled strategy
-- `scripts/scan_ranging_pairs.py` — sideways-market filter for Grid whitelist
+Подробнее: [`site/README.md`](site/README.md), [`site/SERVER_SETUP.md`](site/SERVER_SETUP.md).
+
+## Симуляция
+
+```powershell
+cd D:\cryptotools\simulation\scripts
+.\run_sim_replay.ps1
+```
+
+Sim Player (replay 1s):
+
+```powershell
+cd D:\cryptotools\simulation\scripts
+.\start_player.ps1 -SkipDownload
+```
+
+Свечи и результаты (`simulation/data/`, `simulation/results/`) в git не коммитятся (~1.4 GB+).
+
+Подробнее: [`simulation/README.md`](simulation/README.md).
+
+## Структура site (прод)
+
+```
+site/
+├── custom-ui/          # веб-панель CriptoTools
+├── scripts/            # сканеры, API, деплой
+├── deploy/             # systemd, nginx
+├── user_data/
+│   ├── strategies/     # MultiStrategyRouter, Grid, Lite*, TradeFinder…
+│   ├── ml/             # entry gate, features
+│   └── models/         # pnl_classifier, trade_finder
+└── freqtrade/          # код Freqtrade (форк/копия)
+```

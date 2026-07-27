@@ -1,0 +1,157 @@
+{
+  "updated_at": "2026-07-09T20:50:32.056151+00:00",
+  "models": {
+    "live_grid": {
+      "label": "Grid bot (VolatilityGrid)",
+      "current_version": "2026-07-09_n335",
+      "current_path": "simulation/models/live_grid/current",
+      "characteristics": {
+        "model_key": "lightgbm",
+        "trained_at": "2026-07-09T20:11:08.964796+00:00",
+        "n_trades": 335,
+        "n_train": 268,
+        "n_test": 67,
+        "accuracy": 0.7463,
+        "roc_auc": 0.7729,
+        "loss_recall": 0.8491,
+        "profit_recall": 0.3571,
+        "macro_f1": 0.6057,
+        "train_source": null
+      },
+      "sha256_16": "23fd7a2e140138f3",
+      "archived_at": "2026-07-09T20:50:31.807118+00:00"
+    },
+    "global": {
+      "label": "Global PnL classifier (strategy + finder)",
+      "current_version": "2026-07-09_n26339",
+      "current_path": "simulation/models/global/current",
+      "characteristics": {
+        "model_key": "lightgbm",
+        "trained_at": "2026-07-09T20:10:43.722799+00:00",
+        "n_trades": 26339,
+        "n_train": 21071,
+        "n_test": 5268,
+        "accuracy": 0.7287,
+        "roc_auc": 0.7928,
+        "loss_recall": 0.5339,
+        "profit_recall": 0.856,
+        "macro_f1": 0.7005,
+        "train_source": "all"
+      },
+      "sha256_16": "a26f385d10b4930c",
+      "archived_at": "2026-07-09T20:50:31.759989+00:00"
+    },
+    "trade_finder": {
+      "label": "Trade Finder scanner",
+      "current_version": "2026-07-04_n0",
+      "current_path": "simulation/models/trade_finder/current",
+      "characteristics": {
+        "model_key": "xgboost",
+        "trained_at": "2026-07-04T21:16:40.256906+00:00",
+        "n_trades": null,
+        "n_train": 7083,
+        "n_test": 1771,
+        "accuracy": 0.5997,
+        "roc_auc": 0.6706,
+        "loss_recall": 0.7418,
+        "profit_recall": 0.5056,
+        "macro_f1": 0.5996,
+        "train_source": "Market-only features; ATR triple-barrier labels; time-based split"
+      },
+      "sha256_16": "be0dcc208afefb3c",
+      "archived_at": "2026-07-09T20:50:31.834375+00:00"
+    },
+    "per_scenario": {
+      "lite_mean_rev": {
+        "current_version": "2026-07-09_n7671",
+        "current_path": "simulation/models/lite_mean_rev/current",
+        "characteristics": {
+          "model_key": "lightgbm",
+          "trained_at": "2026-07-09T20:13:12.928200+00:00",
+          "n_trades": 7671,
+          "n_train": 6136,
+          "n_test": 1535,
+          "accuracy": 0.7902,
+          "roc_auc": 0.8558,
+          "loss_recall": 0.5128,
+          "profit_recall": 0.9279,
+          "macro_f1": 0.7369,
+          "train_source": null
+        },
+        "sha256_16": "9aa09d3d14d168d9"
+      },
+      "lite_range": {
+        "current_version": "2026-07-09_n1865",
+        "current_path": "simulation/models/lite_range/current",
+        "characteristics": {
+          "model_key": "lightgbm",
+          "trained_at": "2026-07-09T20:14:17.009176+00:00",
+          "n_trades": 1865,
+          "n_train": 1492,
+          "n_test": 373,
+          "accuracy": 0.6166,
+          "roc_auc": 0.5956,
+          "loss_recall": 0.0694,
+          "profit_recall": 0.9607,
+          "macro_f1": 0.4387,
+          "train_source": null
+        },
+        "sha256_16": "db8bd86a86952e92"
+      },
+      "lite_intraday": {
+        "current_version": "2026-07-09_n1213",
+        "current_path": "simulation/models/lite_intraday/current",
+        "characteristics": {
+          "model_key": "lightgbm",
+          "trained_at": "2026-07-09T20:13:43.993231+00:00",
+          "n_trades": 1213,
+          "n_train": 970,
+          "n_test": 243,
+          "accuracy": 0.6255,
+          "roc_auc": 0.6345,
+          "loss_recall": 0.8889,
+          "profit_recall": 0.2424,
+          "macro_f1": 0.5415,
+          "train_source": null
+        },
+        "sha256_16": "eae97b600c9c4c28"
+      },
+      "trend_breakout": {
+        "current_version": "2026-07-09_n7911",
+        "current_path": "simulation/models/trend_breakout/current",
+        "characteristics": {
+          "model_key": "lightgbm",
+          "trained_at": "2026-07-09T20:11:53.036981+00:00",
+          "n_trades": 7911,
+          "n_train": 6328,
+          "n_test": 1583,
+          "accuracy": 0.7587,
+          "roc_auc": 0.7588,
+          "loss_recall": 0.2643,
+          "profit_recall": 0.9575,
+          "macro_f1": 0.6178,
+          "train_source": null
+        },
+        "sha256_16": "67a7f0975af04f99"
+      },
+      "trend_ema": {
+        "current_version": "2026-07-09_n4487",
+        "current_path": "simulation/models/trend_ema/current",
+        "characteristics": {
+          "model_key": "lightgbm",
+          "trained_at": "2026-07-09T20:12:30.606985+00:00",
+          "n_trades": 4487,
+          "n_train": 3589,
+          "n_test": 898,
+          "accuracy": 0.6715,
+          "roc_auc": 0.7157,
+          "loss_recall": 0.8187,
+          "profit_recall": 0.4753,
+          "macro_f1": 0.6469,
+          "train_source": null
+        },
+        "sha256_16": "13f7ce594e62819c"
+      }
+    }
+  }
+}

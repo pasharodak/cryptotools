@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>EMA 50/200 — сделки на графике</title>
+  <link rel="stylesheet" href="/static/styles.css?v=1" />
+  <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+  <style>
+    .ema-layout { display: grid; grid-template-columns: 280px 1fr; height: calc(100vh - 52px); }
+    .ema-side { border-right: 1px solid var(--border); overflow: auto; padding: 8px; background: var(--panel); }
+    .ema-chart-wrap { position: relative; min-height: 400px; }
+    #chart { height: calc(100vh - 52px); }
+    .trade-row { padding: 8px; border-radius: 6px; cursor: pointer; border: 1px solid transparent; margin-bottom: 4px; font-size: 12px; }
+    .trade-row:hover { border-color: var(--border); background: #21262d; }
+    .trade-row.active { border-color: var(--accent); background: #1c2128; }
+    .trade-row.win .pnl { color: var(--green); }
+    .trade-row.loss .pnl { color: var(--red); }
+    .summary { font-size: 13px; color: var(--muted); margin-bottom: 10px; line-height: 1.5; }
+    .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .toolbar select { background: var(--bg); color: var(--text); border: 1px solid var(--border); padding: 6px 8px; border-radius: 6px; }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <h1>EMA 50/200 (4H) · SimEmaGoldenCross</h1>
+    <div class="toolbar">
+      <label>Пара <select id="pairSelect"></select></label>
+      <label>TF <select id="tfSelect"><option value="5m" selected>5m</option><option value="1s">1s</option></select></label>
+      <button type="button" id="btnReload" class="btn">Обновить</button>
+    </div>
+    <span id="status" class="muted"></span>
+  </header>
+  <div class="ema-layout">
+    <aside class="ema-side">
+      <div id="summary" class="summary"></div>
+      <div id="tradeList"></div>
+    </aside>
+    <div class="ema-chart-wrap">
+      <div id="chart"></div>
+    </div>
+  </div>
+  <script>
+    const API = "";
+    let chart, candleSeries, allTrades = [], pairTrades = [], activeId = null, pairCounts = {};
+
+    function fmtTime(ms) {
+      if (!ms) return "—";
+      return new Date(ms).toISOString().slice(0, 16).replace("T", " ") + " UTC";
+    }
+
+    async function api(path) {
+      const r = await fetch(API + path);
+      if (!r.ok) throw new Error(await r.text());
+      return r.json();
+    }
+
+    function initChart() {
+      const el = document.getElementById("chart");
+      chart = LightweightCharts.createChart(el, {
+        layout: { background: { color: "#0d1117" }, textColor: "#8b949e" },
+        grid: { vertLines: { color: "#21262d" }, horzLines: { color: "#21262d" } },
+        timeScale: { timeVisible: true, secondsVisible: false },
+      });
+      candleSeries = chart.addCandlestickSeries({
+        upColor: "#3fb950", downColor: "#f85149", borderVisible: false,
+        wickUpColor: "#3fb950", wickDownColor: "#f85149",
+      });
+      new ResizeObserver(() => chart.applyOptions({ width: el.clientWidth, height: el.clientHeight })).observe(el);
+    }
+
+    function tradeMarkers(trades) {
+      return trades.flatMap((t, i) => {
+        const open = Math.floor(t.open_ms / 1000);
+        const close = Math.floor(t.close_ms / 1000);
+        const side = t.is_short ? "S" : "L";
+        return [
+          { time: open, position: t.is_short ? "aboveBar" : "belowBar", color: "#58a6ff", shape: t.is_short ? "arrowDown" : "arrowUp", text: `${side} in` },
+          { time: close, position: t.is_short ? "belowBar" : "aboveBar", color: t.profit_abs >= 0 ? "#3fb950" : "#f85149", shape: "circle",
+            text: `${t.profit_abs >= 0 ? "+" : ""}${t.profit_abs.toFixed(2)}` },
+        ];
+      });
+    }
+
+    async function loadChart(pair, trades, focus) {
+      if (!trades.length) {
+        candleSeries.setData([]);
+        candleSeries.setMarkers([]);
+        return;
+      }
+      const start_ms = Math.min(...trades.map((t) => t.open_ms)) - 7 * 86400000;
+      const end_ms = Math.max(...trades.map((t) => t.close_ms)) + 2 * 86400000;
+      const tf = document.getElementById("tfSelect").value;
+      const data = await api(`/sim/chart?pair=${encodeURIComponent(pair)}&timeframe=${tf}&start_ms=${start_ms}&end_ms=${end_ms}&limit=20000`);
+      candleSeries.setData(data.candles);
+      candleSeries.setMarkers(tradeMarkers(trades));
+      if (focus) {
+        chart.timeScale().setVisibleRange({
+          from: Math.floor(focus.open_ms / 1000) - 3600,
+          to: Math.floor(focus.close_ms / 1000) + 3600,
+        });
+      } else {
+        chart.timeScale().fitContent();
+      }
+      document.getElementById("status").textContent = `${pair} · ${data.candles.length} свечей · ${trades.length} сделок`;
+    }
+
+    function renderList(trades) {
+      const el = document.getElementById("tradeList");
+      const showPair = document.getElementById("pairSelect").value === "__all__";
+      el.innerHTML = trades.map((t, i) => {
+        const cls = t.profit_abs >= 0 ? "win" : "loss";
+        const active = activeId === i ? " active" : "";
+        const side = t.is_short ? "short" : "long";
+        const pairTag = showPair ? `<span class="muted">${(t.pair || "").split("/")[0]} · </span>` : "";
+        return `<div class="trade-row ${cls}${active}" data-i="${i}">
+          <div>${pairTag}${fmtTime(t.open_ms)}</div>
+          <div><strong>${side}</strong> · <span class="pnl">${t.profit_abs >= 0 ? "+" : ""}${t.profit_abs.toFixed(2)} USDT</span></div>
+          <div class="muted">${t.exit_reason || "—"}</div>
+        </div>`;
+      }).join("");
+      el.querySelectorAll(".trade-row").forEach((row) => {
+        row.addEventListener("click", () => {
+          activeId = Number(row.dataset.i);
+          const t = pairTrades[activeId];
+          renderList(pairTrades);
+          updateSummary();
+          if (t?.pair) {
+            loadChart(t.pair, pairTrades.filter((x) => x.pair === t.pair), t).catch(alert);
+          }
+        });
+      });
+    }
+
+    function updateSummary() {
+      const s = window._emaSummary || {};
+      const pair = document.getElementById("pairSelect").value;
+      const onPair = pair === "__all__" ? allTrades.length : (pairTrades.length || 0);
+      const pairLabel = pair === "__all__" ? "все пары" : (pair ? pair.split("/")[0] : "—");
+      document.getElementById("summary").innerHTML =
+        `Всего по симу: <b>${s.trades || 0}</b> сд. · W${s.wins || 0} L${s.losses || 0} · Net <b>${(s.net_usdt || 0) >= 0 ? "+" : ""}${s.net_usdt || 0}</b> USDT<br>` +
+        `В списке (<b>${pairLabel}</b>): <b>${onPair}</b> сд.`;
+    }
+
+    function onPairChange() {
+      const pair = document.getElementById("pairSelect").value;
+      pairTrades = pair === "__all__" ? allTrades : allTrades.filter((t) => t.pair === pair);
+      activeId = null;
+      renderList(pairTrades);
+      updateSummary();
+      if (pair === "__all__") {
+        const first = allTrades[0]?.pair;
+        if (first) loadChart(first, allTrades.filter((t) => t.pair === first)).catch(alert);
+        else candleSeries.setData([]);
+        document.getElementById("status").textContent = `Все пары · ${allTrades.length} сделок — выберите пару для графика`;
+        return;
+      }
+      loadChart(pair, pairTrades).catch((e) => alert(e.message));
+    }
+
+    async function boot() {
+      initChart();
+      const data = await api("/sim/ema-study/trades");
+      allTrades = data.trades || [];
+      pairCounts = data.pair_counts || {};
+      window._emaSummary = data.summary || {};
+      const sel = document.getElementById("pairSelect");
+      const pairOpts = (data.pairs || []).map((p) => {
+        const n = pairCounts[p] || 0;
+        return `<option value="${p}">${p.split("/")[0]} (${n})</option>`;
+      }).join("");
+      sel.innerHTML = `<option value="__all__">Все пары (${allTrades.length})</option>` + pairOpts;
+      sel.addEventListener("change", onPairChange);
+      document.getElementById("tfSelect").addEventListener("change", () => {
+        const pair = sel.value;
+        if (pair !== "__all__") onPairChange();
+      });
+      document.getElementById("btnReload").addEventListener("click", () => boot().catch(alert));
+      if (allTrades.length) {
+        sel.value = data.pairs?.[0] || "__all__";
+        onPairChange();
+      } else {
+        document.getElementById("status").textContent = "Нет сделок — запустите run_ema_only_sim.py";
+      }
+    }
+
+    boot().catch((e) => {
+      document.getElementById("status").textContent = "Ошибка: " + e.message;
+      alert(e.message);
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+{
+    "pairs": [
+        "LTC/USDT:USDT",
+        "ALGO/USDT:USDT",
+        "AAVE/USDT:USDT",
+        "FIL/USDT:USDT",
+        "JUP/USDT:USDT"
+    ],
+    "note": "Out-of-sample pairs — not in player_pair_pool / trade_db training set"
+}

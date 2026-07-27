@@ -1,0 +1,21 @@
+{
+  "model_id": "live_grid",
+  "version": "2026-07-09_n335",
+  "archived_at": "2026-07-09T20:50:31.807118+00:00",
+  "note": "full registry sync",
+  "source_joblib": "D:\\cryptotools\\site\\simulation\\results\\trade_db\\models\\by_scenario\\live_grid\\pnl_classifier.joblib",
+  "sha256_16": "23fd7a2e140138f3",
+  "characteristics": {
+    "model_key": "lightgbm",
+    "trained_at": "2026-07-09T20:11:08.964796+00:00",
+    "n_trades": 335,
+    "n_train": 268,
+    "n_test": 67,
+    "accuracy": 0.7463,
+    "roc_auc": 0.7729,
+    "loss_recall": 0.8491,
+    "profit_recall": 0.3571,
+    "macro_f1": 0.6057,
+    "train_source": null
+  }
+}
