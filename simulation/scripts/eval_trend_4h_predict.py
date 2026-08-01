@@ -149,7 +149,7 @@ def main() -> int:
     start = pd.Timestamp(start_s, tz="UTC")
     end = pd.Timestamp(end_s, tz="UTC")
 
-    ds = HistoricalDatastore(ROOT / "simulation/data/freqtrade")
+    ds = HistoricalDatastore(ROOT / "simulation/data/ctengine")
     model = Trend4hModel()
     pairs = pairs_from_source(ROOT, args.pairs)
     if args.limit:

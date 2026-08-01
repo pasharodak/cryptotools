@@ -18,17 +18,17 @@ Get-Content $EnvFile | ForEach-Object {
 }
 
 if ($env:BYBIT_API_KEY) {
-    $env:FREQTRADE__EXCHANGE__KEY = $env:BYBIT_API_KEY
+    $env:CTENGINE__EXCHANGE__KEY = $env:BYBIT_API_KEY
 }
 if ($env:BYBIT_API_SECRET) {
-    $env:FREQTRADE__EXCHANGE__SECRET = $env:BYBIT_API_SECRET
+    $env:CTENGINE__EXCHANGE__SECRET = $env:BYBIT_API_SECRET
 }
 if ($env:TELEGRAM_BOT_TOKEN) {
-    $env:FREQTRADE__TELEGRAM__TOKEN = $env:TELEGRAM_BOT_TOKEN
+    $env:CTENGINE__TELEGRAM__TOKEN = $env:TELEGRAM_BOT_TOKEN
 }
 if ($env:TRADE_OWNER_USER_ID) {
-    $env:FREQTRADE__TELEGRAM__CHAT_ID = $env:TRADE_OWNER_USER_ID
+    $env:CTENGINE__TELEGRAM__CHAT_ID = $env:TRADE_OWNER_USER_ID
 }
 
-Write-Host "Loaded Freqtrade secrets from $EnvFile"
+Write-Host "Loaded CryptoTools secrets from $EnvFile"
 

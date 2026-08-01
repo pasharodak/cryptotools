@@ -16,10 +16,10 @@ $Sim = Join-Path $Crypto "simulation"
 Set-Location $Crypto
 
 $py = Join-Path $Site ".venv\Scripts\python.exe"
-$ft = Join-Path $Site ".venv\Scripts\freqtrade.exe"
+$ft = Join-Path $Site ".venv\Scripts\ctbot.exe"
 
 if (-not (Test-Path $ft)) {
-    throw "Freqtrade venv not found at $ft. Create site\.venv first."
+    throw "Site venv not found at $ft. Create site\.venv first."
 }
 
 $env:PYTHONPATH = "$Crypto;$Site\scripts"

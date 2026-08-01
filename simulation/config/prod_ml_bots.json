@@ -54,12 +54,12 @@
         "lite_hft": "ML PnL +3.84 minimal",
         "lite_scalp": "ML PnL +4.51 minimal",
         "live_grid_safe": "duplicate grid — keep live_grid only",
-        "live_freqai": "replaced — old classic ML bot (replaced by TradeFinder)",
+        "live_legacy_finder": "replaced — old classic ML bot (replaced by TradeFinder)",
         "live_strategy": "replaced — old strategy prod bot"
     },
     "live_vps": {
-        "keep_services": ["freqtrade-grid", "freqtrade-strategy"],
-        "disable_services": ["freqtrade"],
-        "update_services": ["freqtrade-strategy", "freqtrade-grid"]
+        "keep_services": ["cryptotools-grid", "cryptotools-strategy"],
+        "disable_services": ["ctengine"],
+        "update_services": ["cryptotools-strategy", "cryptotools-grid"]
     }
 }

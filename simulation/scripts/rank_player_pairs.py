@@ -21,7 +21,7 @@ def run_backtest(sc: dict, pairs: list[str]) -> dict[str, float]:
     sid = sc["id"]
     runtime = ROOT / "simulation/data/runtime" / f"rank_{sid}.json"
     patch_whitelist(ROOT, sc["config"], pairs, runtime)
-    ft = ROOT / ".venv/Scripts/freqtrade.exe"
+    ft = ROOT / ".venv/Scripts/ctbot.exe"
     out_dir = ROOT / "simulation/results/pair_ranking"
     out_dir.mkdir(parents=True, exist_ok=True)
     cmd = [
@@ -34,7 +34,7 @@ def run_backtest(sc: dict, pairs: list[str]) -> dict[str, float]:
         "--strategy-path",
         str(ROOT / sc["strategy_path"]),
         "--datadir",
-        str(ROOT / "simulation/data/freqtrade"),
+        str(ROOT / "simulation/data/ctengine"),
         "--timerange",
         TIMERANGE,
         "--export",

@@ -31,7 +31,7 @@ def grid_pnl(pair: str, stake: int = PROBE_STAKE) -> tuple[float, int]:
     out_dir = ROOT / "simulation/results/pool_test"
     out_dir.mkdir(parents=True, exist_ok=True)
     cmd = [
-        str(ROOT / ".venv/Scripts/freqtrade.exe"),
+        str(ROOT / ".venv/Scripts/ctbot.exe"),
         "backtesting",
         "--config",
         str(runtime),
@@ -40,7 +40,7 @@ def grid_pnl(pair: str, stake: int = PROBE_STAKE) -> tuple[float, int]:
         "--strategy-path",
         str(ROOT / "simulation/strategies"),
         "--datadir",
-        str(ROOT / "simulation/data/freqtrade"),
+        str(ROOT / "simulation/data/ctengine"),
         "--timerange",
         TIMERANGE,
         "--export",

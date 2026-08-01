@@ -164,7 +164,7 @@ def main() -> int:
     start_s, end_s = args.timerange.split("-")
     start, end = pd.Timestamp(start_s, tz="UTC"), pd.Timestamp(end_s, tz="UTC")
     pairs = pairs_from_source(ROOT, args.pairs)
-    ds = HistoricalDatastore(ROOT / "simulation/data/freqtrade")
+    ds = HistoricalDatastore(ROOT / "simulation/data/ctengine")
 
     from simulation.ml.trend_4h import Trend4hModel, resample_ohlcv
 

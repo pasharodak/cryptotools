@@ -38,7 +38,7 @@ def patch_config(base: Path, pairs: list[str], extra_blacklist: list[str], out: 
 
 
 def run_backtest(config: Path, strategy: str, timerange: str, export: str) -> dict:
-    ft = root() / ".venv" / "Scripts" / "freqtrade.exe"
+    ft = root() / ".venv" / "Scripts" / "ctbot.exe"
     out_dir = root() / "simulation" / "results" / "optimize_player"
     out_dir.mkdir(parents=True, exist_ok=True)
     cmd = [
@@ -51,7 +51,7 @@ def run_backtest(config: Path, strategy: str, timerange: str, export: str) -> di
         "--strategy-path",
         str(root() / "simulation" / "strategies"),
         "--datadir",
-        str(root() / "simulation" / "data" / "freqtrade"),
+        str(root() / "simulation" / "data" / "ctengine"),
         "--timerange",
         timerange,
         "--export",

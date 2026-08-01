@@ -1,0 +1,17 @@
+[Unit]
+Description=CryptoTools strategy bot (Bybit)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cryptotools
+Group=cryptotools
+WorkingDirectory=/home/cryptotools/app
+ExecStart=/bin/bash -lc 'source /home/cryptotools/app/scripts/load_env.sh /home/cryptotools/.cryptotools.env && exec /home/cryptotools/app/.venv/bin/ctbot trade --config user_data/config_strategy.json --logfile user_data/logs/cryptotools-strategy.log'
+Restart=on-failure
+RestartSec=30
+MemoryMax=3G
+
+[Install]
+WantedBy=multi-user.target

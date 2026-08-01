@@ -42,11 +42,11 @@ def main() -> int:
     pool_path = ROOT / "simulation/config/player_pair_pool.json"
     pairs = json.loads(pool_path.read_text(encoding="utf-8")).get("pairs") or cfg.get("player_pairs") or []
     timerange = cfg.get("player_timerange", "20260601-20260625")
-    datadir = ROOT / cfg.get("freqtrade_datadir", "simulation/data/freqtrade")
+    datadir = ROOT / cfg.get("ctengine_datadir", "simulation/data/ctengine")
     runtime = ROOT / "simulation/data/runtime/download_player_month.json"
     patch_whitelist(ROOT, "simulation/config/backtest_lite_base.json", pairs, runtime)
 
-    ft = ROOT / ".venv/Scripts/freqtrade.exe"
+    ft = ROOT / ".venv/Scripts/ctbot.exe"
     futures_dir = datadir / "futures"
     missing_5m = []
     want_start = timerange.split("-")[0]
@@ -89,7 +89,7 @@ def main() -> int:
             cmd.append("--prepend")
         r1 = subprocess.run(cmd, cwd=str(ROOT))
     else:
-        print("=== 5m futures/ already present — skip freqtrade download ===")
+        print("=== 5m futures/ already present — skip ctengine download ===")
         r1 = subprocess.CompletedProcess(args=[], returncode=0)
 
     need_1s = [p for p in pairs if _needs_subminute(p, timerange, datadir)]

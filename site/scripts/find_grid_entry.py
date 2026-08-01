@@ -98,7 +98,7 @@ def analyze(pair: str, df: pd.DataFrame) -> dict | None:
 
 
 def main() -> int:
-    base = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("/home/freqtrade/freqtrade")
+    base = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("/home/cryptotools/app")
     ranging = json.loads((base / "user_data/ranging_pairs.json").read_text())
     whitelist = ranging.get("whitelist", [])
     hits = []

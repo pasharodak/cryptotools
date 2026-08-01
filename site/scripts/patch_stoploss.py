@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Patch stoploss in freqtrade configs without touching other fields."""
+"""Patch stoploss in ctengine configs without touching other fields."""
 import json
 import sys
 from pathlib import Path
 
-BASE = Path(sys.argv[1] if len(sys.argv) > 1 else "/home/freqtrade/freqtrade")
+BASE = Path(sys.argv[1] if len(sys.argv) > 1 else "/home/cryptotools/app")
 STOP = float(sys.argv[2]) if len(sys.argv) > 2 else -0.05
 
 for name in ("config.json", "config_strategy.json", "config_grid.json"):

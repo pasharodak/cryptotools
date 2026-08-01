@@ -43,7 +43,7 @@ _funding_ids_cache: tuple[float, set[str]] = (0.0, set())
 
 
 def ft_base() -> Path:
-    return Path(os.environ.get("FT_BASE", "/home/freqtrade/freqtrade"))
+    return Path(os.environ.get("CT_BASE", "/home/cryptotools/app"))
 
 
 def config_path() -> Path:
@@ -82,16 +82,16 @@ def load_env_file(path: Path) -> dict[str, str]:
 
 
 def get_credentials() -> tuple[str, str]:
-    env_file = Path(os.environ.get("FT_ENV", ft_base().parent / ".freqtrade.env"))
+    env_file = Path(os.environ.get("CT_ENV", ft_base().parent / ".cryptotools.env"))
     env = load_env_file(env_file)
     key = (
         os.environ.get("BYBIT_API_KEY")
-        or os.environ.get("FREQTRADE__EXCHANGE__KEY")
+        or os.environ.get("CTENGINE__EXCHANGE__KEY")
         or env.get("BYBIT_API_KEY", "")
     ).strip()
     secret = (
         os.environ.get("BYBIT_API_SECRET")
-        or os.environ.get("FREQTRADE__EXCHANGE__SECRET")
+        or os.environ.get("CTENGINE__EXCHANGE__SECRET")
         or env.get("BYBIT_API_SECRET", "")
     ).strip()
     if key and secret:

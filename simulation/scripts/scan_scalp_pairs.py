@@ -313,7 +313,7 @@ def main() -> int:
         cfg["atr_pct_max"] = args.atr_max
 
     pairs = pairs_from_source(ROOT, args.pairs)
-    ds = HistoricalDatastore(ROOT / "simulation/data/freqtrade")
+    ds = HistoricalDatastore(ROOT / "simulation/data/ctengine")
 
     rows: list[dict[str, Any]] = []
     skipped: list[dict[str, str]] = []

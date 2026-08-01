@@ -32,7 +32,7 @@ def load_trades(zip_path: Path, strategy: str) -> list[dict]:
 
 
 def run_bt(config: Path, strategy: str, strategy_path: str | None, timerange: str, export: str) -> Path | None:
-    ft = ROOT / ".venv" / "Scripts" / "freqtrade.exe"
+    ft = ROOT / ".venv" / "Scripts" / "ctbot.exe"
     out_dir = ROOT / "simulation" / "results" / "optimize_player"
     out_dir.mkdir(parents=True, exist_ok=True)
     cmd = [
@@ -48,7 +48,7 @@ def run_bt(config: Path, strategy: str, strategy_path: str | None, timerange: st
     cmd.extend(
         [
             "--datadir",
-            str(ROOT / "simulation/data/freqtrade"),
+            str(ROOT / "simulation/data/ctengine"),
             "--timerange",
             timerange,
             "--export",
@@ -84,7 +84,7 @@ def eval_variant(
     if not zip_path:
         return {"name": name, "ok": False}
 
-    ds = HistoricalDatastore(ROOT / "simulation/data/freqtrade")
+    ds = HistoricalDatastore(ROOT / "simulation/data/ctengine")
     sched = build_arm_schedules(ds, pairs, start_ms, end_ms, ROOT, bl)
     raw = load_trades(zip_path, strategy)
     by_pair: dict[str, list] = defaultdict(list)

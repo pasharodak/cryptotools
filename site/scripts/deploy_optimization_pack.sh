@@ -1,8 +1,8 @@
 #!/bin/bash
 # Deploy optimization pack G/S/F and restart bots.
 set -euo pipefail
-cd /home/freqtrade/freqtrade
-source /home/freqtrade/.freqtrade.env
+cd /home/cryptotools/app
+source /home/cryptotools/.cryptotools.env
 
 echo "=== Close stale ML Finder positions ==="
 bash scripts/force_exit_all.sh 8080 || true
@@ -19,13 +19,13 @@ echo "=== Reseed changelog v3 ==="
 
 echo "=== Restart bots (requires root) ==="
 if [ "$(id -u)" -eq 0 ]; then
-  systemctl restart freqtrade freqtrade-strategy freqtrade-grid pair-config
+  systemctl restart ctengine cryptotools-strategy cryptotools-grid pair-config
 else
-  echo "Run as root: systemctl restart freqtrade freqtrade-strategy freqtrade-grid pair-config"
+  echo "Run as root: systemctl restart ctengine cryptotools-strategy cryptotools-grid pair-config"
 fi
 
 sleep 5
-for svc in freqtrade freqtrade-strategy freqtrade-grid pair-config; do
+for svc in ctengine cryptotools-strategy cryptotools-grid pair-config; do
   printf "%s: " "$svc"
   systemctl is-active "$svc" || true
 done

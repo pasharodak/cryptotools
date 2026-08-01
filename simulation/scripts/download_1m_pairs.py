@@ -40,7 +40,7 @@ def main() -> int:
     if args.limit:
         pairs = pairs[: args.limit]
 
-    datadir = ROOT / "simulation/data/freqtrade"
+    datadir = ROOT / "simulation/data/ctengine"
     runtime = ROOT / "simulation/data/runtime/download_1m.json"
     batches = [pairs[i : i + args.batch_size] for i in range(0, len(pairs), args.batch_size)]
     print(f"download 1m · {len(pairs)} pairs · {args.timerange} · {len(batches)} batches · py={PY}")
@@ -50,7 +50,7 @@ def main() -> int:
         cmd = [
             str(PY),
             "-m",
-            "freqtrade",
+            "ctengine",
             "download-data",
             "--config",
             str(runtime),

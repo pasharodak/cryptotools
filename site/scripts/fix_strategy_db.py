@@ -7,7 +7,7 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-DB = Path("/home/freqtrade/freqtrade/tradesv3-strategy.sqlite")
+DB = Path("/home/cryptotools/app/tradesv3-strategy.sqlite")
 DUPLICATE_ORDER_ID = "1c20af49-b9db-435c-b6a7-0a1009843f1b"
 
 

@@ -39,7 +39,7 @@ def ms_range(timerange: str) -> tuple[int, int]:
 def run_bt(sc: dict, pairs: list[str], timerange: str) -> tuple[list[dict], dict]:
     runtime = ROOT / "simulation/data/runtime" / f"bench_scan_{sc['id']}.json"
     cfg = patch_whitelist(ROOT, sc["config"], pairs, runtime, scenario=sc)
-    ft = ROOT / ".venv/Scripts/freqtrade.exe"
+    ft = ROOT / ".venv/Scripts/ctbot.exe"
     out_dir = ROOT / "simulation/results/scanner_bench"
     out_dir.mkdir(parents=True, exist_ok=True)
     cmd = [
@@ -52,7 +52,7 @@ def run_bt(sc: dict, pairs: list[str], timerange: str) -> tuple[list[dict], dict
         "--strategy-path",
         str(ROOT / sc["strategy_path"]),
         "--datadir",
-        str(ROOT / "simulation/data/freqtrade"),
+        str(ROOT / "simulation/data/ctengine"),
         "--timerange",
         timerange,
         "--export",
@@ -94,7 +94,7 @@ def eval_portfolio(timerange: str, wallet: float = 100.0) -> dict:
     ]
     pairs = pool_pairs(ROOT)
     start_ms, end_ms = ms_range(timerange)
-    datadir = ROOT / "simulation/data/freqtrade"
+    datadir = ROOT / "simulation/data/ctengine"
     ds = HistoricalDatastore(datadir)
     grid_bl: set[str] = set()
 

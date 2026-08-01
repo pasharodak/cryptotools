@@ -15,8 +15,8 @@ if str(_ROOT) not in sys.path:
 from pandas import DataFrame
 
 import talib.abstract as ta
-from freqtrade.persistence import Trade
-from freqtrade.strategy import IStrategy
+from ctengine.persistence import Trade
+from ctengine.strategy import IStrategy
 
 from AdxMomentumStrategy import AdxMomentumStrategy
 from BollingerRsiStrategy import BollingerRsiStrategy

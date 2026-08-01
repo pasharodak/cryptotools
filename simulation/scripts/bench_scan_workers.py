@@ -28,7 +28,7 @@ def main() -> int:
     pairs = list(
         json.loads((ROOT / "simulation/config/prod_pairs_200.json").read_text(encoding="utf-8")).get("pairs") or []
     )[: args.pairs]
-    ds = HistoricalDatastore(ROOT / "simulation/data/freqtrade", exchange="bybit")
+    ds = HistoricalDatastore(ROOT / "simulation/data/ctengine", exchange="bybit")
     start_ms, end_ms = timerange_to_ms(args.timerange)
 
     for w in args.workers:

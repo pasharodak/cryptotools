@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Lightweight pair whitelist admin for both Freqtrade bots."""
+"""Pair whitelist / limits admin API for CryptoTools bots."""
 from __future__ import annotations
 
 import json
@@ -54,7 +54,7 @@ from reconcile_positions import (
     reconcile as reconcile_positions,
 )
 
-BASE = Path(os.environ.get("FT_BASE", "/home/freqtrade/freqtrade"))
+BASE = Path(os.environ.get("CT_BASE", "/home/cryptotools/app"))
 FINDER_BOT_CFG = BASE / "user_data" / "finder_bot.json"
 
 _LOG_TS_RE = re.compile(
@@ -88,14 +88,9 @@ DUAL_HEDGE_FILE = BASE / "user_data" / "dual_hedge.json"
 BOT_LIMITS_FILE = BASE / "user_data" / "bot_limits.json"
 BOT_STRATEGIES_FILE = BASE / "user_data" / "bot_strategies.json"
 DEFAULT_BOT_LIMITS = {"finder": 3, "strategy": 2, "grid": 2}
-# Legacy API id (old UI used "freqai" for the Finder bot)
-BOT_ALIASES = {"freqai": "finder"}
-
-
 def resolve_bot(bot: str | None) -> str:
-    """Normalize bot id; map legacy names to current keys."""
-    name = (bot or "").strip().lower()
-    return BOT_ALIASES.get(name, name)
+    """Normalize bot id."""
+    return (bot or "").strip().lower()
 
 
 ROUTER_STRATEGY = "MultiStrategyRouter"
@@ -120,7 +115,7 @@ WHITELIST = {
     "grid": "http://127.0.0.1:8082/api/v1/whitelist",
 }
 
-AUTH_USER = os.environ.get("FREQUI_USERNAME", "freqtrader")
+AUTH_USER = os.environ.get("FREQUI_USERNAME", "cryptotools")
 AUTH_PASS = os.environ.get("FREQUI_PASSWORD", "")
 
 DEFAULT_GRID_STAKE = 10
@@ -327,7 +322,7 @@ def _closed_trade_row_to_json(row: sqlite3.Row, ml: dict[str, Any]) -> dict[str,
 
 
 def load_closed_trades_from_db(bot: str, limit: int = 500) -> list[dict[str, Any]]:
-    """Fast closed-trade list from sqlite (no Freqtrade RPC / orders payload)."""
+    """Fast closed-trade list from sqlite (no bot RPC / orders payload)."""
     bot = resolve_bot(bot)
     if bot not in CONFIGS:
         return []
@@ -496,17 +491,10 @@ def load_bot_limits_file() -> dict[str, Any]:
     data = json.loads(BOT_LIMITS_FILE.read_text(encoding="utf-8"))
     payload = _default_bot_limits_payload()
     stored_trades = data.get("max_open_trades", data if "stake_amount" not in data else {})
-    # Migrate legacy bot id
-    if "freqai" in stored_trades and "finder" not in stored_trades:
-        stored_trades = dict(stored_trades)
-        stored_trades["finder"] = stored_trades.pop("freqai")
     for bot in CONFIGS:
         if bot in stored_trades:
             payload["max_open_trades"][bot] = int(stored_trades[bot])
     stored_stakes = data.get("stake_amount", {})
-    if "freqai" in stored_stakes and "finder" not in stored_stakes:
-        stored_stakes = dict(stored_stakes)
-        stored_stakes["finder"] = stored_stakes.pop("freqai")
     for bot, default in DEFAULT_STAKES.items():
         if bot in stored_stakes:
             payload["stake_amount"][bot] = float(stored_stakes[bot])
@@ -1249,9 +1237,9 @@ def remove_pair(pair: str) -> dict[str, Any]:
 
 
 LOG_SOURCES: dict[str, tuple[str, Path]] = {
-    "finder": ("ML Finder", BASE / "user_data" / "logs" / "freqtrade-finder.log"),
-    "strategy": ("Стратегии", BASE / "user_data" / "logs" / "freqtrade-strategy.log"),
-    "grid": ("Grid", BASE / "user_data" / "logs" / "freqtrade-grid.log"),
+    "finder": ("ML Finder", BASE / "user_data" / "logs" / "cryptotools-finder.log"),
+    "strategy": ("Стратегии", BASE / "user_data" / "logs" / "cryptotools-strategy.log"),
+    "grid": ("Grid", BASE / "user_data" / "logs" / "cryptotools-grid.log"),
     "scanner": ("Сканер Grid", BASE / "user_data" / "logs" / "ranging-scanner.log"),
     "strategy_scanner": ("Сканер страт.", BASE / "user_data" / "logs" / "strategy-scanner.log"),
     "pair_config": ("UI API", BASE / "user_data" / "logs" / "pair-config.log"),
@@ -1366,8 +1354,8 @@ def trigger_ranging_scan() -> dict[str, Any]:
     SCAN_LOCK.write_text(str(int(time.time())), encoding="utf-8")
     py = BASE / ".venv" / "bin" / "python3"
     env = os.environ.copy()
-    env["FT_BASE"] = str(BASE)
-    env.setdefault("FT_ENV", "/home/freqtrade/.freqtrade.env")
+    env["CT_BASE"] = str(BASE)
+    env.setdefault("CT_ENV", "/home/cryptotools/.cryptotools.env")
 
     try:
         proc = subprocess.run(
@@ -1443,8 +1431,8 @@ def trigger_strategy_scan() -> dict[str, Any]:
     STRATEGY_SCAN_LOCK.write_text(str(int(time.time())), encoding="utf-8")
     py = BASE / ".venv" / "bin" / "python3"
     env = os.environ.copy()
-    env["FT_BASE"] = str(BASE)
-    env.setdefault("FT_ENV", "/home/freqtrade/.freqtrade.env")
+    env["CT_BASE"] = str(BASE)
+    env.setdefault("CT_ENV", "/home/cryptotools/.cryptotools.env")
 
     try:
         proc = subprocess.run(
@@ -1811,7 +1799,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    env_file = Path(os.environ.get("FT_ENV", "/home/freqtrade/.freqtrade.env"))
+    env_file = Path(os.environ.get("CT_ENV", "/home/cryptotools/.cryptotools.env"))
     if env_file.exists():
         for line in env_file.read_text(encoding="utf-8").splitlines():
             line = line.strip().rstrip("\r")
@@ -1839,7 +1827,7 @@ def main() -> None:
 
 def apply_limits_cli() -> None:
     """Restore max_open_trades from bot_limits.json into config files."""
-    env_file = Path(os.environ.get("FT_ENV", "/home/freqtrade/.freqtrade.env"))
+    env_file = Path(os.environ.get("CT_ENV", "/home/cryptotools/.cryptotools.env"))
     if env_file.exists():
         for line in env_file.read_text(encoding="utf-8").splitlines():
             line = line.strip().rstrip("\r")
@@ -1852,7 +1840,7 @@ def apply_limits_cli() -> None:
 
 def ensure_limits_cli() -> None:
     """Snapshot max_open_trades from live configs into bot_limits.json (before deploy)."""
-    env_file = Path(os.environ.get("FT_ENV", "/home/freqtrade/.freqtrade.env"))
+    env_file = Path(os.environ.get("CT_ENV", "/home/cryptotools/.cryptotools.env"))
     if env_file.exists():
         for line in env_file.read_text(encoding="utf-8").splitlines():
             line = line.strip().rstrip("\r")
@@ -1864,7 +1852,7 @@ def ensure_limits_cli() -> None:
 
 
 def snapshot_strategies_cli() -> None:
-    env_file = Path(os.environ.get("FT_ENV", "/home/freqtrade/.freqtrade.env"))
+    env_file = Path(os.environ.get("CT_ENV", "/home/cryptotools/.cryptotools.env"))
     if env_file.exists():
         for line in env_file.read_text(encoding="utf-8").splitlines():
             line = line.strip().rstrip("\r")
@@ -1876,7 +1864,7 @@ def snapshot_strategies_cli() -> None:
 
 
 def apply_strategies_cli() -> None:
-    env_file = Path(os.environ.get("FT_ENV", "/home/freqtrade/.freqtrade.env"))
+    env_file = Path(os.environ.get("CT_ENV", "/home/cryptotools/.cryptotools.env"))
     if env_file.exists():
         for line in env_file.read_text(encoding="utf-8").splitlines():
             line = line.strip().rstrip("\r")

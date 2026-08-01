@@ -22,7 +22,7 @@ SCENARIOS = {
     s["id"]: s
     for s in load_bot_scenarios(ROOT)
     if s["id"]
-    not in {"live_strategy", "live_freqai", "live_grid", "live_grid_safe"}
+    not in {"live_strategy", "live_legacy_finder", "live_grid", "live_grid_safe"}
 }
 
 

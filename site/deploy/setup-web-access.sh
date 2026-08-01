@@ -15,11 +15,11 @@ apt-get update -y
 apt-get install -y nginx openssl
 
 mkdir -p /etc/nginx/ssl
-if [ ! -f /etc/nginx/ssl/freqtrade.crt ]; then
+if [ ! -f /etc/nginx/ssl/cryptotools.crt ]; then
   openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
-    -keyout /etc/nginx/ssl/freqtrade.key \
-    -out /etc/nginx/ssl/freqtrade.crt \
-    -subj "/CN=freqtrade"
+    -keyout /etc/nginx/ssl/cryptotools.key \
+    -out /etc/nginx/ssl/cryptotools.crt \
+    -subj "/CN=ctengine"
 fi
 
 UI_DIR=/var/www/criptotools-ui
@@ -28,8 +28,8 @@ if [ -d /tmp/custom-ui ]; then
   cp /tmp/custom-ui/index.html /tmp/custom-ui/app.js /tmp/custom-ui/styles.css "$UI_DIR/"
 fi
 
-install -m 644 /tmp/nginx-freqtrade.conf /etc/nginx/sites-available/freqtrade
-ln -sf /etc/nginx/sites-available/freqtrade /etc/nginx/sites-enabled/freqtrade
+install -m 644 /tmp/nginx-cryptotools.conf /etc/nginx/sites-available/cryptotools
+ln -sf /etc/nginx/sites-available/cryptotools /etc/nginx/sites-enabled/cryptotools
 rm -f /etc/nginx/sites-enabled/default
 nginx -t
 systemctl enable nginx
@@ -43,7 +43,7 @@ if command -v ufw >/dev/null 2>&1; then
 fi
 
 echo "=== 4. Remove bundled FreqUI ==="
-FREQUI_DIR=/home/freqtrade/freqtrade/freqtrade/rpc/api_server/ui/installed
+FREQUI_DIR=/home/cryptotools/app/ctengine/rpc/api_server/ui/installed
 if [ -d "$FREQUI_DIR" ]; then
   find "$FREQUI_DIR" -mindepth 1 -delete
 fi
@@ -52,4 +52,4 @@ echo "=== 5. Status ==="
 systemctl is-active nginx
 echo ""
 echo "CriptoTools UI: https://$(curl -sS --connect-timeout 3 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}'):8443"
-echo "Login/password: see FREQUI_* in /home/freqtrade/.freqtrade.env"
+echo "Login/password: see FREQUI_* in /home/cryptotools/.cryptotools.env"

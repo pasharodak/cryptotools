@@ -524,7 +524,7 @@ const STATS_SCOPE_META = {
   },
   grid: {
     title: "Статистика — Grid + ML gate",
-    note: "Закрытые сделки Freqtrade Grid (VolatilityGridStrategy, ML gate live_grid).",
+    note: "Закрытые сделки Grid (VolatilityGridStrategy, ML gate live_grid).",
   },
   bybitgrid: { title: "Статистика — Bybit Grid", note: "Закрытые нативные grid-боты на бирже Bybit." },
 };
@@ -582,7 +582,7 @@ function tradeCloseMs(trade) {
   if (trade.close_timestamp != null && trade.close_timestamp !== "") {
     const ts = Number(trade.close_timestamp);
     if (!Number.isNaN(ts) && ts > 0) {
-      // Freqtrade API: milliseconds; older payloads may use seconds
+      // Bot API timestamps: milliseconds; older payloads may use seconds
       return ts < 1e12 ? ts * 1000 : ts;
     }
   }
@@ -2821,7 +2821,7 @@ async function refreshBybitGrid({ scan = false } = {}) {
     await loadBybitGridScanInfo();
     if (hintEl) {
       hintEl.textContent = credsOk
-        ? "Биржевой grid: ордера на Bybit, не Freqtrade"
+        ? "Биржевой grid: ордера на Bybit, не через Grid-бота"
         : (data.credentials_error || "Настройте BYBIT_API_KEY в .env");
     }
   } catch (e) {
@@ -3229,7 +3229,7 @@ const CHANGELOG_CAT_LABELS = {
   telegram_bot: "Telegram-бот",
   finder: "ML Finder",
   strategy: "Стратегии",
-  grid_ft: "Grid Freqtrade",
+  grid_ft: "Grid",
   ranging_scanner: "Сканер боковика",
   strategy_scanner: "Сканер стратегий",
   bybit_grid: "Bybit Grid",

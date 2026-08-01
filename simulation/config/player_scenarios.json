@@ -201,7 +201,7 @@
         "prod_disabled_reason": "replaced — old strategy prod bot"
     },
     {
-        "id": "live_freqai",
+        "id": "live_legacy_finder",
         "label": "Legacy finder stub (offline)",
         "enabled": false,
         "strategy": "SimLegacyFinderProxyStrategy",

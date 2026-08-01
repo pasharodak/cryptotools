@@ -23,20 +23,20 @@ Push-Location $root
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host "=== Upload grid model to VPS ==="
-$remoteGrid = "/home/freqtrade/freqtrade/user_data/models/pnl_classifier/by_scenario/live_grid"
+$remoteGrid = "/home/cryptotools/app/user_data/models/pnl_classifier/by_scenario/live_grid"
 $remoteHost = $SshUser + '@' + $ServerIp
 & $scp -i $KeyPath -r "$gridLocal\pnl_classifier.joblib" "$gridLocal\pnl_classifier_meta.json" ($remoteHost + ':' + $remoteGrid + '/')
 
 if (-not $SkipGate) {
     Write-Host "=== Upload ml_entry_gate.json ==="
-    & $scp -i $KeyPath "$root\user_data\ml_entry_gate.json" ($remoteHost + ':/home/freqtrade/freqtrade/user_data/')
+    & $scp -i $KeyPath "$root\user_data\ml_entry_gate.json" ($remoteHost + ':/home/cryptotools/app/user_data/')
 }
 
 $deployNote = Get-Content $meta -Raw | ConvertFrom-Json
 Write-Host ("Model: " + $deployNote.model_key + " n=" + $deployNote.n_trades + " AUC " + $deployNote.roc_auc)
 
-Write-Host "=== Restart freqtrade-grid ==="
-$remoteCmd = 'chown -R freqtrade:freqtrade /home/freqtrade/freqtrade/user_data/models/pnl_classifier/by_scenario/live_grid; systemctl restart freqtrade-grid; sleep 5; systemctl is-active freqtrade-grid; journalctl -u freqtrade-grid -n 6 --no-pager'
+Write-Host "=== Restart cryptotools-grid ==="
+$remoteCmd = 'chown -R cryptotools:cryptotools /home/cryptotools/app/user_data/models/pnl_classifier/by_scenario/live_grid; systemctl restart cryptotools-grid; sleep 5; systemctl is-active cryptotools-grid; journalctl -u cryptotools-grid -n 6 --no-pager'
 & $ssh -i $KeyPath ($SshUser + '@' + $ServerIp) $remoteCmd
 Pop-Location
 Write-Host "Done. Grid model deployed."

@@ -34,7 +34,7 @@ def load_manifest() -> dict:
 
 def create_app() -> FastAPI:
     cfg = load_manifest()
-    datadir = ROOT / cfg["freqtrade_datadir"]
+    datadir = ROOT / cfg["ctengine_datadir"]
     ds = HistoricalDatastore(datadir, exchange=cfg.get("exchange", "bybit"))
     engine = SimulationEngine(datastore=ds, wallet_usdt=float(cfg.get("starting_balance_usdt", 100)))
     player = ReplayPlayer(engine, ds)

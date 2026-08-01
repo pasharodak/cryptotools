@@ -1,4 +1,4 @@
-"""Entry-time market indicators from Freqtrade OHLCV (5m default)."""
+"""Entry-time market indicators from OHLCV (5m default)."""
 from __future__ import annotations
 
 import json
@@ -133,8 +133,8 @@ def manifest_datadir(root: Path) -> Path:
     manifest = root / "simulation" / "config" / "manifest.json"
     if manifest.is_file():
         cfg = json.loads(manifest.read_text(encoding="utf-8"))
-        return root / cfg.get("freqtrade_datadir", "simulation/data/freqtrade")
-    return root / "simulation/data/freqtrade"
+        return root / cfg.get("ctengine_datadir", "simulation/data/ctengine")
+    return root / "simulation/data/ctengine"
 
 
 class MarketFeatureStore:

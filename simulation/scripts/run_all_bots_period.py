@@ -22,7 +22,7 @@ from simulation.exchange_sim.trade_archive import persist_session
 from simulation.scripts.comparison_common import PROD_PAIRS_PATH, pairs_from_source, period_months
 from simulation.scripts.compare_ml_by_month import month_range
 
-SKIP_STUBS = {"live_strategy", "live_freqai", "live_grid", "live_grid_safe"}
+SKIP_STUBS = {"live_strategy", "live_legacy_finder", "live_grid", "live_grid_safe"}
 
 
 def enable_all_real(mgr: BotSessionManager) -> list[str]:
@@ -127,7 +127,7 @@ def agg_instances(instances: list[dict], *, use_ml: bool) -> dict[str, Any]:
 
 def run_month(pairs, year, month, workers, *, use_ml: bool):
     start_ms, end_ms, label = month_range(year, month)
-    datadir = ROOT / "simulation/data/freqtrade"
+    datadir = ROOT / "simulation/data/ctengine"
     t0 = time.time()
     mgr = BotSessionManager(ROOT)
     order = enable_all_real(mgr)

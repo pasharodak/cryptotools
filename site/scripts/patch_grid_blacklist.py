@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 pairs = sys.argv[1:] if len(sys.argv) > 1 else ["SKHYNIX/USDT:USDT"]
-p = Path("/home/freqtrade/freqtrade/user_data/config_grid.json")
+p = Path("/home/cryptotools/app/user_data/config_grid.json")
 cfg = json.loads(p.read_text())
 ex = cfg.setdefault("exchange", {})
 bl = ex.setdefault("pair_blacklist", [])

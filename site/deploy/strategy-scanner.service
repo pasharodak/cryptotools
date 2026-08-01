@@ -1,16 +1,16 @@
 [Unit]
 Description=Scan Bybit for strategy-suitable pairs and update Strategy bot whitelist
-After=network-online.target freqtrade-strategy.service
+After=network-online.target cryptotools-strategy.service
 Wants=network-online.target
 
 [Service]
 Type=oneshot
-User=freqtrade
-Group=freqtrade
-WorkingDirectory=/home/freqtrade/freqtrade
-Environment=FT_BASE=/home/freqtrade/freqtrade
-Environment=FT_ENV=/home/freqtrade/.freqtrade.env
-ExecStart=/bin/bash /home/freqtrade/freqtrade/scripts/run_strategy_scan.sh
+User=cryptotools
+Group=cryptotools
+WorkingDirectory=/home/cryptotools/app
+Environment=CT_BASE=/home/cryptotools/app
+Environment=CT_ENV=/home/cryptotools/.cryptotools.env
+ExecStart=/bin/bash /home/cryptotools/app/scripts/run_strategy_scan.sh
 StandardOutput=journal
 StandardError=journal
 

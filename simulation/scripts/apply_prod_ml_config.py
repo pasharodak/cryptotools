@@ -123,8 +123,8 @@ def main() -> int:
         if cfg.get("strategy") != "TradeFinderStrategy":
             cfg["strategy"] = "TradeFinderStrategy"
             cfg["bot_name"] = "criptotools-finder"
-            cfg.pop("freqaimodel", None)
-            cfg.pop("finder", None)
+            cfg.pop("mltrain_model", None)
+            cfg.pop("mltrain", None)  # obsolete upstream config block
             cfg["db_url"] = "sqlite:///tradesv3-finder.sqlite"
             cfg["_prod_note"] = "ML Trade Finder (XGBoost scanner + pnl classifier gate) — replaces legacy ML bot"
             changed = True
@@ -141,7 +141,7 @@ def main() -> int:
     for sid in prod["enabled_scenarios"]:
         label = next((s["label"] for s in scenarios if s["id"] == sid), sid)
         print(f"  + {label} ({sid})")
-    print("\nVPS: enable freqtrade (ML Finder), keep freqtrade-grid + freqtrade-strategy")
+    print("\nVPS: enable Finder unit, keep grid + strategy units")
     return 0
 
 

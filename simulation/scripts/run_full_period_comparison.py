@@ -63,7 +63,7 @@ def aggregate_instances(instances: list[dict], *, use_ml: bool) -> dict:
 
 def run_bots_month(pairs: list[str], year: int, month: int, workers: int) -> dict:
     start_ms, end_ms, label = month_range(year, month)
-    datadir = ROOT / "simulation/data/freqtrade"
+    datadir = ROOT / "simulation/data/ctengine"
     mgr = BotSessionManager(ROOT)
     mgr._get_ml_gate().set_enabled(False)
     mgr.init_live_session(pairs, start_ms, end_ms, datadir)

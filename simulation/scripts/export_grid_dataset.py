@@ -88,7 +88,7 @@ def export_full_period(
     scan_workers: int | None = None,
 ) -> tuple[list[dict], dict[str, int]]:
     start_ms, end_ms = timerange_to_ms(timerange)
-    datadir = ROOT / "simulation/data/freqtrade"
+    datadir = ROOT / "simulation/data/ctengine"
     mgr = BotSessionManager(ROOT)
     mgr._get_ml_gate().set_enabled(False)
     mgr.init_live_session(

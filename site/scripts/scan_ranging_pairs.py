@@ -39,7 +39,7 @@ INTERVAL_MAP = {"1m": "1", "5m": "5", "15m": "15", "1h": "60"}
 
 
 def ft_base() -> Path:
-    return Path(os.environ.get("FT_BASE", "/home/freqtrade/freqtrade"))
+    return Path(os.environ.get("CT_BASE", "/home/cryptotools/app"))
 
 
 def load_env_file(path: Path) -> dict[str, str]:
@@ -411,8 +411,8 @@ def save_json(path: Path, data: Any) -> None:
 def run_scan(dry_run: bool = False, verbose: bool = False) -> dict[str, Any]:
     base = ft_base()
     cfg = load_scan_config(base)
-    env = load_env_file(Path(os.environ.get("FT_ENV", "/home/freqtrade/.freqtrade.env")))
-    api_user = os.environ.get("FREQUI_USERNAME") or env.get("FREQUI_USERNAME", "freqtrader")
+    env = load_env_file(Path(os.environ.get("CT_ENV", "/home/cryptotools/.cryptotools.env")))
+    api_user = os.environ.get("FREQUI_USERNAME") or env.get("FREQUI_USERNAME", "cryptotools")
     api_pass = os.environ.get("FREQUI_PASSWORD") or env.get("FREQUI_PASSWORD", "")
 
     interval = INTERVAL_MAP.get(cfg["timeframe"], "5")

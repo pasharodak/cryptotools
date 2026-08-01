@@ -8,8 +8,8 @@ from pathlib import Path
 from pandas import DataFrame
 
 import talib.abstract as ta
-from freqtrade.persistence import Trade
-from freqtrade.strategy import IStrategy
+from ctengine.persistence import Trade
+from ctengine.strategy import IStrategy
 from technical import qtpylib
 
 _USER_DATA = Path(__file__).resolve().parent.parent

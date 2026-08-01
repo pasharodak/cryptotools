@@ -78,7 +78,7 @@ def patch_whitelist(root: Path, config_rel: str, pairs: list[str], out: Path, sc
         cfg["dry_run_wallet"] = max(wallet, stake * mot * 1.15)
         cfg["max_open_trades"] = mot
     out.parent.mkdir(parents=True, exist_ok=True)
-    # Isolate freqtrade sqlite per runtime config (parallel bots must not share one DB).
+    # Isolate ctengine sqlite per runtime config (parallel bots must not share one DB).
     cfg["db_url"] = f"sqlite:///{out.with_suffix('.sqlite').as_posix()}"
     out.write_text(json.dumps(cfg, indent=4), encoding="utf-8")
     return cfg
@@ -628,7 +628,7 @@ class BotSessionManager:
         display_pool = pool or list(pairs)
         return pairs, assignments, display_pool
 
-    def _freqtrade_backtest(
+    def _ctengine_backtest(
         self,
         sc: dict,
         bt_pairs: list[str],
@@ -639,18 +639,18 @@ class BotSessionManager:
     ) -> tuple[list[dict], dict, float, dict, dict[str, Any]]:
         sid = sc["id"]
         try:
-            from simulation.paths import VENV_FREQTRADE, VENV_PYTHON
+            from simulation.paths import VENV_CTBOT, VENV_PYTHON
 
             if VENV_PYTHON.is_file():
-                ft_cmd = [str(VENV_PYTHON), "-m", "freqtrade"]
-            elif VENV_FREQTRADE.is_file():
-                ft_cmd = [str(VENV_FREQTRADE)]
+                ft_cmd = [str(VENV_PYTHON), "-m", "ctengine"]
+            elif VENV_CTBOT.is_file():
+                ft_cmd = [str(VENV_CTBOT)]
             else:
-                ft_cmd = [str(self.root / ".venv" / "Scripts" / "freqtrade.exe")]
+                ft_cmd = [str(self.root / ".venv" / "Scripts" / "ctbot.exe")]
         except ImportError:
-            ft_cmd = [str(self.root / ".venv" / "Scripts" / "freqtrade.exe")]
-        if ft_cmd[0] == "freqtrade" or (len(ft_cmd) == 1 and not Path(ft_cmd[0]).is_file()):
-            ft_cmd = ["freqtrade"]
+            ft_cmd = [str(self.root / ".venv" / "Scripts" / "ctbot.exe")]
+        if ft_cmd[0] == "ctengine" or (len(ft_cmd) == 1 and not Path(ft_cmd[0]).is_file()):
+            ft_cmd = ["ctengine"]
         # Isolated dir per bot — parallel прогон не должен писать в один zip/.last_result
         bt_dir = self.root / "simulation" / "results" / "player_backtests" / sid
         bt_dir.mkdir(parents=True, exist_ok=True)
@@ -968,7 +968,7 @@ class BotSessionManager:
             if not remaining:
                 break
             try:
-                raw_trades, minimal_roi, stoploss, cfg, parsed = self._freqtrade_backtest(
+                raw_trades, minimal_roi, stoploss, cfg, parsed = self._ctengine_backtest(
                     sc, remaining, timerange, datadir
                 )
                 last_err = None
@@ -977,7 +977,7 @@ class BotSessionManager:
             except Exception as exc:
                 last_err = exc
                 msg = str(exc)
-                # Drop pairs freqtrade rejects for missing leverage tiers, then retry.
+                # Drop pairs ctengine rejects for missing leverage tiers, then retry.
                 m = re.search(
                     r"Pairs\s+(.+?)\s+got no leverage tiers",
                     msg,
@@ -1039,7 +1039,7 @@ class BotSessionManager:
         timerange = ms_to_timerange(start_ms, end_ms)
         self.status["scenarios"][sid] = {"label": sc["label"], "state": "running", "pair": pair}
         self._notify("pair_loading")
-        raw_trades, minimal_roi, stoploss, cfg, parsed = self._freqtrade_backtest(
+        raw_trades, minimal_roi, stoploss, cfg, parsed = self._ctengine_backtest(
             sc, [pair], timerange, datadir
         )
         trades_for_pair: list[dict] = []
@@ -1150,9 +1150,9 @@ class BotSessionManager:
         pool: list[str] | None = None,
     ) -> None:
         timerange = ms_to_timerange(start_ms, end_ms)
-        ft = self.root / ".venv" / "Scripts" / "freqtrade.exe"
+        ft = self.root / ".venv" / "Scripts" / "ctbot.exe"
         if not ft.is_file():
-            ft = Path("freqtrade")
+            ft = Path("ctengine")
         bt_dir = self.root / "simulation" / "results" / "player_backtests"
         bt_dir.mkdir(parents=True, exist_ok=True)
         trades_data: dict[str, dict[str, Any]] = {}

@@ -48,7 +48,7 @@ def collect_splits(
     test_frac: float,
 ) -> dict[str, dict[str, np.ndarray]]:
     """Per-pair time split, then concatenate train/val/test pools."""
-    ds = HistoricalDatastore(ROOT / "simulation/data/freqtrade")
+    ds = HistoricalDatastore(ROOT / "simulation/data/ctengine")
     rule = Trend4hModel()
     pools = {
         "train": {"X": [], "y": [], "fwd": []},

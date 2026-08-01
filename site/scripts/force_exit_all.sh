@@ -1,7 +1,7 @@
 #!/bin/bash
-# Force-exit all open trades on a freqtrade bot API (default :8080 ML Finder).
+# Force-exit all open trades on a bot API (default :8080 ML Finder).
 set -euo pipefail
-source /home/freqtrade/.freqtrade.env
+source /home/cryptotools/.cryptotools.env
 PORT="${1:-8080}"
 API="http://127.0.0.1:${PORT}/api/v1"
 TOKEN=$(curl -s -u "$FREQUI_USERNAME:$FREQUI_PASSWORD" -X POST "${API}/token/login" \

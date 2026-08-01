@@ -67,7 +67,7 @@ def main() -> int:
         try:
             from simulation.exchange_sim.datastore import HistoricalDatastore
 
-            ds = HistoricalDatastore(ROOT / "simulation/data/freqtrade")
+            ds = HistoricalDatastore(ROOT / "simulation/data/ctengine")
             have = set(ds.list_pairs("5m"))
             pairs_have = sum(1 for p in prod if p in have)
         except Exception:

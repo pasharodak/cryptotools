@@ -179,7 +179,7 @@
         <div class="panel-head">
           <div class="panel-title">
             <h2>Grid (волатильность) + ML gate</h2>
-            <p class="muted">Freqtrade · Bollinger + ADX · ML-фильтр на входе</p>
+            <p class="muted">Bollinger + ADX · ML-фильтр на входе</p>
           </div>
           <div class="panel-head-actions">
             <button type="button" class="btn ghost btn-sm panel-stats-btn" data-stats-scope="grid">Статистика</button>
@@ -225,7 +225,7 @@
         <div class="stats" id="bybitgrid-stats"></div>
         <div class="actions" id="bybitgrid-actions"></div>
         <div id="bybitgrid-settings" class="bybitgrid-settings"></div>
-        <p class="muted bybitgrid-hint" id="bybitgrid-hint">Нативные grid-боты Bybit (отдельно от Freqtrade Grid)</p>
+        <p class="muted bybitgrid-hint" id="bybitgrid-hint">Нативные grid-боты Bybit (отдельно от Grid-бота)</p>
         <h3>Активные grid-боты</h3>
         <div class="trades-list" id="bybitgrid-bots"></div>
         <div class="stats-history-section bybitgrid-history-section">
@@ -426,7 +426,7 @@
         <h3>ML gate (прод, июл 2026)</h3>
         <p class="info-desc">
           Модель <strong>pnl_classifier</strong> (XGBoost + isotonic) обучена на sim trade_db (~5900 сделок).
-          Режим <strong>profit_only ≥60%</strong> — все Freqtrade-боты (ML Finder, Стратегии, Grid).
+          Режим <strong>profit_only ≥60%</strong> — все боты CriptoTools (ML Finder, Стратегии, Grid).
           Сканер Finder дополнительно требует ≥52% на своей модели.
           <strong>Bybit Grid</strong> ML не использует.
         </p>
@@ -436,11 +436,11 @@
         <p class="info-desc">
           <strong>Futures Grid на бирже Bybit</strong> — сетка ордеров в заданном диапазоне цен.
           Режимы: Neutral (лонг ниже / шорт выше), Long, Short. Арифметическая или геометрическая сетка,
-          TP/SL, trailing. Управляется через API Bybit, не через Freqtrade.
+          TP/SL, trailing. Управляется через API Bybit, не через ботов CriptoTools.
         </p>
       </div>
       <div class="info-block">
-        <h3>Grid Freqtrade (отдельный бот)</h3>
+        <h3>Grid-бот (отдельный процесс)</h3>
         <p class="info-desc">
           <strong>VolatilityGridStrategy</strong> — боковик при волатильности (Bollinger + ADX).
           Частичный TP у середины BB, cooldown после SL. На входе — <strong>ML gate</strong> (сценарий live_grid).

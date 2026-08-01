@@ -14,16 +14,16 @@
     "trading_mode": "futures",
     "sim_exchange_api": "http://127.0.0.1:18999",
     "sim_player_port": 18999,
-    "freqtrade_datadir": "simulation/data/freqtrade",
+    "ctengine_datadir": "simulation/data/ctengine",
     "results_dir": "simulation/results",
     "live_dbs": {
         "strategy": "simulation/data/live_dbs/tradesv3-strategy.sqlite",
         "grid": "simulation/data/live_dbs/tradesv3-grid.sqlite",
-        "finder": "simulation/data/live_dbs/tradesv3-freqai.sqlite"
+        "finder": "simulation/data/live_dbs/tradesv3-finder.sqlite"
     },
     "vps": {
         "host": "root@77.222.35.209",
-        "remote_base": "/home/freqtrade/freqtrade",
+        "remote_base": "/home/cryptotools/app",
         "ssh_key": "D:/cryptotools/site/deploy/id_rsa/id_rsa"
     }
 }

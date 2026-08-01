@@ -64,7 +64,7 @@ def main() -> int:
     if args.majors_only:
         pairs = [p for p in pairs if p.split("/")[0] in majors]
 
-    ds = HistoricalDatastore(ROOT / "simulation/data/freqtrade")
+    ds = HistoricalDatastore(ROOT / "simulation/data/ctengine")
     btc_df = ds.load("BTC/USDT:USDT", "5m")
     btc_df = btc_df.loc[(btc_df.index >= start) & (btc_df.index < end)]
     btc_feat = build_feature_frame(btc_df)

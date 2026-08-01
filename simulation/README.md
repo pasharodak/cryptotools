@@ -25,7 +25,7 @@ D:\cryptotools\
 
 | Режим | Назначение |
 |-------|------------|
-| **Backtest replay** | Freqtrade backtesting на истории из live SQLite |
+| **Backtest replay** | Backtesting на истории из live SQLite |
 | **Exchange Sim API** | `http://127.0.0.1:18999` — kline, wallet, order/create |
 | **Sim Player UI** | тот же порт — график 1s, плеер, ускорение ×2–×3600 |
 

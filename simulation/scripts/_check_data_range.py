@@ -7,7 +7,7 @@ from pathlib import Path
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[2]
-datadir = ROOT / "simulation/data/freqtrade"
+datadir = ROOT / "simulation/data/ctengine"
 pairs = json.loads((ROOT / "simulation/config/manifest.json").read_text(encoding="utf-8"))["player_pairs"]
 
 for sub in ["bybit", "futures"]:

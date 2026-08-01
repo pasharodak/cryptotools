@@ -1,5 +1,5 @@
 {
-    "$schema": "https://schema.freqtrade.io/schema.json",
+    "$schema": "https://schema.cryptotools.local/schema.json",
     "max_open_trades": 1,
     "stake_currency": "USDT",
     "stake_amount": 10,

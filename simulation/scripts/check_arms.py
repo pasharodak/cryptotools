@@ -17,7 +17,7 @@ def main() -> None:
     pairs = cfg["player_pairs"]
     start_ms = int(datetime(2026, 6, 20, tzinfo=UTC).timestamp() * 1000)
     end_ms = int(datetime(2026, 6, 25, tzinfo=UTC).timestamp() * 1000)
-    ds = HistoricalDatastore(root / "simulation/data/freqtrade", exchange="bybit")
+    ds = HistoricalDatastore(root / "simulation/data/ctengine", exchange="bybit")
     grid_cfg = patch_whitelist(
         root,
         "simulation/config/backtest_grid_improved.json",
