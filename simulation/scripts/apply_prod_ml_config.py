@@ -124,9 +124,9 @@ def main() -> int:
             cfg["strategy"] = "TradeFinderStrategy"
             cfg["bot_name"] = "criptotools-finder"
             cfg.pop("freqaimodel", None)
-            cfg.pop("freqai", None)
+            cfg.pop("finder", None)
             cfg["db_url"] = "sqlite:///tradesv3-finder.sqlite"
-            cfg["_prod_note"] = "ML Trade Finder (XGBoost scanner + pnl classifier gate) — replaces FreqAI"
+            cfg["_prod_note"] = "ML Trade Finder (XGBoost scanner + pnl classifier gate) — replaces legacy ML bot"
             changed = True
         if changed:
             cfg_path.write_text(json.dumps(cfg, indent=4) + "\n", encoding="utf-8")

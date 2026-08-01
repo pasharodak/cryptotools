@@ -4,7 +4,7 @@ import json
 import urllib.request
 
 SKIP = {"USDCUSDT", "USDEUSDT"}
-# Established liquid alts (Bybit linear) — good for FreqAI / technical strategies
+# Established liquid alts (Bybit linear) — good for ML Finder / technical strategies
 PREFERRED = [
     "SOL", "XRP", "DOGE", "ADA", "SUI", "NEAR", "AVAX", "LINK", "LTC", "BNB",
     "DOT", "MATIC", "POL", "ATOM", "FIL", "APT", "ARB", "OP", "INJ", "WLD",
@@ -32,6 +32,6 @@ found.sort(reverse=True)
 for vol, pair in found:
     print(f"{vol/1e6:8.1f}M  {pair}")
 
-print("\nSuggested top-10 for FreqAI (excl BTC/ETH in whitelist — corr pairs):")
+print("\nSuggested top-10 for ML Finder (excl BTC/ETH in whitelist — corr pairs):")
 for vol, pair in found[:10]:
     print(f"  {pair}")

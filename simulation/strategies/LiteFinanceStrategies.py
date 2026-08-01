@@ -1,4 +1,4 @@
-# LiteFinance strategies — simulation player (v4: top-5 pairs, stake 10, less churn).
+﻿# LiteFinance strategies — simulation player (v4: top-5 pairs, stake 10, less churn).
 """Seven styles from LiteFinance article, tuned for 5m futures + fee-aware targets."""
 
 from datetime import UTC, datetime, timedelta
@@ -300,8 +300,8 @@ class LiteArbitrageStrategy(_LiteBase):
         return dataframe
 
 
-class SimFreqaiProxyStrategy(_LiteBase):
-    """FreqAI hybrid proxy — rare trend impulses only (no ML)."""
+class SimLegacyFinderProxyStrategy(_LiteBase):
+    """Legacy hybrid proxy — rare trend impulses only (no ML)."""
 
     stoploss = -0.04
     minimal_roi = {"0": 0.035, "120": 0.018, "360": 0.005, "720": 0}
@@ -334,3 +334,4 @@ class SimFreqaiProxyStrategy(_LiteBase):
         dataframe.loc[qtpylib.crossed_below(dataframe["close"], dataframe["ema50"]), "exit_long"] = 1
         dataframe.loc[qtpylib.crossed_above(dataframe["close"], dataframe["ema50"]), "exit_short"] = 1
         return dataframe
+

@@ -17,9 +17,9 @@
     "freqtrade_datadir": "simulation/data/freqtrade",
     "results_dir": "simulation/results",
     "live_dbs": {
-        "freqai": "simulation/data/live_dbs/tradesv3-freqai.sqlite",
         "strategy": "simulation/data/live_dbs/tradesv3-strategy.sqlite",
-        "grid": "simulation/data/live_dbs/tradesv3-grid.sqlite"
+        "grid": "simulation/data/live_dbs/tradesv3-grid.sqlite",
+        "finder": "simulation/data/live_dbs/tradesv3-freqai.sqlite"
     },
     "vps": {
         "host": "root@77.222.35.209",

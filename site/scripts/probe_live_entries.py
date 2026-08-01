@@ -36,7 +36,7 @@ from VolatilityGridStrategy import GRID_SCENARIO, VolatilityGridStrategy  # noqa
 BYBIT_KLINE = "https://api.bybit.com/v5/market/kline"
 
 API = {
-    "freqai": "http://127.0.0.1:8080/api/v1",
+    "finder": "http://127.0.0.1:8080/api/v1",
     "strategy": "http://127.0.0.1:8081/api/v1",
     "grid": "http://127.0.0.1:8082/api/v1",
 }
@@ -124,7 +124,7 @@ def fetch_klines(pair: str, limit: int = 220) -> pd.DataFrame:
 
 
 def load_config(bot: str) -> dict:
-    names = {"freqai": "config.json", "strategy": "config_strategy.json", "grid": "config_grid.json"}
+    names = {"finder": "config.json", "strategy": "config_strategy.json", "grid": "config_grid.json"}
     return json.loads((USER_DATA / names[bot]).read_text(encoding="utf-8"))
 
 

@@ -187,7 +187,7 @@ def main() -> int:
         print(f"  {sc['id']}: {len(bot_pairs)} pairs")
         results.append(run_backtest(sc, bot_pairs, cfg))
 
-    actual = {name: export["bots"].get(name, {}).get("pnl_actual", 0) for name in ("grid", "strategy", "freqai")}
+    actual = {name: export["bots"].get(name, {}).get("pnl_actual", 0) for name in ("grid", "strategy", "finder")}
     start = float(cfg.get("starting_balance_usdt", 100))
 
     report = {

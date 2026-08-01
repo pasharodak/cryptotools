@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""System changelog — FreqAI, strategies, Grid, scanners, Bybit Grid, UI."""
+"""System changelog — ML Finder, strategies, Grid, scanners, Bybit Grid, UI."""
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -12,7 +12,7 @@ SEED_VERSION = 7
 
 CATEGORY_LABELS = {
     "telegram_bot": "Telegram-бот (Kronos)",
-    "freqai": "FreqAI",
+    "finder": "ML Finder",
     "strategy": "Стратегии Freqtrade",
     "grid_ft": "Grid Freqtrade",
     "ranging_scanner": "Сканер боковика",
@@ -198,13 +198,13 @@ def record_config_diff(old_cfg: dict[str, Any], new_cfg: dict[str, Any], *, sour
 
 
 def record_max_open_trades(bot: str, old: int, new: int) -> None:
-    bot_labels = {"freqai": "ML Finder", "strategy": "Стратегии", "grid": "Grid Freqtrade"}
+    bot_labels = {"finder": "ML Finder", "strategy": "Стратегии", "grid": "Grid Freqtrade"}
     label = f"Макс. сделок ({bot_labels.get(bot, bot)})"
     append_entry(
         field="max_open_trades",
         old=old,
         new=new,
-        category={"freqai": "freqai", "strategy": "strategy", "grid": "grid_ft"}.get(bot, "system"),
+        category={"finder": "finder", "strategy": "strategy", "grid": "grid_ft"}.get(bot, "system"),
         label=label,
     )
 
@@ -242,7 +242,7 @@ def record_ml_gate_confidence(old: float, new: float, *, source: str = "deploy")
     old_pct = f"{int(round(float(old) * 100))}%"
     new_pct = f"{int(round(float(new) * 100))}%"
     for cat, label in (
-        ("freqai", "ML Finder"),
+        ("finder", "ML Finder"),
         ("strategy", "Стратегии"),
         ("grid_ft", "Grid Freqtrade"),
     ):
@@ -258,8 +258,8 @@ def record_ml_gate_confidence(old: float, new: float, *, source: str = "deploy")
 
 def record_pair_whitelist_change(action: str, pair: str) -> None:
     append_note(
-        text=f"Whitelist FreqAI: пара {pair} {'добавлена' if action == 'add' else 'удалена'}",
-        category="freqai",
+        text=f"Whitelist ML Finder: пара {pair} {'добавлена' if action == 'add' else 'удалена'}",
+        category="finder",
         source="ui",
     )
 
@@ -353,10 +353,10 @@ def _seed_rows() -> list[tuple[str, str, str, Any, Any, str | None]]:
         ("2026-06-21T15:00:00+00:00", "telegram_bot", "_note", None, None,
          "Исправлен минимум ордера futures (110094), расчёт qty с minNotional"),
         # --- Freqtrade / VPS ---
-        ("2026-06-22T10:00:00+00:00", "freqai", "_note", None, None,
+        ("2026-06-22T10:00:00+00:00", "finder", "_note", None, None,
          "Развёрнут Freqtrade на VPS 77.222.35.209, Bybit futures dry-run/live"),
-        ("2026-06-22T12:00:00+00:00", "freqai", "max_open_trades", None, "3",
-         "Бот FreqAI (LightGBM / FreqaiExampleStrategy)"),
+        ("2026-06-22T12:00:00+00:00", "finder", "max_open_trades", None, "3",
+         "Бот ML Finder (legacy)"),
         ("2026-06-22T12:00:00+00:00", "strategy", "max_open_trades", None, "2",
          "Бот стратегий (MultiStrategyRouter)"),
         ("2026-06-22T14:00:00+00:00", "ui_infra", "_note", None, None,
@@ -419,16 +419,16 @@ def _seed_rows() -> list[tuple[str, str, str, Any, Any, str | None]]:
          "S4: use_exit_signal=false; S5: ROI 2% на 0 мин"),
         ("2026-06-25T18:00:00+00:00", "strategy_scanner", "_note", None, None,
          "S3: min turnover $8M, exclude мемы/HEI/SAHARA/SOXL"),
-        ("2026-06-25T18:00:00+00:00", "freqai", "max_open_trades", "3", "1", "F3: лимит позиций"),
-        ("2026-06-25T18:00:00+00:00", "freqai", "_note", None, None,
+        ("2026-06-25T18:00:00+00:00", "finder", "max_open_trades", "3", "1", "F3: лимит позиций"),
+        ("2026-06-25T18:00:00+00:00", "finder", "_note", None, None,
          "F2: PROB_THRESHOLD 0.55→0.62; F4: retrain каждые 4ч, train 15 дней"),
-        ("2026-06-25T18:00:00+00:00", "freqai", "_note", None, None,
+        ("2026-06-25T18:00:00+00:00", "finder", "_note", None, None,
          "F1: закрыты зависшие позиции DOGE/SOL/XRP с 21.06"),
         ("2026-06-26T12:00:00+00:00", "grid_ft", "_note", None, None,
          "Blacklist v2: GRASS, OPG, BEL, BILL, SLX, AERO, LUMIA, JUP, SPK, BLEND, AAVE (+ сканер/Bybit Grid)"),
         # --- ML prod pack (Jul 2026) ---
-        ("2026-07-04T20:30:00+00:00", "freqai", "_note", None, None,
-         "FreqAI остановлен на VPS — заменён ML gate (sim +426 USDT vs −472 без gate, Jan 2025+)"),
+        ("2026-07-04T20:30:00+00:00", "finder", "_note", None, None,
+         "ML Finder остановлен на VPS — заменён ML gate (sim +426 USDT vs −472 без gate, Jan 2025+)"),
         ("2026-07-04T20:30:00+00:00", "strategy", "_note", None, None,
          "Prod ML gate: XGBoost pnl_classifier в confirm_trade_entry · TripleEMA + BB+RSI + ADX · block_loss"),
         ("2026-07-04T20:30:00+00:00", "grid_ft", "_note", None, None,
@@ -436,13 +436,13 @@ def _seed_rows() -> list[tuple[str, str, str, Any, Any, str | None]]:
         ("2026-07-04T20:30:00+00:00", "strategy", "_note", None, None,
          "Sim: отключены слабые боты (ликвидность −10, свинг −2, HFT/скальп ≤+5 USDT) — 6 прибыльных с ML"),
         ("2026-07-04T20:30:00+00:00", "ui_infra", "_note", None, None,
-         "Панель CriptoTools: подписи ML gate на Grid и Стратегиях; FreqAI помечен OFF"),
-        # --- ML Finder replaces FreqAI (Jul 2026) ---
-        ("2026-07-04T21:15:00+00:00", "freqai", "_note", None, None,
-         "ML Finder (TradeFinderStrategy + XGBoost scanner) включён на VPS вместо FreqAI · pnl gate block_loss"),
+         "Панель CriptoTools: подписи ML gate на Grid и Стратегиях; ML Finder помечен OFF"),
+        # --- ML Finder replaces ML Finder (Jul 2026) ---
+        ("2026-07-04T21:15:00+00:00", "finder", "_note", None, None,
+         "ML Finder (TradeFinderStrategy + XGBoost scanner) включён на VPS вместо ML Finder · pnl gate block_loss"),
         ("2026-07-04T21:15:00+00:00", "ui_infra", "_note", None, None,
-         "Панель CriptoTools: FreqAI → ML Finder, сервис freqtrade снова активен"),
-        ("2026-07-05T12:00:00+00:00", "freqai", "ml_gate_min_confidence", "80%", "60%",
+         "Панель CriptoTools: ML Finder → ML Finder, сервис freqtrade снова активен"),
+        ("2026-07-05T12:00:00+00:00", "finder", "ml_gate_min_confidence", "80%", "60%",
          "profit_only — все входы ML Finder"),
         ("2026-07-05T12:00:00+00:00", "strategy", "ml_gate_min_confidence", "80%", "60%",
          "profit_only — MultiStrategyRouter"),

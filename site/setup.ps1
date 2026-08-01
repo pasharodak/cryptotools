@@ -1,4 +1,4 @@
-Clear-Host
+﻿Clear-Host
 
 $Timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
 

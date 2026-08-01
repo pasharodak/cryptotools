@@ -100,7 +100,7 @@ systemctl restart strategy-scanner.timer 2>/dev/null || true
 sleep 25
 echo "=== status ==="
 systemctl is-active freqtrade freqtrade-strategy freqtrade-grid pair-config nginx
-curl -sk https://127.0.0.1:8443/api/freqai/ping || true
+curl -sk https://127.0.0.1:8443/api/finder/ping || true
 echo ""
 curl -sk https://127.0.0.1:8443/api/strategy/ping || true
 echo ""

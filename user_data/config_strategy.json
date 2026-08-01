@@ -12,9 +12,9 @@
     "trading_mode": "futures",
     "margin_mode": "isolated",
     "minimal_roi": {
-        "0": 0.10
+        "0": 0.05
     },
-    "stoploss": -0.05,
+    "stoploss": -0.15,
     "trailing_stop": false,
     "use_exit_signal": false,
     "exit_profit_only": false,

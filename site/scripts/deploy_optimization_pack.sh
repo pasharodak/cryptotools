@@ -4,7 +4,7 @@ set -euo pipefail
 cd /home/freqtrade/freqtrade
 source /home/freqtrade/.freqtrade.env
 
-echo "=== Close stale FreqAI positions ==="
+echo "=== Close stale ML Finder positions ==="
 bash scripts/force_exit_all.sh 8080 || true
 
 echo "=== Ranging scan → grid whitelist ==="

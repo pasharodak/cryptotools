@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+﻿#!/usr/bin/env bash
 #encoding=utf8
 
 function echo_block() {
@@ -29,7 +29,7 @@ function check_installed_python() {
         exit 2
     fi
     if [ -x "$(command -v uv)" ]; then
-        echo "uv detected — using it instead of pip for faster installation."
+        echo "uv detected вЂ” using it instead of pip for faster installation."
         PIP="uv pip"
         PYTHON="python3.13"
         UV=true
@@ -92,11 +92,11 @@ function updateenv() {
             fi
         fi
 
-        read -p "Do you want to install dependencies for freqai [y/N]? "
+        read -p "Do you want to install dependencies for optional upstream freqai extras (unused in prod) [y/N]? "
         if [[ $REPLY =~ ^[Yy]$ ]]
         then
             REQUIREMENTS_FREQAI="-r requirements-freqai.txt"
-            read -p "Do you also want dependencies for freqai-rl or PyTorch (~700mb additional space required) [y/N]? "
+            read -p "Do you also want dependencies for finder-rl or PyTorch (~700mb additional space required) [y/N]? "
             if [[ $REPLY =~ ^[Yy]$ ]]
             then
                 REQUIREMENTS_FREQAI="-r requirements-freqai-rl.txt"

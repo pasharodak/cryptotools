@@ -87,25 +87,35 @@ ENABLED_STRATEGIES_FILE = BASE / "user_data" / "enabled_strategies.json"
 DUAL_HEDGE_FILE = BASE / "user_data" / "dual_hedge.json"
 BOT_LIMITS_FILE = BASE / "user_data" / "bot_limits.json"
 BOT_STRATEGIES_FILE = BASE / "user_data" / "bot_strategies.json"
-DEFAULT_BOT_LIMITS = {"freqai": 3, "strategy": 2, "grid": 2}
+DEFAULT_BOT_LIMITS = {"finder": 3, "strategy": 2, "grid": 2}
+# Legacy API id (old UI used "freqai" for the Finder bot)
+BOT_ALIASES = {"freqai": "finder"}
+
+
+def resolve_bot(bot: str | None) -> str:
+    """Normalize bot id; map legacy names to current keys."""
+    name = (bot or "").strip().lower()
+    return BOT_ALIASES.get(name, name)
+
+
 ROUTER_STRATEGY = "MultiStrategyRouter"
 CONFIGS = {
-    "freqai": BASE / "user_data" / "config.json",
+    "finder": BASE / "user_data" / "config.json",
     "strategy": BASE / "user_data" / "config_strategy.json",
     "grid": BASE / "user_data" / "config_grid.json",
 }
 RELOAD = {
-    "freqai": "http://127.0.0.1:8080/api/v1/reload_config",
+    "finder": "http://127.0.0.1:8080/api/v1/reload_config",
     "strategy": "http://127.0.0.1:8081/api/v1/reload_config",
     "grid": "http://127.0.0.1:8082/api/v1/reload_config",
 }
 BLACKLIST = {
-    "freqai": "http://127.0.0.1:8080/api/v1/blacklist",
+    "finder": "http://127.0.0.1:8080/api/v1/blacklist",
     "strategy": "http://127.0.0.1:8081/api/v1/blacklist",
     "grid": "http://127.0.0.1:8082/api/v1/blacklist",
 }
 WHITELIST = {
-    "freqai": "http://127.0.0.1:8080/api/v1/whitelist",
+    "finder": "http://127.0.0.1:8080/api/v1/whitelist",
     "strategy": "http://127.0.0.1:8081/api/v1/whitelist",
     "grid": "http://127.0.0.1:8082/api/v1/whitelist",
 }
@@ -114,10 +124,10 @@ AUTH_USER = os.environ.get("FREQUI_USERNAME", "freqtrader")
 AUTH_PASS = os.environ.get("FREQUI_PASSWORD", "")
 
 DEFAULT_GRID_STAKE = 10
-DEFAULT_STAKES = {"grid": DEFAULT_GRID_STAKE, "strategy": 5, "freqai": 5}
+DEFAULT_STAKES = {"grid": DEFAULT_GRID_STAKE, "strategy": 5, "finder": 5}
 STAKE_EDITABLE_BOTS = frozenset({"grid", "strategy"})
-DEFAULT_STRATEGY_STOPLOSS = -0.05
-DEFAULT_STRATEGY_TAKE_PROFIT = 0.10
+DEFAULT_STRATEGY_STOPLOSS = -0.15
+DEFAULT_STRATEGY_TAKE_PROFIT = 0.05
 MIN_STRATEGY_STOPLOSS = -0.20
 MAX_STRATEGY_STOPLOSS = -0.01
 MIN_STRATEGY_TAKE_PROFIT = 0.02
@@ -318,6 +328,7 @@ def _closed_trade_row_to_json(row: sqlite3.Row, ml: dict[str, Any]) -> dict[str,
 
 def load_closed_trades_from_db(bot: str, limit: int = 500) -> list[dict[str, Any]]:
     """Fast closed-trade list from sqlite (no Freqtrade RPC / orders payload)."""
+    bot = resolve_bot(bot)
     if bot not in CONFIGS:
         return []
     db_path = _bot_db_path(bot)
@@ -351,6 +362,7 @@ def load_closed_trades_from_db(bot: str, limit: int = 500) -> list[dict[str, Any
 def get_closed_trades_payload(limit: int = 500, bot: str | None = None) -> dict[str, Any]:
     limit = max(1, min(int(limit), 5000))
     if bot:
+        bot = resolve_bot(bot)
         if bot not in CONFIGS:
             return {"error": "invalid bot"}
         return {"bot": bot, "trades": load_closed_trades_from_db(bot, limit)}
@@ -484,10 +496,17 @@ def load_bot_limits_file() -> dict[str, Any]:
     data = json.loads(BOT_LIMITS_FILE.read_text(encoding="utf-8"))
     payload = _default_bot_limits_payload()
     stored_trades = data.get("max_open_trades", data if "stake_amount" not in data else {})
+    # Migrate legacy bot id
+    if "freqai" in stored_trades and "finder" not in stored_trades:
+        stored_trades = dict(stored_trades)
+        stored_trades["finder"] = stored_trades.pop("freqai")
     for bot in CONFIGS:
         if bot in stored_trades:
             payload["max_open_trades"][bot] = int(stored_trades[bot])
     stored_stakes = data.get("stake_amount", {})
+    if "freqai" in stored_stakes and "finder" not in stored_stakes:
+        stored_stakes = dict(stored_stakes)
+        stored_stakes["finder"] = stored_stakes.pop("freqai")
     for bot, default in DEFAULT_STAKES.items():
         if bot in stored_stakes:
             payload["stake_amount"][bot] = float(stored_stakes[bot])
@@ -740,6 +759,7 @@ def reload_bot(bot: str) -> Any:
 
 
 def safe_get_state(bot: str) -> dict[str, Any]:
+    bot = resolve_bot(bot)
     try:
         return get_state(bot)
     except BaseException as exc:  # noqa: BLE001
@@ -1073,9 +1093,9 @@ def get_state(bot: str) -> dict[str, Any]:
     return state
 
 
-def sync_freqai_config(mutator) -> list[str]:
-    """Manual pair changes apply to FreqAI only (strategy/grid use scanners)."""
-    path = CONFIGS["freqai"]
+def sync_finder_config(mutator) -> list[str]:
+    """Manual pair changes apply to ML Finder only (strategy/grid use scanners)."""
+    path = CONFIGS["finder"]
     cfg = load_config(path)
     wl = list(cfg.get("exchange", {}).get("pair_whitelist", []))
     wl = mutator(wl)
@@ -1092,7 +1112,7 @@ def add_pair(pair: str) -> dict[str, Any]:
             wl.append(pair)
         return wl
 
-    sync_freqai_config(add)
+    sync_finder_config(add)
     try:
         record_pair_whitelist_change("add", pair)
     except Exception:
@@ -1113,8 +1133,9 @@ def add_pair(pair: str) -> dict[str, Any]:
 
 
 def set_max_open_trades(bot: str, value: int) -> dict[str, Any]:
+    bot = resolve_bot(bot)
     if bot not in CONFIGS:
-        raise ValueError("bot must be freqai, strategy, or grid")
+        raise ValueError("bot must be finder, strategy, or grid")
     value = int(value)
     if value < MIN_MAX_TRADES or value > MAX_MAX_TRADES:
         raise ValueError(
@@ -1151,6 +1172,7 @@ def set_max_open_trades(bot: str, value: int) -> dict[str, Any]:
 
 
 def set_stake_amount(bot: str, value: float) -> dict[str, Any]:
+    bot = resolve_bot(bot)
     if bot not in STAKE_EDITABLE_BOTS:
         allowed = ", ".join(sorted(STAKE_EDITABLE_BOTS))
         raise ValueError(f"stake_amount can only be changed for: {allowed}")
@@ -1210,7 +1232,7 @@ def remove_pair(pair: str) -> dict[str, Any]:
     def remove(wl: list[str]) -> list[str]:
         return [p for p in wl if p != pair]
 
-    sync_freqai_config(remove)
+    sync_finder_config(remove)
     try:
         record_pair_whitelist_change("remove", pair)
     except Exception:
@@ -1227,7 +1249,7 @@ def remove_pair(pair: str) -> dict[str, Any]:
 
 
 LOG_SOURCES: dict[str, tuple[str, Path]] = {
-    "freqai": ("ML Finder", BASE / "user_data" / "logs" / "freqtrade-finder.log"),
+    "finder": ("ML Finder", BASE / "user_data" / "logs" / "freqtrade-finder.log"),
     "strategy": ("Стратегии", BASE / "user_data" / "logs" / "freqtrade-strategy.log"),
     "grid": ("Grid", BASE / "user_data" / "logs" / "freqtrade-grid.log"),
     "scanner": ("Сканер Grid", BASE / "user_data" / "logs" / "ranging-scanner.log"),
@@ -1548,7 +1570,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/trade-ml-meta":
             qs = parse_qs(urlparse(self.path).query)
-            bot = (qs.get("bot") or [""])[0]
+            bot = resolve_bot((qs.get("bot") or [""])[0])
             raw_ids = (qs.get("ids") or [""])[0]
             if bot not in CONFIGS:
                 self._json(400, {"error": "invalid bot"})
@@ -1558,7 +1580,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/closed-trades":
             qs = parse_qs(urlparse(self.path).query)
-            bot = (qs.get("bot") or [""])[0] or None
+            raw_bot = (qs.get("bot") or [""])[0] or None
+            bot = resolve_bot(raw_bot) if raw_bot else None
             try:
                 limit = int((qs.get("limit") or ["500"])[0])
             except ValueError:
@@ -1638,7 +1661,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(500, {"error": str(exc), "ok": False})
             return
         if path == "/position-reconcile/archive":
-            bot = data.get("bot") or ""
+            bot = resolve_bot(data.get("bot") or "")
             trade_id = data.get("trade_id")
             if bot not in CONFIGS or trade_id is None:
                 self._json(400, {"error": "bot and trade_id required"})

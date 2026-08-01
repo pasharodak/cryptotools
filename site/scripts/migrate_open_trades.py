@@ -42,7 +42,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base", default="/home/freqtrade/freqtrade")
     parser.add_argument("--source", default="tradesv3.sqlite")
-    parser.add_argument("--target", default="tradesv3-freqai.sqlite")
+    parser.add_argument("--target", default="tradesv3-finder.sqlite")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 

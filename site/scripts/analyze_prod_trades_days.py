@@ -13,7 +13,7 @@ DB_DIR = ROOT / "simulation/data/live_dbs"
 OUT_DIR = ROOT / "simulation/results"
 
 BOTS = {
-    "ML Finder": ("freqai", "tradesv3-freqai.sqlite"),
+    "ML Finder": ("finder", "tradesv3-finder.sqlite"),
     "Strategy": ("strategy", "tradesv3-strategy.sqlite"),
     "Grid": ("grid", "tradesv3-grid.sqlite"),
 }

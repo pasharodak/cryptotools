@@ -55,6 +55,6 @@ foreach ($f in $files) {
 
 Write-Host ""
 Write-Host "Custom UI: https://${ServerIp}:8443"
-Write-Host "FreqAI max 3 | Strategy max 2 | Grid max 2 (total 7)"
+Write-Host "ML Finder max 3 | Strategy max 2 | Grid max 2 (total 7)"
 Write-Host "Login: FREQUI_USERNAME / FREQUI_PASSWORD in D:\cryptotools\site\.env"
 

@@ -18,13 +18,13 @@ RANGING_SCAN_CFG = ROOT / "user_data/ranging_scan_config.json"
 STRATEGY_SCAN_CFG = ROOT / "user_data/strategy_scan_config.json"
 
 BOT_CONFIGS: dict[str, Path] = {
-    "freqai": ROOT / "user_data/config.json",
+    "finder": ROOT / "user_data/config.json",
     "strategy": ROOT / "user_data/config_strategy.json",
     "grid": ROOT / "user_data/config_grid.json",
 }
 
 RELOAD_URLS = {
-    "freqai": "http://127.0.0.1:8080/api/v1/reload_config",
+    "finder": "http://127.0.0.1:8080/api/v1/reload_config",
     "strategy": "http://127.0.0.1:8081/api/v1/reload_config",
     "grid": "http://127.0.0.1:8082/api/v1/reload_config",
 }

@@ -246,6 +246,6 @@
     "internals": {
         "process_throttle_secs": 5
     },
-    "_prod_note": "ML Trade Finder (XGBoost scanner + pnl classifier gate) — replaces FreqAI",
+    "_prod_note": "ML Trade Finder (XGBoost scanner + pnl classifier gate) — replaces ML Finder",
     "_pairlist_mode": "ml_training — StaticPairList 118 pairs from ML training dataset"
 }

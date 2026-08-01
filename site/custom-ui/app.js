@@ -1,14 +1,14 @@
 const BOTS = {
-  freqai: {
-    prefix: "/api/freqai",
+  finder: {
+    prefix: "/api/finder",
     label: "ML Finder",
     maxTrades: 3,
-    stateEl: "freqai-state",
-    statsEl: "freqai-stats",
-    actionsEl: "freqai-actions",
-    tradesEl: "freqai-trades",
-    pairsEl: "freqai-pairs",
-    maxTradesEl: "freqai-max-trades",
+    stateEl: "finder-state",
+    statsEl: "finder-stats",
+    actionsEl: "finder-actions",
+    tradesEl: "finder-trades",
+    pairsEl: "finder-pairs",
+    maxTradesEl: "finder-max-trades",
   },
   strategy: {
     prefix: "/api/strategy",
@@ -70,7 +70,7 @@ let lastBybitGridRefresh = 0;
 const BYBIT_GRID_REFRESH_MS = 30000;
 const WHITELIST_REFRESH_MS = 60000;
 const whitelistCache = {};
-let tokens = { freqai: null, strategy: null, grid: null };
+let tokens = { finder: null, strategy: null, grid: null };
 let creds = { user: "", pass: "" };
 let bybitGridHistoryOpen = false;
 
@@ -233,7 +233,7 @@ async function reloginFromStorage() {
   const session = loadStoredSession();
   if (!session) throw new Error("auth");
   applyStoredCreds(session);
-  tokens = { freqai: null, strategy: null, grid: null };
+  tokens = { finder: null, strategy: null, grid: null };
   await loginAll();
 }
 
@@ -323,7 +323,7 @@ async function loginAll() {
 
 function logout() {
   closeLogs();
-  tokens = { freqai: null, strategy: null, grid: null };
+  tokens = { finder: null, strategy: null, grid: null };
   clearSession();
   $("app-screen").classList.add("hidden");
   $("login-screen").classList.remove("hidden");
@@ -375,7 +375,7 @@ function fmtShare(amount, total) {
 }
 
 function tradeSourceLabel(trade, bot) {
-  if (bot === "freqai") return FINDER_STATS_LABEL;
+  if (bot === "finder") return FINDER_STATS_LABEL;
   if (bot === "grid") return GRID_STATS_LABEL;
   if (trade.enter_tag) {
     const raw = String(trade.enter_tag);
@@ -517,7 +517,7 @@ const STATS_SCOPE_META = {
     title: "Статистика — все боты",
     note: "Закрытые сделки по всем ботам, включая Bybit Grid.",
   },
-  freqai: { title: "Статистика — ML Finder", note: "Сделки TradeFinderStrategy (XGBoost scanner + pnl gate)." },
+  finder: { title: "Статистика — ML Finder", note: "Сделки TradeFinderStrategy (XGBoost scanner + pnl gate)." },
   strategy: {
     title: "Статистика — стратегии + ML gate",
     note: "Закрытые сделки по включённым стратегиям (TripleEMA, BB+RSI, ADX). Входы с ML gate.",
@@ -610,7 +610,7 @@ function isTodayMs(tsMs) {
 }
 
 function tradeSourceId(trade, bot) {
-  if (bot === "freqai") return "__freqai__";
+  if (bot === "finder") return "__finder__";
   if (bot === "grid") return "__grid__";
   if (trade.enter_tag) {
     return String(trade.enter_tag)
@@ -689,7 +689,7 @@ function addBybitGridToRow(row, item) {
 
 function filterStatsRows(rows, scope) {
   if (scope === "all") return rows;
-  if (scope === "freqai") return rows.filter((r) => r.name === FINDER_STATS_LABEL);
+  if (scope === "finder") return rows.filter((r) => r.name === FINDER_STATS_LABEL);
   if (scope === "grid") return rows.filter((r) => r.name === GRID_STATS_LABEL);
   if (scope === "bybitgrid") return rows.filter((r) => r.name === BYBIT_GRID_STATS_LABEL);
   if (scope === "strategy") {
@@ -703,7 +703,7 @@ function filterStatsRows(rows, scope) {
   return rows;
 }
 
-function buildStatsRows(freqaiTrades, stratTrades, gridTrades, bybitHistory, catalog) {
+function buildStatsRows(finderTrades, stratTrades, gridTrades, bybitHistory, catalog) {
   const rows = new Map();
 
   const ensure = (name) => {
@@ -718,7 +718,7 @@ function buildStatsRows(freqaiTrades, stratTrades, gridTrades, bybitHistory, cat
   ensure(BYBIT_GRID_STATS_LABEL);
   for (const s of catalog) ensure(s.name);
 
-  for (const t of freqaiTrades) addClosedTradeToRow(ensure(FINDER_STATS_LABEL), t);
+  for (const t of finderTrades) addClosedTradeToRow(ensure(FINDER_STATS_LABEL), t);
   for (const t of gridTrades) addClosedTradeToRow(ensure(GRID_STATS_LABEL), t);
   for (const t of stratTrades) {
     const name = tradeSourceLabel(t, "strategy");
@@ -743,7 +743,7 @@ function buildStatsRows(freqaiTrades, stratTrades, gridTrades, bybitHistory, cat
 }
 
 function buildHistoryEntries(
-  freqaiTrades,
+  finderTrades,
   stratTrades,
   gridTrades,
   bybitHistory,
@@ -757,14 +757,14 @@ function buildHistoryEntries(
   const entries = [];
   const ftBots =
     scope === "all"
-      ? ["freqai", "strategy", "grid"]
+      ? ["finder", "strategy", "grid"]
       : scope === "bybitgrid"
         ? []
         : [scope];
 
-  if (ftBots.includes("freqai")) {
-    for (const t of filterClosedTrades(freqaiTrades, period, dateFrom, dateTo)) {
-      entries.push({ kind: "trade", bot: "freqai", trade: t });
+  if (ftBots.includes("finder")) {
+    for (const t of filterClosedTrades(finderTrades, period, dateFrom, dateTo)) {
+      entries.push({ kind: "trade", bot: "finder", trade: t });
     }
   }
   if (ftBots.includes("strategy")) {
@@ -829,7 +829,7 @@ function bybitExitLabel(item) {
 
 function historyBotLabel(entry) {
   if (entry.kind === "bybit") return BYBIT_GRID_STATS_LABEL;
-  if (entry.bot === "freqai") return FINDER_STATS_LABEL;
+  if (entry.bot === "finder") return FINDER_STATS_LABEL;
   if (entry.bot === "grid") return GRID_STATS_LABEL;
   return BOTS[entry.bot]?.label || entry.bot;
 }
@@ -976,7 +976,7 @@ function renderHistoryTable(entries) {
 
 function collectUniquePairs(data) {
   const pairs = new Set();
-  for (const t of [...(data.freqaiTrades || []), ...(data.stratTrades || []), ...(data.gridTrades || [])]) {
+  for (const t of [...(data.finderTrades || []), ...(data.stratTrades || []), ...(data.gridTrades || [])]) {
     if (t.pair) pairs.add(t.pair);
   }
   for (const item of data.bybitHistory || []) {
@@ -1061,7 +1061,7 @@ function updateHistoryFilterUi() {
 function getFilteredHistoryEntries(data) {
   if (!data) return [];
   return buildHistoryEntries(
-    data.freqaiTrades,
+    data.finderTrades,
     data.stratTrades,
     data.gridTrades,
     data.bybitHistory,
@@ -1215,13 +1215,13 @@ function renderStatsModal(data) {
   if (!bodyEl || !summaryEl) return;
 
   const catalog = data.catalog || strategyCatalog;
-  const freqaiFiltered = filterClosedTrades(data.freqaiTrades, statsPeriod);
+  const finderFiltered = filterClosedTrades(data.finderTrades, statsPeriod);
   const stratFiltered = filterClosedTrades(data.stratTrades, statsPeriod);
   const gridFiltered = filterClosedTrades(data.gridTrades, statsPeriod);
   const bybitFiltered = filterBybitHistory(data.bybitHistory, statsPeriod);
 
   const rows = filterStatsRows(
-    buildStatsRows(freqaiFiltered, stratFiltered, gridFiltered, bybitFiltered, catalog),
+    buildStatsRows(finderFiltered, stratFiltered, gridFiltered, bybitFiltered, catalog),
     statsScope
   );
 
@@ -1312,7 +1312,7 @@ async function fetchStatsData(tradeLimit = 500) {
     pairConfigApi("/bybit-grid/history").catch(() => ({ history: [] })),
   ]);
   return {
-    freqaiTrades: closedData.freqai || [],
+    finderTrades: closedData.finder || [],
     stratTrades: closedData.strategy || [],
     gridTrades: closedData.grid || [],
     bybitHistory: bybitData?.history || [],
@@ -1749,7 +1749,7 @@ function updateMaxTradesHint() {
   if (!el) return;
   const activeMax =
     BOTS.strategy.maxTrades + BOTS.grid.maxTrades + bybitGridMaxBots;
-  el.textContent = `До ${activeMax} позиций: Finder — ${BOTS.freqai.maxTrades}, стратегии — ${BOTS.strategy.maxTrades}, Grid — ${BOTS.grid.maxTrades}, Bybit Grid — ${bybitGridMaxBots} · ML gate`;
+  el.textContent = `До ${activeMax} позиций: Finder — ${BOTS.finder.maxTrades}, стратегии — ${BOTS.strategy.maxTrades}, Grid — ${BOTS.grid.maxTrades}, Bybit Grid — ${bybitGridMaxBots} · ML gate`;
 }
 
 async function setMaxTrades(bot, value) {
@@ -2019,7 +2019,7 @@ function bindTradeLists() {
 
 function renderActions(bot, running) {
   const cfg = BOTS[bot];
-  if (bot === "freqai" && !finderBotEnabled) {
+  if (bot === "finder" && !finderBotEnabled) {
     $(cfg.actionsEl).innerHTML =
       '<p class="muted finder-disabled-note">ML Finder отключён на сервере. Кнопка «Старт» недоступна.</p>';
     return;
@@ -2042,7 +2042,7 @@ function renderActions(bot, running) {
       const label = btn.textContent;
       try {
         if (act === "start") {
-          if (bot === "freqai" && !finderBotEnabled) {
+          if (bot === "finder" && !finderBotEnabled) {
             alert("ML Finder отключён на сервере.");
             return;
           }
@@ -2181,7 +2181,7 @@ async function loadStrategyScanInfo() {
 
 function setState(bot, running, hint = "") {
   const el = $(BOTS[bot].stateEl);
-  if (bot === "freqai" && !finderBotEnabled) {
+  if (bot === "finder" && !finderBotEnabled) {
     el.textContent = "DISABLED";
     el.className = "badge stopped";
     el.title = "ML Finder отключён на сервере — не запускается при перезагрузке";
@@ -2202,7 +2202,7 @@ function setState(bot, running, hint = "") {
   el.textContent = running ? "RUNNING" : "STOPPED";
   el.className = `badge ${running ? "running" : "stopped"}`;
   el.title = running
-    ? bot === "freqai"
+    ? bot === "finder"
       ? `ML Finder · scanner + pnl gate ${ML_GATE_STRATEGY}`
       : bot === "strategy"
         ? `Бот торгует · ML gate ${ML_GATE_STRATEGY}`
@@ -2903,7 +2903,7 @@ async function refreshAll() {
     const tasks = [
       refreshPairlistMode(),
       refreshStrategyEnabled(),
-      refreshBotSafe("freqai"),
+      refreshBotSafe("finder"),
       refreshBotSafe("strategy"),
       refreshBotSafe("grid"),
       refreshServerStats(),
@@ -2935,19 +2935,19 @@ function showPairMsg(text, isError = false) {
 async function loadPairSettings() {
   await loadStrategySettings();
   const data = await pairConfigApi("/pairs");
-  const freqai = data.freqai || {};
+  const finder = data.finder || {};
   const strategy = data.strategy || {};
   const grid = data.grid || {};
-  const active = freqai.active_whitelist || [];
+  const active = finder.active_whitelist || [];
   const black = [
     ...new Set([
-      ...(freqai.blacklist || []),
+      ...(finder.blacklist || []),
       ...(strategy.blacklist || []),
       ...(grid.blacklist || []),
     ]),
   ];
 
-  if (freqai.max_open_trades != null) BOTS.freqai.maxTrades = freqai.max_open_trades;
+  if (finder.max_open_trades != null) BOTS.finder.maxTrades = finder.max_open_trades;
   if (strategy.max_open_trades != null) BOTS.strategy.maxTrades = strategy.max_open_trades;
   if (grid.max_open_trades != null) BOTS.grid.maxTrades = grid.max_open_trades;
   if (grid.stake_amount != null) BOTS.grid.stakeAmount = Number(grid.stake_amount);
@@ -3227,7 +3227,7 @@ function closeLogs() {
 
 const CHANGELOG_CAT_LABELS = {
   telegram_bot: "Telegram-бот",
-  freqai: "ML Finder",
+  finder: "ML Finder",
   strategy: "Стратегии",
   grid_ft: "Grid Freqtrade",
   ranging_scanner: "Сканер боковика",
@@ -3306,8 +3306,8 @@ function renderChangelog(data) {
             ? "is-system"
             : cat === "telegram_bot"
               ? "is-telegram"
-              : cat === "freqai"
-                ? "is-freqai"
+              : cat === "finder"
+                ? "is-finder"
                 : cat === "strategy"
                   ? "is-strategy"
                   : cat === "grid_ft"

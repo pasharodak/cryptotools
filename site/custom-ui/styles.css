@@ -321,7 +321,7 @@ body {
 }
 
 .panel-finder,
-.panel-freqai-retired {
+.panel-finder-retired {
   opacity: 0.88;
 }
 
@@ -1556,7 +1556,7 @@ h3 { font-size: 0.92rem; margin: 1rem 0 0.5rem; color: var(--muted); }
   opacity: 0.85;
 }
 
-.log-freqai .log-tag { color: var(--ai); }
+.log-finder .log-tag { color: var(--ai); }
 .log-strategy .log-tag { color: var(--strat); }
 .log-grid .log-tag { color: var(--grid); }
 .log-scanner .log-tag { color: var(--warn); }
@@ -1617,7 +1617,7 @@ h3 { font-size: 0.92rem; margin: 1rem 0 0.5rem; color: var(--muted); }
   border-left-color: rgba(148, 163, 184, 0.5);
 }
 
-.changelog-entry.is-freqai {
+.changelog-entry.is-finder {
   border-left-color: rgba(52, 211, 153, 0.55);
 }
 

@@ -1,4 +1,4 @@
-[
+﻿[
     {
         "id": "lite_position",
         "label": "Позиционный (HODL)",
@@ -202,16 +202,16 @@
     },
     {
         "id": "live_freqai",
-        "label": "FreqAI (live)",
+        "label": "Legacy finder stub (offline)",
         "enabled": false,
-        "strategy": "SimFreqaiProxyStrategy",
+        "strategy": "SimLegacyFinderProxyStrategy",
         "strategy_path": "simulation/strategies",
-        "config": "simulation/config/backtest_freqai_sim.json",
+        "config": "simulation/config/backtest_legacy_finder_sim.json",
         "scan_type": "strategy",
         "group": "live",
         "stake_usdt": 30,
         "settings": "отключён — proxy без ML",
-        "prod_disabled_reason": "replaced — old FreqAI prod bot"
+        "prod_disabled_reason": "replaced by TradeFinderStrategy + ML gate"
     },
     {
         "id": "trend_supertrend",
@@ -250,3 +250,4 @@
         "settings": "RSI 35/65 · EMA12/26 · BB filter · 3x"
     }
 ]
+

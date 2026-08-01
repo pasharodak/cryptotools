@@ -1,11 +1,11 @@
-{
+﻿{
     "$schema": "https://schema.freqtrade.io/schema.json",
     "max_open_trades": 1,
     "stake_currency": "USDT",
     "stake_amount": 10,
     "dry_run": true,
     "dry_run_wallet": 100,
-    "db_url": "sqlite:///simulation/data/sim-freqai-proxy.sqlite",
+    "db_url": "sqlite:///simulation/data/sim-legacy-finder-proxy.sqlite",
     "timeframe": "5m",
     "trading_mode": "futures",
     "margin_mode": "isolated",
@@ -30,7 +30,8 @@
         "password": "sim",
         "jwt_secret_key": "simulation-jwt-secret-key-32chars-min"
     },
-    "bot_name": "sim-freqai-proxy",
-    "strategy": "SimFreqaiProxyStrategy",
+    "bot_name": "sim-legacy-finder-proxy",
+    "strategy": "SimLegacyFinderProxyStrategy",
     "initial_state": "stopped"
 }
+

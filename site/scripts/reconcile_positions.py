@@ -25,7 +25,7 @@ DEFAULT_BASE = Path(os.environ.get("FT_BASE", "/home/freqtrade/freqtrade"))
 DEFAULT_ENV = Path(os.environ.get("FT_ENV", "/home/freqtrade/.freqtrade.env"))
 
 BOTS: dict[str, dict[str, Any]] = {
-    "freqai": {
+    "finder": {
         "config": "user_data/config.json",
         "port": 8080,
     },

@@ -1,4 +1,4 @@
-# Freqtrade rules
+﻿# Freqtrade rules
 config*.json
 !user_data/config_strategy.json
 !user_data/config_grid.json
@@ -17,11 +17,8 @@ user_data/*
 !user_data/strategy_scan_config.json
 !user_data/config_strategy.json
 !user_data/config_grid.json
-!user_data/strategy/sample_strategy.py
 !user_data/notebooks
 !user_data/models
-!user_data/freqaimodels
-user_data/freqaimodels/*
 user_data/models/*
 !user_data/models/pnl_classifier/
 !user_data/models/pnl_classifier/pnl_classifier_meta.json
@@ -143,6 +140,5 @@ target/
 !config_examples/config_binance.example.json
 !config_examples/config_full.example.json
 !config_examples/config_kraken.example.json
-!config_examples/config_freqai.example.json
 
 docker-compose-*.yml

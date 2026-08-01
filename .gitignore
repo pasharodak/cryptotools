@@ -19,6 +19,9 @@ user_data/
 /user_data/
 /.venv/
 
+# Archive from removed D:\freqtrade sibling
+_archive_from_freqtrade/
+
 # Local dumps / artifacts
 grid_trades_*
 user_data/grid_trades_*

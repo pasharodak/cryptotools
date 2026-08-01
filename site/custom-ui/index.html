@@ -87,34 +87,34 @@
 
     <div id="dashboard-view">
     <main class="grid-4">
-      <section class="panel panel-finder" id="panel-freqai">
+      <section class="panel panel-finder" id="panel-finder">
         <div class="panel-head">
           <h2>ML Finder</h2>
           <div class="panel-head-actions">
-            <button type="button" class="btn ghost btn-sm panel-stats-btn" data-stats-scope="freqai">Статистика</button>
-            <span class="badge" id="freqai-state" title="XGBoost scanner + pnl classifier gate">—</span>
+            <button type="button" class="btn ghost btn-sm panel-stats-btn" data-stats-scope="finder">Статистика</button>
+            <span class="badge" id="finder-state" title="XGBoost scanner + pnl classifier gate">—</span>
           </div>
         </div>
         <p class="panel-retired-note">TradeFinderStrategy — сканирует рынок (scan_stride), ATR SL/TP. На входе — pnl classifier gate <strong>profit ≥60%</strong>.</p>
-        <div class="stats" id="freqai-stats"></div>
-        <div class="actions" id="freqai-actions"></div>
+        <div class="stats" id="finder-stats"></div>
+        <div class="actions" id="finder-actions"></div>
         <h3>Открытые сделки</h3>
-        <div class="trades-list" id="freqai-trades"></div>
-        <div class="collapsible-section is-collapsed pairs-collapsible" id="freqai-pairs-section">
+        <div class="trades-list" id="finder-trades"></div>
+        <div class="collapsible-section is-collapsed pairs-collapsible" id="finder-pairs-section">
           <button
             type="button"
             class="collapsible-toggle"
-            id="freqai-pairs-toggle"
+            id="finder-pairs-toggle"
             data-collapsible-toggle
             aria-expanded="false"
-            aria-controls="freqai-pairs-body"
+            aria-controls="finder-pairs-body"
           >
             <span class="collapsible-title">Белый список</span>
-            <span class="collapsible-sub muted" id="freqai-pairs-summary">—</span>
+            <span class="collapsible-sub muted" id="finder-pairs-summary">—</span>
             <span class="collapsible-chevron" aria-hidden="true">▸</span>
           </button>
-          <div class="collapsible-body" id="freqai-pairs-body">
-            <p class="pairs" id="freqai-pairs"></p>
+          <div class="collapsible-body" id="finder-pairs-body">
+            <p class="pairs" id="finder-pairs"></p>
           </div>
         </div>
       </section>
@@ -252,7 +252,7 @@
         <div class="logs-filters changelog-filters" role="tablist" aria-label="Фильтр изменений">
           <button type="button" class="btn btn-sm changelog-filter is-active" data-changelog-filter="all">Все</button>
           <button type="button" class="btn btn-sm changelog-filter" data-changelog-filter="bybit_grid">Bybit Grid</button>
-          <button type="button" class="btn btn-sm changelog-filter" data-changelog-filter="freqai">ML Finder</button>
+          <button type="button" class="btn btn-sm changelog-filter" data-changelog-filter="finder">ML Finder</button>
           <button type="button" class="btn btn-sm changelog-filter" data-changelog-filter="strategy">Стратегии</button>
           <button type="button" class="btn btn-sm changelog-filter" data-changelog-filter="grid_ft">Grid FT</button>
           <button type="button" class="btn btn-sm changelog-filter" data-changelog-filter="ranging_scanner">Сканер</button>
@@ -269,7 +269,7 @@
         <h2 class="logs-title">Логи в реальном времени</h2>
         <div class="logs-filters" role="tablist" aria-label="Фильтр логов">
           <button type="button" class="btn btn-sm logs-filter is-active" data-logs-filter="all">Все</button>
-          <button type="button" class="btn btn-sm logs-filter" data-logs-filter="freqai">ML Finder</button>
+          <button type="button" class="btn btn-sm logs-filter" data-logs-filter="finder">ML Finder</button>
           <button type="button" class="btn btn-sm logs-filter" data-logs-filter="strategy">Стратегии</button>
           <button type="button" class="btn btn-sm logs-filter" data-logs-filter="grid">Grid</button>
           <button type="button" class="btn btn-sm logs-filter" data-logs-filter="scanner">Сканер Grid</button>
@@ -298,7 +298,7 @@
           <span class="history-filter-label">Бот</span>
           <div class="logs-filters history-bot-filters" role="tablist" aria-label="Фильтр бота">
             <button type="button" class="btn btn-sm history-filter is-active" data-history-scope="all">Все</button>
-            <button type="button" class="btn btn-sm history-filter" data-history-scope="freqai">ML Finder</button>
+            <button type="button" class="btn btn-sm history-filter" data-history-scope="finder">ML Finder</button>
             <button type="button" class="btn btn-sm history-filter" data-history-scope="strategy">Стратегии</button>
             <button type="button" class="btn btn-sm history-filter" data-history-scope="grid">Grid</button>
             <button type="button" class="btn btn-sm history-filter" data-history-scope="bybitgrid">Bybit Grid</button>
@@ -478,7 +478,7 @@
       <div class="settings-section settings-max-trades">
         <h3>Лимиты ботов</h3>
         <p class="muted modal-note">Макс. сделок и stake сохраняются в config и применяются через reload.</p>
-        <div id="freqai-max-trades" class="max-trades-row"></div>
+        <div id="finder-max-trades" class="max-trades-row"></div>
         <div id="strategy-max-trades" class="max-trades-row"></div>
         <div id="strategy-stake" class="max-trades-row"></div>
         <div id="grid-max-trades" class="max-trades-row"></div>

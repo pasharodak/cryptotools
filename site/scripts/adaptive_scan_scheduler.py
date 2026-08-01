@@ -21,11 +21,11 @@ FINDER_STRIDE_BY_MIN = {5: 1, 10: 2, 15: 3, 30: 6}
 DEFAULT_FINDER_STRIDE = 6  # 30 min when all slots full
 
 COUNT_URLS = {
-    "freqai": "http://127.0.0.1:8080/api/v1/count",
+    "finder": "http://127.0.0.1:8080/api/v1/count",
     "strategy": "http://127.0.0.1:8081/api/v1/count",
     "grid": "http://127.0.0.1:8082/api/v1/count",
 }
-BOTS = ("freqai", "strategy", "grid")
+BOTS = ("finder", "strategy", "grid")
 
 _STATE: dict[str, Any] | None = None
 _STATE_LOCK = threading.Lock()

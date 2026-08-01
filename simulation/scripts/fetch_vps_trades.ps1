@@ -19,7 +19,7 @@ $ssh = "C:\Program Files\Git\usr\bin\ssh.exe"
 $scp = $ssh -replace "ssh.exe", "scp.exe"
 
 $files = @(
-    @{ Remote = "tradesv3-freqai.sqlite"; Local = "tradesv3-freqai.sqlite" },
+    @{ Remote = "tradesv3-finder.sqlite"; Local = "tradesv3-finder.sqlite" },
     @{ Remote = "tradesv3-strategy.sqlite"; Local = "tradesv3-strategy.sqlite" },
     @{ Remote = "tradesv3-grid.sqlite"; Local = "tradesv3-grid.sqlite" }
 )

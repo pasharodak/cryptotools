@@ -1,4 +1,4 @@
-# Deploy Freqtrade to VPS
+﻿# Deploy Freqtrade to VPS
 # Usage: .\scripts\deploy_to_server.ps1 -SshUser root
 param(
     [string]$ServerIp = "77.222.35.209",
@@ -48,7 +48,7 @@ tar -xzf /tmp/freqtrade-userdata.tgz -C /home/freqtrade/freqtrade
 install -m 600 -o freqtrade -g freqtrade /tmp/freqtrade.env /home/freqtrade/.freqtrade.env
 sed -i 's/\r$//' /home/freqtrade/.freqtrade.env
 chown -R freqtrade:freqtrade /home/freqtrade/freqtrade/user_data /home/freqtrade/freqtrade/scripts /home/freqtrade/freqtrade/deploy
-sudo -u freqtrade bash -lc 'cd ~/freqtrade && python3 -m venv .venv && source .venv/bin/activate && pip install -U pip wheel && pip install -r requirements.txt && pip install -e ".[freqai]" && freqtrade install-ui'
+sudo -u freqtrade bash -lc 'cd ~/freqtrade && python3 -m venv .venv && source .venv/bin/activate && pip install -U pip wheel && pip install -r requirements.txt && pip install -e "." && freqtrade install-ui'
 cp /home/freqtrade/freqtrade/deploy/freqtrade.service /etc/systemd/system/freqtrade.service
 systemctl daemon-reload
 systemctl enable freqtrade
