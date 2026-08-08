@@ -2,7 +2,7 @@
 param(
     [string]$VpsHost = "root@77.222.35.209",
     [string]$SshKey = "D:\cryptotools\site\deploy\id_rsa\id_rsa",
-    [string]$RemoteBase = "/home/freqtrade/freqtrade"
+    [string]$RemoteBase = "/home/cryptotools/app"
 )
 
 $ErrorActionPreference = "Stop"

@@ -24,7 +24,7 @@ def collect_pairs(root: Path, source: str = "all") -> list[str]:
         from simulation.scripts.comparison_common import pairs_from_source
 
         return pairs_from_source(root, "prod200")
-    datadir = root / "simulation/data/freqtrade"
+    datadir = root / "simulation/data/ctengine"
     ds = HistoricalDatastore(datadir)
     pairs = set(ds.list_pairs("5m"))
     export = root / "simulation/data/live_trades_export.json"
@@ -48,7 +48,7 @@ def main() -> int:
 
     pairs = collect_pairs(ROOT, source=args.pairs_source)
     update_manifest_timerange(ROOT, args.timerange)
-    datadir = ROOT / "simulation/data/freqtrade"
+    datadir = ROOT / "simulation/data/ctengine"
     runtime = ROOT / "simulation/data/runtime/download_all_pairs.json"
 
     print(f"=== download {len(pairs)} pairs · {args.timerange} ===")
@@ -59,7 +59,7 @@ def main() -> int:
         cmd = [
             str(PY),
             "-m",
-            "freqtrade",
+            "ctengine",
             "download-data",
             "--config",
             str(runtime),

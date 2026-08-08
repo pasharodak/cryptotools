@@ -83,9 +83,9 @@ class BotRunner:
 
     def _run(self, pairs: list[str], start_ms: int, end_ms: int, datadir: Path) -> None:
         timerange = ms_to_timerange(start_ms, end_ms)
-        ft = self.root / ".venv" / "Scripts" / "freqtrade.exe"
+        ft = self.root / ".venv" / "Scripts" / "ctbot.exe"
         if not ft.is_file():
-            ft = Path("freqtrade")
+            ft = Path("ctengine")
 
         for sc in BOT_SCENARIOS:
             sid = sc["id"]

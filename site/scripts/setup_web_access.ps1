@@ -20,7 +20,7 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host "Uploading nginx config, UI, and setup script..."
 & $scp -i $KeyPath `
-    "D:\cryptotools\site\deploy\nginx-freqtrade.conf" `
+    "D:\cryptotools\site\deploy\nginx-cryptotools.conf" `
     "D:\cryptotools\site\deploy\setup-web-access.sh" `
     "D:\cryptotools\site\scripts\load_env.sh" `
     "${SshUser}@${ServerIp}:/tmp/"
@@ -34,7 +34,7 @@ Write-Host "Uploading nginx config, UI, and setup script..."
 
 & $ssh -i $KeyPath "${SshUser}@${ServerIp}" @"
 sed -i 's/\r$//' /tmp/setup-web-access.sh /tmp/load_env.sh
-cp /tmp/load_env.sh /home/freqtrade/freqtrade/scripts/load_env.sh 2>/dev/null || true
+cp /tmp/load_env.sh /home/cryptotools/app/scripts/load_env.sh 2>/dev/null || true
 chmod +x /tmp/setup-web-access.sh
 bash /tmp/setup-web-access.sh
 "@

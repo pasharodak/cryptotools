@@ -33,7 +33,7 @@ def run_one(sc: dict, pairs: list[str], timerange: str) -> dict:
         }
     runtime = ROOT / "simulation/data/runtime" / f"bench_{sid}.json"
     patch_whitelist(ROOT, sc["config"], pairs, runtime, scenario=sc)
-    ft = ROOT / ".venv/Scripts/freqtrade.exe"
+    ft = ROOT / ".venv/Scripts/ctbot.exe"
     out_dir = ROOT / "simulation/results/lite_benchmark"
     out_dir.mkdir(parents=True, exist_ok=True)
     cmd = [
@@ -46,7 +46,7 @@ def run_one(sc: dict, pairs: list[str], timerange: str) -> dict:
         "--strategy-path",
         str(ROOT / sc["strategy_path"]),
         "--datadir",
-        str(ROOT / "simulation/data/freqtrade"),
+        str(ROOT / "simulation/data/ctengine"),
         "--timerange",
         timerange,
         "--export",
@@ -102,7 +102,7 @@ def main() -> int:
         if s.get("enabled", True)
     ]
     profile = json.loads((ROOT / "simulation/config/player_profile.json").read_text(encoding="utf-8"))
-    datadir = ROOT / cfg.get("freqtrade_datadir", "simulation/data/freqtrade")
+    datadir = ROOT / cfg.get("ctengine_datadir", "simulation/data/ctengine")
     timerange = cfg.get("player_timerange", "20260601-20260625")
     start_s = timerange.split("-")[0]
     start_ms = int(datetime.strptime(start_s, "%Y%m%d").replace(tzinfo=UTC).timestamp() * 1000)

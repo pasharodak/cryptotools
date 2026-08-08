@@ -1,6 +1,6 @@
 #!/bin/bash
 set -e
-source /home/freqtrade/.freqtrade.env
+source /home/cryptotools/.cryptotools.env
 API="http://127.0.0.1:8082/api/v1"
 TOKEN=$(curl -sk -u "$FREQUI_USERNAME:$FREQUI_PASSWORD" -X POST "$API/token/login" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
 AUTH="Authorization: Bearer $TOKEN"

@@ -38,7 +38,7 @@ const BOTS = {
   },
 };
 
-const MAX_TRADES_LIMIT = 20;
+const MAX_TRADES_LIMIT = 50;
 const STAKE_MIN = 1;
 const STAKE_MAX = 100;
 const STRATEGY_SL_MIN = 1;
@@ -57,12 +57,20 @@ let bybitGridMaxBots = 1;
 let bybitGridInvest = "10";
 const SESSION_DAYS = 7;
 const SESSION_USER_KEY = "ct_user";
-const SESSION_PASS_KEY = "ct_pass";
+const SESSION_TOKEN_KEY = "ct_token";
 const SESSION_UNTIL_KEY = "ct_session_until";
+const SESSION_ROLE_KEY = "ct_role";
+const SESSION_PASS_KEY = "ct_pass"; // legacy — cleared on login
 
 let strategyCatalog = [];
 let enabledStrategies = {};
 let invertedStrategies = {};
+let trainedRiskStrategies = {};
+let trainedRiskAvailable = {};
+let trainedRiskSpecs = {};
+let mlConfidenceStrategies = {};
+let mlConfidenceDefaults = {};
+let mlConfidenceChoices = [0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95];
 let strategyRisk = { stoploss_pct: 5, take_profit_pct: 10 };
 let dualHedgeEnabled = false;
 
@@ -72,6 +80,8 @@ const WHITELIST_REFRESH_MS = 60000;
 const whitelistCache = {};
 let tokens = { finder: null, strategy: null, grid: null };
 let creds = { user: "", pass: "" };
+let sessionToken = "";
+let currentUser = null; // { id, username, role, ... }
 let bybitGridHistoryOpen = false;
 
 const $ = (id) => document.getElementById(id);
@@ -137,9 +147,7 @@ function isStaleTradeError(message) {
     msg.includes("position is zero") ||
     msg.includes("110017") ||
     msg.includes("Failed to exit") ||
-    msg.includes("InvalidOrderException") ||
-    msg === "Internal Server Error" ||
-    /Error querying \/api\/v1\/forceexit:/i.test(msg)
+    /Error querying \/api\/v1\/forceexit:.*(position is zero|110017|Failed to exit)/i.test(msg)
   );
 }
 
@@ -186,29 +194,44 @@ function showReloadWarning(data) {
   }
 }
 
-function authHeader(bot) {
-  return tokens[bot] ? { Authorization: `Bearer ${tokens[bot]}` } : {};
+function authHeader(_bot) {
+  if (sessionToken) return { Authorization: `Bearer ${sessionToken}` };
+  return {};
 }
 
-function basicHeader() {
-  return { Authorization: `Basic ${btoa(`${creds.user}:${creds.pass}`)}` };
+function sessionHeader() {
+  if (sessionToken) return { Authorization: `Bearer ${sessionToken}` };
+  if (creds.user && creds.pass) {
+    return { Authorization: `Basic ${btoa(`${creds.user}:${creds.pass}`)}` };
+  }
+  return {};
+}
+
+function isAdminUser() {
+  return (currentUser?.role || localStorage.getItem(SESSION_ROLE_KEY) || "") === "admin";
 }
 
 function saveSession() {
   const until = Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000;
-  localStorage.setItem(SESSION_USER_KEY, creds.user);
-  localStorage.setItem(SESSION_PASS_KEY, creds.pass);
+  localStorage.setItem(SESSION_USER_KEY, creds.user || currentUser?.username || "");
+  localStorage.setItem(SESSION_TOKEN_KEY, sessionToken || "");
   localStorage.setItem(SESSION_UNTIL_KEY, String(until));
+  if (currentUser?.role) localStorage.setItem(SESSION_ROLE_KEY, currentUser.role);
+  localStorage.removeItem(SESSION_PASS_KEY);
   sessionStorage.removeItem("ct_user");
   sessionStorage.removeItem("ct_pass");
 }
 
 function clearSession() {
   localStorage.removeItem(SESSION_USER_KEY);
-  localStorage.removeItem(SESSION_PASS_KEY);
+  localStorage.removeItem(SESSION_TOKEN_KEY);
   localStorage.removeItem(SESSION_UNTIL_KEY);
+  localStorage.removeItem(SESSION_ROLE_KEY);
+  localStorage.removeItem(SESSION_PASS_KEY);
   sessionStorage.removeItem("ct_user");
   sessionStorage.removeItem("ct_pass");
+  sessionToken = "";
+  currentUser = null;
 }
 
 function loadStoredSession() {
@@ -218,32 +241,38 @@ function loadStoredSession() {
     return null;
   }
   const user = localStorage.getItem(SESSION_USER_KEY);
-  const pass = localStorage.getItem(SESSION_PASS_KEY);
-  if (!user || !pass) return null;
-  return { user, pass, until };
+  const token = localStorage.getItem(SESSION_TOKEN_KEY);
+  if (user && token) {
+    return { user, token, until, role: localStorage.getItem(SESSION_ROLE_KEY) || "" };
+  }
+  // Legacy password session → force re-login
+  clearSession();
+  return null;
 }
 
 function applyStoredCreds(session) {
   creds.user = session.user;
-  creds.pass = session.pass;
-  $("login-user").value = session.user;
+  creds.pass = "";
+  sessionToken = session.token || "";
+  if ($("login-user")) $("login-user").value = session.user;
 }
 
 async function reloginFromStorage() {
   const session = loadStoredSession();
-  if (!session) throw new Error("auth");
+  if (!session?.token) throw new Error("auth");
   applyStoredCreds(session);
   tokens = { finder: null, strategy: null, grid: null };
-  await loginAll();
+  await refreshAuthMe();
 }
 
 async function api(bot, path, method = "GET", body = null, retried = false) {
   const opts = {
     method,
-    headers: { "Content-Type": "application/json", ...authHeader(bot) },
+    headers: { "Content-Type": "application/json", ...sessionHeader() },
   };
   if (body) opts.body = JSON.stringify(body);
-  const res = await fetch(`${BOTS[bot].prefix}${path}`, opts);
+  const proxyPath = path.startsWith("/") ? path.slice(1) : path;
+  const res = await fetch(`/api/pair-config/bot-proxy/${bot}/${proxyPath}`, opts);
   if (res.status === 401 && !retried && loadStoredSession()) {
     await reloginFromStorage();
     return api(bot, path, method, body, true);
@@ -260,7 +289,7 @@ async function api(bot, path, method = "GET", body = null, retried = false) {
 }
 
 async function pairConfigApi(path, method = "GET", body = null, retried = false) {
-  const opts = { method, headers: { ...basicHeader() } };
+  const opts = { method, headers: { ...sessionHeader() } };
   if (body) {
     opts.headers["Content-Type"] = "application/json";
     opts.body = JSON.stringify(body);
@@ -278,47 +307,77 @@ async function pairConfigApi(path, method = "GET", body = null, retried = false)
   return res.json();
 }
 
-async function loginBot(bot) {
-  const res = await fetch(`${BOTS[bot].prefix}/token/login`, {
-    method: "POST",
-    headers: basicHeader(),
-  });
-  if (!res.ok) {
-    const err = new Error(`${bot}_login_failed`);
-    err.bot = bot;
-    err.status = res.status;
-    throw err;
+async function refreshAuthMe() {
+  const me = await pairConfigApi("/auth/me");
+  currentUser = me.user || me;
+  if (me.token) sessionToken = me.token;
+  updateMultiUserUi(me);
+  return me;
+}
+
+function updateMultiUserUi(me) {
+  const role = me?.user?.role || me?.role || currentUser?.role || "";
+  const secrets = me?.secrets || {};
+  const banner = $("secrets-banner");
+  if (banner) {
+    const need = role !== "admin" && !secrets.has_secrets;
+    banner.classList.toggle("hidden", !need);
   }
-  const data = await res.json();
-  tokens[bot] = data.access_token;
+  document.querySelectorAll("[data-admin-only]").forEach((el) => {
+    el.classList.toggle("hidden", role !== "admin");
+  });
+  document.querySelectorAll("[data-user-secrets]").forEach((el) => {
+    el.classList.toggle("hidden", role === "admin");
+  });
+  const statusEl = $("secrets-status");
+  if (statusEl) {
+    statusEl.textContent = secrets.has_secrets
+      ? "Ключи Bybit заданы"
+      : role === "admin"
+        ? "Ключи админа из серверного .env"
+        : "Ключи Bybit не заданы — боты не запустятся";
+  }
+}
+
+async function loginBot(_bot) {
+  /* Bot APIs go through pair-config proxy with session token — no per-bot JWT. */
 }
 
 async function loginAll() {
-  const errors = [];
-  for (const bot of Object.keys(BOTS)) {
-    try {
-      await loginBot(bot);
-    } catch (e) {
-      errors.push(e);
-    }
+  // Resume from stored session token
+  if (sessionToken && !creds.pass) {
+    tokens = { finder: "proxy", strategy: "proxy", grid: "proxy" };
+    await refreshAuthMe();
+    saveSession();
+    return;
   }
-  if (errors.length === Object.keys(BOTS).length) {
-    const allAuth = errors.every((e) => e.status === 401);
-    if (allAuth) throw new Error("auth");
-    const first = errors[0];
-    const label = BOTS[first.bot]?.label || first.bot;
-    if (first.status === 502 || first.status === 503) {
-      throw new Error(`${label}: бот перезапускается — подождите 10–20 сек и обновите страницу`);
-    }
-    throw new Error(`${label}: не удалось подключиться (API недоступен)`);
+
+  const username = creds.user || $("login-user")?.value.trim() || "";
+  const password = creds.pass || $("login-pass")?.value || "";
+  if (!username || !password) throw new Error("auth");
+
+  const res = await fetch("/api/pair-config/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }),
+  });
+  if (!res.ok) {
+    if (res.status === 401) throw new Error("auth");
+    const t = await res.text();
+    throw new Error(t || "login_failed");
   }
-  if (errors.length >= 1) {
-    const e = errors[0];
-    const label = BOTS[e.bot]?.label || e.bot;
-    if (e.status === 401) throw new Error("auth");
-    console.warn(`Бот «${label}» недоступен при входе`);
-  }
+  const data = await res.json();
+  sessionToken = data.token || "";
+  currentUser = data.user || { username, role: data.role };
+  creds.user = currentUser.username || username;
+  creds.pass = "";
+  tokens = { finder: "proxy", strategy: "proxy", grid: "proxy" };
   saveSession();
+  try {
+    await refreshAuthMe();
+  } catch {
+    updateMultiUserUi({ user: currentUser, secrets: {} });
+  }
 }
 
 function logout() {
@@ -443,6 +502,13 @@ function tradeMlConfidence(trade) {
   return Number.isFinite(n) ? n : null;
 }
 
+function tradeMlMinConfidence(trade) {
+  const m = tradeMlMeta(trade);
+  if (!m || m.ml_min_confidence == null) return null;
+  const n = Number(m.ml_min_confidence);
+  return Number.isFinite(n) ? n : null;
+}
+
 function fmtMlConfidence(trade) {
   const conf = tradeMlConfidence(trade);
   if (conf == null) return "—";
@@ -451,26 +517,23 @@ function fmtMlConfidence(trade) {
 
 function fmtMlConfidenceDetail(trade) {
   const m = tradeMlMeta(trade);
-  if (!m) return "—";
+  if (!m) return "нет данных";
   const main = fmtMlConfidence(trade);
-  if (main === "—") return "—";
-  const pred = m.ml_predicted ? ` · ${m.ml_predicted}` : "";
-  const gate = m.ml_gate_confidence != null && m.ml_confidence != null
-    ? ` · gate ${(Number(m.ml_gate_confidence) * 100).toFixed(0)}%`
-    : "";
-  return `${main}${pred}${gate}`;
+  if (main === "—") return "нет данных";
+  const pred = m.ml_predicted ? String(m.ml_predicted) : "";
+  const minC = tradeMlMinConfidence(trade);
+  const parts = [`факт. ${main}`];
+  if (pred) parts.push(pred);
+  if (minC != null) parts.push(`порог ${(minC * 100).toFixed(0)}%`);
+  return parts.join(" · ");
 }
 
 function tradeMlSummaryLabel(trade) {
-  const m = tradeMlMeta(trade);
-  if (!m) return "";
-  const parts = [];
-  const main = tradeMlConfidence(trade);
-  if (main != null) parts.push(`ML ${fmtMlConfidence(trade)}`);
-  if (m.ml_gate_confidence != null && m.ml_confidence != null) {
-    parts.push(`gate ${(Number(m.ml_gate_confidence) * 100).toFixed(0)}%`);
-  }
-  return parts.length ? ` · ${parts.join(" · ")}` : "";
+  const conf = tradeMlConfidence(trade);
+  if (conf == null) return "";
+  const minC = tradeMlMinConfidence(trade);
+  const minNote = minC != null ? `≥${(minC * 100).toFixed(0)}%` : "";
+  return minNote ? ` · ML ${(conf * 100).toFixed(0)}% (${minNote})` : ` · ML ${(conf * 100).toFixed(0)}%`;
 }
 
 function invalidateWhitelistCache(bot = null) {
@@ -502,29 +565,29 @@ async function enrichTradesWithMl(bot, trades) {
 
 function renderTradeMlBadge(trade) {
   const conf = tradeMlConfidence(trade);
-  if (conf == null) return "";
   const m = tradeMlMeta(trade);
-  const pred = m?.ml_predicted ? ` ${m.ml_predicted}` : "";
-  const gate =
-    m?.ml_gate_confidence != null && m?.ml_confidence != null
-      ? ` · gate ${(Number(m.ml_gate_confidence) * 100).toFixed(0)}%`
-      : "";
-  return `<span class="trade-ml-badge" title="ML уверенность при входе${pred}${gate}">ML ${fmtMlConfidence(trade)}${gate}</span>`;
+  const pred = m?.ml_predicted ? ` · ${m.ml_predicted}` : "";
+  const minC = tradeMlMinConfidence(trade);
+  const minNote = minC != null ? ` · порог ${(minC * 100).toFixed(0)}%` : "";
+  if (conf == null) {
+    return `<span class="trade-ml-badge is-missing" title="Фактическая уверенность ML при входе недоступна">ML —</span>`;
+  }
+  return `<span class="trade-ml-badge" title="Фактическая уверенность ML при входе${pred}${minNote}">ML ${(conf * 100).toFixed(0)}%</span>`;
 }
 
 const STATS_SCOPE_META = {
   all: {
     title: "Статистика — все боты",
-    note: "Закрытые сделки по всем ботам, включая Bybit Grid.",
+    note: "Все закрытые сделки по всем ботам (включая выключенные стратегии и остановленные боты) и Bybit Grid.",
   },
-  finder: { title: "Статистика — ML Finder", note: "Сделки TradeFinderStrategy (XGBoost scanner + pnl gate)." },
+  finder: { title: "Статистика — ML Finder", note: "Сделки TradeFinderStrategy (XGBoost scanner + pnl gate), даже если Finder сейчас выключен." },
   strategy: {
     title: "Статистика — стратегии + ML gate",
-    note: "Закрытые сделки по включённым стратегиям (TripleEMA, BB+RSI, ADX). Входы с ML gate.",
+    note: "Все закрытые сделки стратегий по enter_tag — включая сейчас выключенные. Входы с ML gate.",
   },
   grid: {
     title: "Статистика — Grid + ML gate",
-    note: "Закрытые сделки Freqtrade Grid (VolatilityGridStrategy, ML gate live_grid).",
+    note: "Закрытые сделки Grid (VolatilityGridStrategy, ML gate live_grid), даже если бот остановлен.",
   },
   bybitgrid: { title: "Статистика — Bybit Grid", note: "Закрытые нативные grid-боты на бирже Bybit." },
 };
@@ -557,6 +620,40 @@ let historyDateTo = "";
 let historyStrategyFilter = "all";
 let historyPairFilter = "";
 let historyDataCache = null;
+let historyPage = 1;
+const HISTORY_PAGE_SIZE = 50;
+/** 0 = all closed trades (server hard-cap). */
+const CLOSED_TRADES_FETCH_LIMIT = 0;
+
+let pnlDashScope = "all";
+let pnlDashPeriod = "all";
+let pnlDashDataCache = null;
+
+const PNL_DASH_COLORS = [
+  "#22c55e",
+  "#3b82f6",
+  "#f59e0b",
+  "#8b5cf6",
+  "#ec4899",
+  "#14b8a6",
+  "#f97316",
+  "#6366f1",
+  "#84cc16",
+  "#d946ef",
+  "#0ea5e9",
+  "#eab308",
+  "#a855f7",
+  "#ef4444",
+  "#06b6d4",
+  "#65a30d",
+  "#ea580c",
+  "#2563eb",
+  "#c026d3",
+  "#db2777",
+];
+const PNL_DASH_OTHER_COLOR = "#64748b";
+const PNL_DASH_MAX_SLICES = 25;
+const PNL_DASH_MIN_PCT = 0.5;
 
 const HISTORY_EXPORT_COLUMNS = [
   { id: "close_date", label: "Дата закрытия", default: true },
@@ -582,7 +679,7 @@ function tradeCloseMs(trade) {
   if (trade.close_timestamp != null && trade.close_timestamp !== "") {
     const ts = Number(trade.close_timestamp);
     if (!Number.isNaN(ts) && ts > 0) {
-      // Freqtrade API: milliseconds; older payloads may use seconds
+      // Bot API timestamps: milliseconds; older payloads may use seconds
       return ts < 1e12 ? ts * 1000 : ts;
     }
   }
@@ -623,6 +720,20 @@ function tradeSourceId(trade, bot) {
   return "__unknown__";
 }
 
+const STATS_PERIODS = new Set(["today", "yesterday", "7d", "30d", "all"]);
+
+const STATS_PERIOD_LABELS = {
+  today: "за сегодня",
+  yesterday: "за вчера",
+  "7d": "за неделю",
+  "30d": "за месяц",
+  all: "за всё время",
+};
+
+function normalizeStatsPeriod(period) {
+  return STATS_PERIODS.has(period) ? period : "all";
+}
+
 function periodBounds(period, dateFrom, dateTo) {
   if (dateFrom || dateTo) {
     const fromMs = dateFrom ? new Date(`${dateFrom}T00:00:00`).getTime() : 0;
@@ -635,6 +746,11 @@ function periodBounds(period, dateFrom, dateTo) {
   switch (period) {
     case "today":
       return { fromMs: startOfToday, toMs: endOfToday };
+    case "yesterday":
+      return {
+        fromMs: startOfToday - 86400000,
+        toMs: startOfToday - 1,
+      };
     case "7d":
       return { fromMs: now.getTime() - 7 * 86400000, toMs: Infinity };
     case "30d":
@@ -678,12 +794,15 @@ function filterBybitHistory(items, period, dateFrom = "", dateTo = "") {
 
 function addBybitGridToRow(row, item) {
   const p = Number(item.realised_pnl ?? item.pnl ?? 0);
+  row.closed = (row.closed || 0) + 1;
   if (p > 0) {
     row.wins += 1;
     row.profit += p;
   } else if (p < 0) {
     row.losses += 1;
     row.loss += Math.abs(p);
+  } else {
+    row.flat = (row.flat || 0) + 1;
   }
 }
 
@@ -706,35 +825,49 @@ function filterStatsRows(rows, scope) {
 function buildStatsRows(finderTrades, stratTrades, gridTrades, bybitHistory, catalog) {
   const rows = new Map();
 
-  const ensure = (name) => {
-    if (!rows.has(name)) {
-      rows.set(name, { name, wins: 0, losses: 0, profit: 0, loss: 0 });
+  const ensure = (key, displayName) => {
+    if (!rows.has(key)) {
+      rows.set(key, {
+        key,
+        name: displayName,
+        wins: 0,
+        losses: 0,
+        flat: 0,
+        closed: 0,
+        profit: 0,
+        loss: 0,
+      });
+    } else if (displayName) {
+      rows.get(key).name = displayName;
     }
-    return rows.get(name);
+    return rows.get(key);
   };
 
-  ensure(FINDER_STATS_LABEL);
-  ensure(GRID_STATS_LABEL);
-  ensure(BYBIT_GRID_STATS_LABEL);
-  for (const s of catalog) ensure(s.name);
+  ensure(FINDER_STATS_LABEL, FINDER_STATS_LABEL);
+  ensure(GRID_STATS_LABEL, GRID_STATS_LABEL);
+  ensure(BYBIT_GRID_STATS_LABEL, BYBIT_GRID_STATS_LABEL);
+  // Keep every catalog strategy row (incl. disabled) so add/remove toggles never drop history labels.
+  for (const s of catalog) ensure(s.id, strategyCatalogLabel(s));
 
-  for (const t of finderTrades) addClosedTradeToRow(ensure(FINDER_STATS_LABEL), t);
-  for (const t of gridTrades) addClosedTradeToRow(ensure(GRID_STATS_LABEL), t);
+  for (const t of finderTrades) addClosedTradeToRow(ensure(FINDER_STATS_LABEL, FINDER_STATS_LABEL), t);
+  for (const t of gridTrades) addClosedTradeToRow(ensure(GRID_STATS_LABEL, GRID_STATS_LABEL), t);
   for (const t of stratTrades) {
-    const name = tradeSourceLabel(t, "strategy");
-    addClosedTradeToRow(ensure(name), t);
+    const key = tradeStatsRowKey(t, "strategy");
+    addClosedTradeToRow(ensure(key, tradeSourceLabel(t, "strategy")), t);
   }
-  for (const item of bybitHistory) addBybitGridToRow(ensure(BYBIT_GRID_STATS_LABEL), item);
+  for (const item of bybitHistory) {
+    addBybitGridToRow(ensure(BYBIT_GRID_STATS_LABEL, BYBIT_GRID_STATS_LABEL), item);
+  }
 
   const ordered = [
     FINDER_STATS_LABEL,
     GRID_STATS_LABEL,
     BYBIT_GRID_STATS_LABEL,
-    ...catalog.map((s) => s.name),
+    ...catalog.map((s) => s.id),
   ];
   const result = [];
-  for (const name of ordered) {
-    if (rows.has(name)) result.push(rows.get(name));
+  for (const key of ordered) {
+    if (rows.has(key)) result.push(rows.get(key));
   }
   for (const row of rows.values()) {
     if (!result.includes(row)) result.push(row);
@@ -926,23 +1059,107 @@ function downloadHistoryCsv(entries) {
   URL.revokeObjectURL(url);
 }
 
+function historyCardHtml(entry) {
+  if (entry.kind === "bybit") {
+    const item = entry.item;
+    const pnl = Number(item.realised_pnl ?? item.pnl ?? 0);
+    const pair = escapeHtml(item.pair || item.symbol || "—");
+    return `<article class="history-card ${pnlClass(pnl)}">
+      <div class="history-card-top">
+        <div class="history-card-main">
+          <strong class="history-card-pair">${pair}</strong>
+          <span class="history-card-meta">${fmtBybitHistoryDate(item)} · ${BYBIT_GRID_STATS_LABEL}</span>
+        </div>
+        <div class="history-card-pnl ${pnlClass(pnl)}">${fmtUsdSigned(pnl, 2)}</div>
+      </div>
+      <div class="history-card-tags">
+        <span class="history-chip">${escapeHtml(item.grid_mode_label || "grid")}</span>
+        <span class="history-chip">Bybit</span>
+        <span class="history-chip muted-chip">${escapeHtml(bybitExitLabel(item))}</span>
+      </div>
+    </article>`;
+  }
+  const t = entry.trade;
+  const { abs, pct } = closedTradePnl(t);
+  const side = t.is_short ? "SHORT" : "LONG";
+  const source = tradeSourceLabel(t, entry.bot);
+  const mlConf = fmtMlConfidence(t);
+  const mlChip =
+    mlConf && mlConf !== "—"
+      ? `<span class="history-chip history-chip-ml" title="${escapeHtml(fmtMlConfidenceDetail(t))}">ML ${escapeHtml(mlConf)}</span>`
+      : `<span class="history-chip history-chip-ml is-missing" title="Фактическая уверенность ML недоступна">ML —</span>`;
+  return `<article class="history-card ${pnlClass(abs)}">
+    <div class="history-card-top">
+      <div class="history-card-main">
+        <strong class="history-card-pair">${escapeHtml(t.pair || "—")}</strong>
+        <span class="history-card-meta">${fmtTradeDate(t)} · ${historyBotLabel(entry)}</span>
+      </div>
+      <div class="history-card-pnl ${pnlClass(abs)}">
+        <span>${fmtUsdSigned(abs, 2)}</span>
+        <span class="history-card-pct muted">${fmtPct(pct)}</span>
+      </div>
+    </div>
+    <div class="history-card-tags">
+      <span class="history-chip side-${t.is_short ? "short" : "long"}">${side}</span>
+      <span class="history-chip">${escapeHtml(source)}</span>
+      ${mlChip}
+      <span class="history-chip muted-chip">${escapeHtml(exitReasonLabel(t.exit_reason))}</span>
+    </div>
+  </article>`;
+}
+
+function renderHistoryPagination(total) {
+  const el = $("history-pagination");
+  const info = $("history-page-info");
+  const prev = $("history-page-prev");
+  const next = $("history-page-next");
+  if (!el || !info) return;
+
+  const pages = Math.max(1, Math.ceil(total / HISTORY_PAGE_SIZE));
+  if (historyPage > pages) historyPage = pages;
+  if (historyPage < 1) historyPage = 1;
+
+  const show = total > HISTORY_PAGE_SIZE;
+  el.classList.toggle("hidden", !show);
+  el.hidden = !show;
+  if (!show) return;
+
+  const from = total ? (historyPage - 1) * HISTORY_PAGE_SIZE + 1 : 0;
+  const to = Math.min(historyPage * HISTORY_PAGE_SIZE, total);
+  info.textContent = `${from}–${to} из ${total} · стр. ${historyPage}/${pages}`;
+  if (prev) prev.disabled = historyPage <= 1;
+  if (next) next.disabled = historyPage >= pages;
+}
+
+function historyPageSlice(entries) {
+  const start = (historyPage - 1) * HISTORY_PAGE_SIZE;
+  return entries.slice(start, start + HISTORY_PAGE_SIZE);
+}
+
+function setHistoryPage(page) {
+  historyPage = Math.max(1, Number(page) || 1);
+  renderHistoryView();
+  $("history-table-wrap")?.scrollTo?.({ top: 0 });
+  $("history-view")?.querySelector(".history-table-wrap")?.scrollTo?.({ top: 0 });
+}
+
 function renderHistoryTable(entries) {
   const bodyEl = $("history-table-body");
-  if (!bodyEl) return;
+  const cardsEl = $("history-cards");
+  const pageEntries = historyPageSlice(entries);
 
-  if (!entries.length) {
-    bodyEl.innerHTML =
-      '<tr class="stats-history-empty"><td colspan="8">Нет закрытых сделок по выбранным фильтрам</td></tr>';
-    return;
-  }
-
-  bodyEl.innerHTML = entries
-    .map((entry) => {
-      if (entry.kind === "bybit") {
-        const item = entry.item;
-        const pnl = Number(item.realised_pnl ?? item.pnl ?? 0);
-        const pnlClassName = pnlClass(pnl);
-        return `<tr>
+  if (bodyEl) {
+    if (!entries.length) {
+      bodyEl.innerHTML =
+        '<tr class="stats-history-empty"><td colspan="8">Нет закрытых сделок по выбранным фильтрам</td></tr>';
+    } else {
+      bodyEl.innerHTML = pageEntries
+        .map((entry) => {
+          if (entry.kind === "bybit") {
+            const item = entry.item;
+            const pnl = Number(item.realised_pnl ?? item.pnl ?? 0);
+            const pnlClassName = pnlClass(pnl);
+            return `<tr>
           <td>${fmtBybitHistoryDate(item)}</td>
           <td>${BYBIT_GRID_STATS_LABEL}</td>
           <td>${escapeHtml(item.pair || item.symbol || "—")}</td>
@@ -952,26 +1169,40 @@ function renderHistoryTable(entries) {
           <td class="${pnlClassName}">${fmtUsdSigned(pnl, 2)}</td>
           <td>${escapeHtml(bybitExitLabel(item))}</td>
         </tr>`;
-      }
-      const t = entry.trade;
-      const { abs, pct } = closedTradePnl(t);
-      const botLabel = historyBotLabel(entry);
-      const side = t.is_short ? "SHORT" : "LONG";
-      const source = tradeSourceLabel(t, entry.bot);
-      const pnlClassName = pnlClass(abs);
-      const mlConf = fmtMlConfidence(t);
-      return `<tr>
+          }
+          const t = entry.trade;
+          const { abs, pct } = closedTradePnl(t);
+          const botLabel = historyBotLabel(entry);
+          const side = t.is_short ? "SHORT" : "LONG";
+          const source = tradeSourceLabel(t, entry.bot);
+          const pnlClassName = pnlClass(abs);
+          const mlConf = fmtMlConfidence(t);
+          const mlTitle = escapeHtml(fmtMlConfidenceDetail(t));
+          return `<tr>
         <td>${fmtTradeDate(t)}</td>
         <td>${botLabel}</td>
-        <td>${t.pair}</td>
+        <td>${escapeHtml(t.pair || "—")}</td>
         <td>${side}</td>
-        <td>${source}</td>
-        <td>${mlConf}</td>
+        <td>${escapeHtml(source)}</td>
+        <td title="${mlTitle}">${escapeHtml(mlConf)}</td>
         <td class="${pnlClassName}">${fmtUsdSigned(abs, 2)}<br><span class="muted" style="font-size:0.75rem">${fmtPct(pct)}</span></td>
-        <td>${exitReasonLabel(t.exit_reason)}</td>
+        <td>${escapeHtml(exitReasonLabel(t.exit_reason))}</td>
       </tr>`;
-    })
-    .join("");
+        })
+        .join("");
+    }
+  }
+
+  if (cardsEl) {
+    if (!entries.length) {
+      cardsEl.innerHTML =
+        '<p class="history-cards-empty muted">Нет закрытых сделок по выбранным фильтрам</p>';
+    } else {
+      cardsEl.innerHTML = pageEntries.map(historyCardHtml).join("");
+    }
+  }
+
+  renderHistoryPagination(entries.length);
 }
 
 function collectUniquePairs(data) {
@@ -993,7 +1224,10 @@ function updateHistoryStrategyFilterOptions(catalog) {
   sel.innerHTML =
     '<option value="all">Все стратегии</option>' +
     (catalog || strategyCatalog)
-      .map((s) => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.name)}</option>`)
+      .map(
+        (s) =>
+          `<option value="${escapeHtml(s.id)}">${escapeHtml(strategyCatalogLabel(s))}</option>`
+      )
       .join("");
   sel.value = [...sel.options].some((o) => o.value === prev) ? prev : "all";
   historyStrategyFilter = sel.value;
@@ -1078,6 +1312,8 @@ function renderHistoryView() {
   if (!historyDataCache) return;
   updateHistoryFilterUi();
   const entries = getFilteredHistoryEntries(historyDataCache);
+  const maxPage = Math.max(1, Math.ceil(entries.length / HISTORY_PAGE_SIZE) || 1);
+  if (historyPage > maxPage) historyPage = maxPage;
   renderHistoryTable(entries);
   const statusEl = $("history-status");
   if (statusEl) {
@@ -1085,7 +1321,10 @@ function renderHistoryView() {
       historyDataCache.loadErrors?.length > 0
         ? ` · ${historyDataCache.loadErrors.join(" · ")}`
         : "";
-    statusEl.textContent = `Показано ${entries.length} сделок${warn}`;
+    const pages = Math.max(1, Math.ceil(entries.length / HISTORY_PAGE_SIZE) || 1);
+    const pageNote =
+      entries.length > HISTORY_PAGE_SIZE ? ` · стр. ${historyPage}/${pages}` : "";
+    statusEl.textContent = `Всего ${entries.length} сделок${pageNote}${warn}`;
   }
 }
 
@@ -1094,8 +1333,11 @@ async function loadHistory() {
   if (statusEl) statusEl.textContent = "Загрузка…";
   const bodyEl = $("history-table-body");
   if (bodyEl) bodyEl.innerHTML = "";
+  const cardsEl = $("history-cards");
+  if (cardsEl) cardsEl.innerHTML = "";
   try {
-    historyDataCache = await fetchStatsData(1000);
+    historyPage = 1;
+    historyDataCache = await fetchStatsData(CLOSED_TRADES_FETCH_LIMIT);
     updateHistoryStrategyFilterOptions(historyDataCache.catalog);
     updateHistoryPairSuggestions(collectUniquePairs(historyDataCache));
     renderHistoryView();
@@ -1109,6 +1351,8 @@ function openHistory() {
   closeMobileMenu();
   $("changelog-view")?.classList.add("hidden");
   $("logs-view")?.classList.add("hidden");
+  $("settings-view")?.classList.add("hidden");
+  $("pnl-dashboard-view")?.classList.add("hidden");
   $("dashboard-view")?.classList.add("hidden");
   const view = $("history-view");
   view?.classList.remove("hidden");
@@ -1128,6 +1372,7 @@ function setHistoryScope(scope) {
   if (historyScope !== "all" && historyScope !== "strategy") {
     historyStrategyFilter = "all";
   }
+  historyPage = 1;
   renderHistoryView();
 }
 
@@ -1135,6 +1380,7 @@ function setHistoryPeriod(period) {
   historyPeriod = period || "all";
   historyDateFrom = "";
   historyDateTo = "";
+  historyPage = 1;
   renderHistoryView();
 }
 
@@ -1146,6 +1392,7 @@ function applyHistoryDateRange() {
       btn.classList.remove("is-active");
     });
   }
+  historyPage = 1;
   renderHistoryView();
 }
 
@@ -1162,10 +1409,12 @@ function bindHistoryControls() {
   });
   $("history-strategy-filter")?.addEventListener("change", (e) => {
     historyStrategyFilter = e.target.value || "all";
+    historyPage = 1;
     renderHistoryView();
   });
   $("history-pair-filter")?.addEventListener("input", (e) => {
     historyPairFilter = e.target.value.trim();
+    historyPage = 1;
     renderHistoryView();
   });
   $("history-date-from")?.addEventListener("change", applyHistoryDateRange);
@@ -1176,16 +1425,369 @@ function bindHistoryControls() {
   });
   $("history-refresh-btn")?.addEventListener("click", loadHistory);
   $("history-back-btn")?.addEventListener("click", closeHistory);
+  $("history-page-prev")?.addEventListener("click", () => setHistoryPage(historyPage - 1));
+  $("history-page-next")?.addEventListener("click", () => setHistoryPage(historyPage + 1));
+}
+
+function colorForStrategyName(name, colorMap) {
+  if (colorMap.has(name)) return colorMap.get(name);
+  const color = PNL_DASH_COLORS[colorMap.size % PNL_DASH_COLORS.length];
+  colorMap.set(name, color);
+  return color;
+}
+
+function fmtUsdCompact(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "—";
+  const abs = Math.abs(n);
+  if (abs >= 10000) return `${(n / 1000).toFixed(1)}k`;
+  if (abs >= 1000) return `${(n / 1000).toFixed(2)}k`;
+  if (abs >= 100) return n.toFixed(0);
+  if (abs >= 10) return n.toFixed(1);
+  return n.toFixed(2);
+}
+
+function pnlPolar(cx, cy, r, angleDeg) {
+  const rad = ((angleDeg - 90) * Math.PI) / 180;
+  return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
+}
+
+function pnlDonutSlicePath(cx, cy, rOuter, rInner, startAngle, endAngle) {
+  const sweep = Math.min(Math.max(endAngle - startAngle, 0), 359.999);
+  if (sweep <= 0.001) return "";
+  const end = startAngle + sweep;
+  const large = sweep > 180 ? 1 : 0;
+  const o1 = pnlPolar(cx, cy, rOuter, startAngle);
+  const o2 = pnlPolar(cx, cy, rOuter, end);
+  const i2 = pnlPolar(cx, cy, rInner, end);
+  const i1 = pnlPolar(cx, cy, rInner, startAngle);
+  return [
+    `M ${o1.x.toFixed(2)} ${o1.y.toFixed(2)}`,
+    `A ${rOuter} ${rOuter} 0 ${large} 1 ${o2.x.toFixed(2)} ${o2.y.toFixed(2)}`,
+    `L ${i2.x.toFixed(2)} ${i2.y.toFixed(2)}`,
+    `A ${rInner} ${rInner} 0 ${large} 0 ${i1.x.toFixed(2)} ${i1.y.toFixed(2)}`,
+    "Z",
+  ].join(" ");
+}
+
+function buildPnlSlices(rows, field, colorMap) {
+  const raw = rows
+    .filter((r) => Number(r[field]) > 0)
+    .map((r) => ({ name: r.name, value: Number(r[field]) }))
+    .sort((a, b) => b.value - a.value);
+  const total = raw.reduce((s, x) => s + x.value, 0);
+  if (!total) return { total: 0, slices: [] };
+
+  const kept = [];
+  let otherValue = 0;
+  raw.forEach((item, idx) => {
+    const pct = (item.value / total) * 100;
+    if (idx < PNL_DASH_MAX_SLICES && pct >= PNL_DASH_MIN_PCT) {
+      kept.push(item);
+    } else {
+      otherValue += item.value;
+    }
+  });
+  if (otherValue > 0) {
+    kept.push({ name: "Прочее", value: otherValue, isOther: true });
+  }
+
+  const slices = kept.map((item) => ({
+    name: item.name,
+    value: item.value,
+    pct: (item.value / total) * 100,
+    color: item.isOther ? PNL_DASH_OTHER_COLOR : colorForStrategyName(item.name, colorMap),
+  }));
+  return { total, slices };
+}
+
+function bindPnlChartHover(root) {
+  if (!root || root.dataset.hoverBound) return;
+  root.dataset.hoverBound = "1";
+  const setActive = (idx) => {
+    root.querySelectorAll("[data-slice-idx]").forEach((el) => {
+      const on = idx != null && el.dataset.sliceIdx === String(idx);
+      el.classList.toggle("is-active", on);
+      el.classList.toggle("is-dim", idx != null && !on);
+    });
+  };
+  root.addEventListener("mouseover", (e) => {
+    const t = e.target.closest?.("[data-slice-idx]");
+    if (!t || !root.contains(t)) return;
+    setActive(t.dataset.sliceIdx);
+  });
+  root.addEventListener("mouseleave", () => setActive(null));
+  root.addEventListener("focusin", (e) => {
+    const t = e.target.closest?.("[data-slice-idx]");
+    if (t) setActive(t.dataset.sliceIdx);
+  });
+  root.addEventListener("focusout", () => setActive(null));
+}
+
+function renderDonutChart(container, slices, centerLabel, totalValue, toneClass) {
+  if (!container) return;
+  if (!slices.length) {
+    container.innerHTML = `<div class="pnl-chart-empty-wrap"><p class="pnl-chart-empty">Нет данных</p></div>`;
+    return;
+  }
+
+  const size = 220;
+  const cx = size / 2;
+  const cy = size / 2;
+  const rOuter = 78;
+  const rInner = 48;
+  const rLabel = 96;
+  const gapDeg = slices.length > 1 ? 1.4 : 0;
+  let angle = 0;
+
+  const paths = [];
+  const labels = [];
+  slices.forEach((s, idx) => {
+    const sweep = (s.pct / 100) * 360;
+    const start = angle + gapDeg / 2;
+    const end = angle + sweep - gapDeg / 2;
+    const mid = angle + sweep / 2;
+    angle += sweep;
+    if (end <= start) return;
+
+    const d = pnlDonutSlicePath(cx, cy, rOuter, rInner, start, end);
+    paths.push(
+      `<path class="pnl-donut-slice" data-slice-idx="${idx}" d="${d}" fill="${escapeHtml(s.color)}"
+        tabindex="0" role="listitem"
+        aria-label="${escapeHtml(s.name)} ${s.pct.toFixed(1)}%">
+        <title>${escapeHtml(s.name)}: ${fmtUsd(s.value)} (${s.pct.toFixed(1)}%)</title>
+      </path>`
+    );
+
+    if (s.pct >= 7) {
+      const tip = pnlPolar(cx, cy, rLabel, mid);
+      const anchor = tip.x >= cx ? "start" : "end";
+      const dx = tip.x >= cx ? 2 : -2;
+      labels.push(
+        `<text class="pnl-donut-pct-label" data-slice-idx="${idx}"
+          x="${(tip.x + dx).toFixed(1)}" y="${tip.y.toFixed(1)}"
+          text-anchor="${anchor}" dominant-baseline="middle">${s.pct.toFixed(0)}%</text>`
+      );
+    }
+  });
+
+  const tone = toneClass === "neg" ? "pnl-tone-neg" : "pnl-tone-pos";
+  const filterId = `pnl-soft-${toneClass}-${Math.abs(Math.round(totalValue * 100) % 9973)}`;
+  container.innerHTML = `<svg class="pnl-donut-svg" viewBox="0 0 ${size} ${size}" role="img" aria-label="${escapeHtml(centerLabel)}">
+    <defs>
+      <filter id="${filterId}" x="-20%" y="-20%" width="140%" height="140%">
+        <feDropShadow dx="0" dy="2" stdDeviation="2.5" flood-color="#000" flood-opacity="0.35"/>
+      </filter>
+    </defs>
+    <circle class="pnl-donut-track" cx="${cx}" cy="${cy}" r="${((rOuter + rInner) / 2).toFixed(1)}"
+      fill="none" stroke="rgba(45,58,79,0.85)" stroke-width="${(rOuter - rInner).toFixed(1)}" />
+    <g class="pnl-donut-slices" filter="url(#${filterId})" role="list">${paths.join("")}</g>
+    <circle class="pnl-donut-hole" cx="${cx}" cy="${cy}" r="${rInner - 1}" fill="#182131" />
+    <text x="${cx}" y="${cy - 10}" class="pnl-donut-center-label">${escapeHtml(centerLabel)}</text>
+    <text x="${cx}" y="${cy + 10}" class="pnl-donut-center-value ${tone}">${escapeHtml(fmtUsdCompact(totalValue))}</text>
+    <text x="${cx}" y="${cy + 26}" class="pnl-donut-center-unit">USDT</text>
+    <g class="pnl-donut-labels">${labels.join("")}</g>
+  </svg>`;
+}
+
+function renderPnlLegend(listEl, slices, toneClass) {
+  if (!listEl) return;
+  if (!slices.length) {
+    listEl.innerHTML = "";
+    return;
+  }
+  listEl.innerHTML = slices
+    .map(
+      (s, idx) => `<li class="pnl-legend-item" data-slice-idx="${idx}" tabindex="0" title="${escapeHtml(s.name)}">
+        <span class="pnl-legend-swatch" style="background:${escapeHtml(s.color)}"></span>
+        <div class="pnl-legend-main">
+          <div class="pnl-legend-row">
+            <span class="pnl-legend-name">${escapeHtml(s.name)}</span>
+            <span class="pnl-legend-meta ${toneClass}">${fmtUsd(s.value)}</span>
+            <span class="pnl-legend-pct">${s.pct.toFixed(0)}%</span>
+          </div>
+          <div class="pnl-legend-bar" aria-hidden="true">
+            <span class="pnl-legend-bar-fill ${toneClass === "neg" ? "is-neg" : "is-pos"}"
+              style="width:${Math.max(s.pct, 1.5).toFixed(1)}%; background:${escapeHtml(s.color)}"></span>
+          </div>
+        </div>
+      </li>`
+    )
+    .join("");
+}
+
+function updatePnlDashFilterUi() {
+  document.querySelectorAll(".pnl-dash-scope").forEach((btn) => {
+    btn.classList.toggle("is-active", (btn.dataset.pnlDashScope || "all") === pnlDashScope);
+  });
+  document.querySelectorAll(".pnl-dash-period").forEach((btn) => {
+    btn.classList.toggle("is-active", (btn.dataset.pnlDashPeriod || "all") === pnlDashPeriod);
+  });
+}
+
+function renderPnlDashboard(data) {
+  if (!data) return;
+  updatePnlDashFilterUi();
+
+  const catalog = data.catalog || strategyCatalog;
+  const finderFiltered = filterClosedTrades(data.finderTrades, pnlDashPeriod);
+  const stratFiltered = filterClosedTrades(data.stratTrades, pnlDashPeriod);
+  const gridFiltered = filterClosedTrades(data.gridTrades, pnlDashPeriod);
+  const bybitFiltered = filterBybitHistory(data.bybitHistory, pnlDashPeriod);
+  const rows = filterStatsRows(
+    buildStatsRows(finderFiltered, stratFiltered, gridFiltered, bybitFiltered, catalog),
+    pnlDashScope
+  );
+
+  let totalProfit = 0;
+  let totalLoss = 0;
+  let totalWins = 0;
+  let totalLosses = 0;
+  let totalClosed = 0;
+  for (const r of rows) {
+    totalProfit += r.profit;
+    totalLoss += r.loss;
+    totalWins += r.wins;
+    totalLosses += r.losses;
+    totalClosed += r.closed || r.wins + r.losses + (r.flat || 0);
+  }
+  const net = totalProfit - totalLoss;
+
+  const summaryEl = $("pnl-dashboard-summary");
+  if (summaryEl) {
+    const warnHtml =
+      data.loadErrors?.length > 0
+        ? `<p class="stats-load-warn">${data.loadErrors.map((e) => escapeHtml(e)).join(" · ")}</p>`
+        : "";
+    summaryEl.innerHTML = `
+      ${warnHtml}
+      <div class="stats-kpi">
+        <span>Доход</span>
+        <strong class="pos">${fmtUsd(totalProfit)}</strong>
+      </div>
+      <div class="stats-kpi">
+        <span>Расход</span>
+        <strong class="neg">${fmtUsd(totalLoss)}</strong>
+      </div>
+      <div class="stats-kpi">
+        <span>Итого</span>
+        <strong class="${pnlClass(net)}">${fmtUsdSigned(net)}</strong>
+      </div>
+      <div class="stats-kpi">
+        <span>Успешные / неуспешные</span>
+        <strong>${totalWins} / ${totalLosses}</strong>
+      </div>
+    `;
+  }
+
+  const colorMap = new Map();
+  const income = buildPnlSlices(rows, "profit", colorMap);
+  const expense = buildPnlSlices(rows, "loss", colorMap);
+
+  const incomeTotalEl = $("pnl-income-total");
+  if (incomeTotalEl) {
+    incomeTotalEl.textContent = income.total
+      ? `Сумма ${fmtUsd(income.total)} · доля стратегий`
+      : "Нет прибыльных сделок за период";
+  }
+  const expenseTotalEl = $("pnl-expense-total");
+  if (expenseTotalEl) {
+    expenseTotalEl.textContent = expense.total
+      ? `Сумма ${fmtUsd(expense.total)} · доля стратегий`
+      : "Нет убыточных сделок за период";
+  }
+
+  renderDonutChart($("pnl-income-chart"), income.slices, "Доход", income.total, "pos");
+  renderDonutChart($("pnl-expense-chart"), expense.slices, "Расход", expense.total, "neg");
+  renderPnlLegend($("pnl-income-legend"), income.slices, "pos");
+  renderPnlLegend($("pnl-expense-legend"), expense.slices, "neg");
+
+  document.querySelectorAll(".pnl-chart-card").forEach((card) => bindPnlChartHover(card));
+
+  const statusEl = $("pnl-dashboard-status");
+  if (statusEl) {
+    const periodLabel = STATS_PERIOD_LABELS[pnlDashPeriod] || STATS_PERIOD_LABELS.all;
+    statusEl.textContent =
+      totalClosed > 0
+        ? `Закрытых операций: ${totalClosed} · период: ${periodLabel}`
+        : `Нет закрытых операций · период: ${periodLabel}`;
+  }
+}
+
+async function loadPnlDashboard(force = false) {
+  const statusEl = $("pnl-dashboard-status");
+  if (statusEl) statusEl.textContent = "Загрузка…";
+  try {
+    if (!force && (pnlDashDataCache || statsDataCache || historyDataCache)) {
+      pnlDashDataCache = pnlDashDataCache || statsDataCache || historyDataCache;
+    } else {
+      pnlDashDataCache = await fetchStatsData(CLOSED_TRADES_FETCH_LIMIT);
+      statsDataCache = pnlDashDataCache;
+    }
+    renderPnlDashboard(pnlDashDataCache);
+  } catch (e) {
+    if (e.message === "auth") logout();
+    else if (statusEl) statusEl.textContent = formatApiError(e.message);
+  }
+}
+
+function openPnlDashboard() {
+  closeMobileMenu();
+  $("changelog-view")?.classList.add("hidden");
+  $("logs-view")?.classList.add("hidden");
+  $("settings-view")?.classList.add("hidden");
+  $("history-view")?.classList.add("hidden");
+  $("dashboard-view")?.classList.add("hidden");
+  const view = $("pnl-dashboard-view");
+  view?.classList.remove("hidden");
+  view?.setAttribute("aria-hidden", "false");
+  loadPnlDashboard(false);
+}
+
+function closePnlDashboard() {
+  $("pnl-dashboard-view")?.classList.add("hidden");
+  $("pnl-dashboard-view")?.setAttribute("aria-hidden", "true");
+  $("dashboard-view")?.classList.remove("hidden");
+}
+
+function setPnlDashScope(scope) {
+  pnlDashScope = STATS_SCOPE_META[scope] ? scope : "all";
+  if (pnlDashDataCache) renderPnlDashboard(pnlDashDataCache);
+  else loadPnlDashboard(false);
+}
+
+function setPnlDashPeriod(period) {
+  pnlDashPeriod = normalizeStatsPeriod(period);
+  if (pnlDashDataCache) renderPnlDashboard(pnlDashDataCache);
+  else loadPnlDashboard(false);
+}
+
+function bindPnlDashboardControls() {
+  document.querySelectorAll(".pnl-dash-scope").forEach((btn) => {
+    if (btn.dataset.bound) return;
+    btn.dataset.bound = "1";
+    btn.addEventListener("click", () => setPnlDashScope(btn.dataset.pnlDashScope || "all"));
+  });
+  document.querySelectorAll(".pnl-dash-period").forEach((btn) => {
+    if (btn.dataset.bound) return;
+    btn.dataset.bound = "1";
+    btn.addEventListener("click", () => setPnlDashPeriod(btn.dataset.pnlDashPeriod || "all"));
+  });
+  $("pnl-dashboard-back-btn")?.addEventListener("click", closePnlDashboard);
+  $("pnl-dashboard-refresh-btn")?.addEventListener("click", () => loadPnlDashboard(true));
 }
 
 function addClosedTradeToRow(row, trade) {
   const p = Number(trade.close_profit_abs ?? trade.profit_abs ?? 0);
+  row.closed = (row.closed || 0) + 1;
   if (p > 0) {
     row.wins += 1;
     row.profit += p;
   } else if (p < 0) {
     row.losses += 1;
     row.loss += Math.abs(p);
+  } else {
+    row.flat = (row.flat || 0) + 1;
   }
 }
 
@@ -1202,7 +1804,7 @@ function updateStatsModalChrome() {
   const noteEl = $("stats-modal-note");
   if (titleEl) titleEl.textContent = meta.title;
   if (noteEl) {
-    const periodLabel = statsPeriod === "today" ? "за сегодня" : "за всё время";
+    const periodLabel = STATS_PERIOD_LABELS[statsPeriod] || STATS_PERIOD_LABELS.all;
     noteEl.textContent = `${meta.note} Период: ${periodLabel}.`;
   }
   updateStatsPeriodUi();
@@ -1229,14 +1831,18 @@ function renderStatsModal(data) {
   let totalLoss = 0;
   let totalWins = 0;
   let totalLosses = 0;
+  let totalFlat = 0;
+  let totalClosed = 0;
   for (const r of rows) {
     totalProfit += r.profit;
     totalLoss += r.loss;
     totalWins += r.wins;
     totalLosses += r.losses;
+    totalFlat += r.flat || 0;
+    totalClosed += r.closed || r.wins + r.losses + (r.flat || 0);
   }
   const net = totalProfit - totalLoss;
-  const closedCount = totalWins + totalLosses;
+  const closedCount = totalClosed || totalWins + totalLosses;
   const warnHtml =
     data.loadErrors?.length > 0
       ? `<p class="stats-load-warn">${data.loadErrors.map((e) => escapeHtml(e)).join(" · ")}</p>`
@@ -1258,7 +1864,7 @@ function renderStatsModal(data) {
     </div>
     <div class="stats-kpi">
       <span>Успешные / неуспешные</span>
-      <strong>${totalWins} / ${totalLosses}</strong>
+      <strong>${totalWins} / ${totalLosses}${totalFlat ? ` · 0: ${totalFlat}` : ""}</strong>
     </div>
   `;
 
@@ -1273,9 +1879,9 @@ function renderStatsModal(data) {
             r.loss > 0
               ? `<span class="neg">${fmtUsd(r.loss)}${fmtShare(r.loss, totalLoss)}</span>`
               : `<span class="muted">—</span>`;
-          const hasActivity = r.wins || r.losses;
+          const hasActivity = r.closed || r.wins || r.losses || r.flat;
           return `<tr class="${hasActivity ? "" : "stats-row-idle"}">
-            <td>${r.name}</td>
+            <td>${escapeHtml(r.name)}</td>
             <td>${r.wins || "—"}</td>
             <td>${r.losses || "—"}</td>
             <td>${profitCell}</td>
@@ -1286,20 +1892,57 @@ function renderStatsModal(data) {
     : '<tr class="stats-history-empty"><td colspan="5">Нет данных за выбранный период</td></tr>';
 
   if (footEl) {
+    const flatNote = totalFlat ? ` (в т.ч. ${totalFlat} с нулевым PnL)` : "";
     footEl.textContent =
       closedCount > 0
-        ? `Закрытых операций за период: ${closedCount}.`
+        ? `Закрытых операций за период: ${closedCount}${flatNote}. Учитываются все сделки из БД, включая выключенные стратегии.`
         : "Нет закрытых операций за выбранный период.";
   }
 
   updateStatsModalChrome();
 }
 
-async function fetchClosedTradesFromDb(limit = 500) {
-  return pairConfigApi(`/closed-trades?limit=${limit}`);
+async function fetchClosedTradesFromDb(limit = CLOSED_TRADES_FETCH_LIMIT) {
+  const q = limit <= 0 ? "all" : String(limit);
+  return pairConfigApi(`/closed-trades?limit=${encodeURIComponent(q)}`);
 }
 
-async function fetchStatsData(tradeLimit = 500) {
+function mergeClosedTradeLists(a, b) {
+  const map = new Map();
+  for (const list of [a || [], b || []]) {
+    for (const t of list) {
+      const id = t.trade_id ?? t.id;
+      const key = id != null ? String(id) : `anon-${map.size}-${t.pair || ""}-${t.close_date || ""}`;
+      const prev = map.get(key);
+      map.set(key, prev ? { ...prev, ...t } : t);
+    }
+  }
+  return Array.from(map.values());
+}
+
+async function fetchBotClosedTrades(bot, limit = 5000) {
+  try {
+    const pageSize = 500;
+    const all = [];
+    let offset = 0;
+    let total = Infinity;
+    while (offset < limit && offset < total) {
+      const take = Math.min(pageSize, limit - offset);
+      const data = await api(bot, `/trades?limit=${take}&offset=${offset}&order_by_id=false`);
+      const trades = Array.isArray(data?.trades) ? data.trades : [];
+      if (!trades.length) break;
+      all.push(...trades);
+      total = Number(data?.total_trades ?? trades.length);
+      offset += trades.length;
+      if (trades.length < take) break;
+    }
+    return all.filter((t) => !t.is_open);
+  } catch {
+    return [];
+  }
+}
+
+async function fetchStatsData(tradeLimit = CLOSED_TRADES_FETCH_LIMIT) {
   const loadErrors = [];
   let closedData = {};
   try {
@@ -1307,14 +1950,23 @@ async function fetchStatsData(tradeLimit = 500) {
   } catch (e) {
     loadErrors.push(`История сделок: ${formatApiError(e.message)}`);
   }
+
+  // Merge bot RPC trades so stopped/disabled bots still contribute when DB dump is thin.
+  const botLimit = tradeLimit <= 0 ? 5000 : Math.min(Math.max(tradeLimit, 500), 5000);
+  const [finderRpc, stratRpc, gridRpc] = await Promise.all([
+    fetchBotClosedTrades("finder", botLimit),
+    fetchBotClosedTrades("strategy", botLimit),
+    fetchBotClosedTrades("grid", botLimit),
+  ]);
+
   const [catalogData, bybitData] = await Promise.all([
     pairConfigApi("/strategies").catch(() => ({ strategies: strategyCatalog })),
     pairConfigApi("/bybit-grid/history").catch(() => ({ history: [] })),
   ]);
   return {
-    finderTrades: closedData.finder || [],
-    stratTrades: closedData.strategy || [],
-    gridTrades: closedData.grid || [],
+    finderTrades: mergeClosedTradeLists(closedData.finder, finderRpc),
+    stratTrades: mergeClosedTradeLists(closedData.strategy, stratRpc),
+    gridTrades: mergeClosedTradeLists(closedData.grid, gridRpc),
     bybitHistory: bybitData?.history || [],
     catalog: catalogData.strategies || strategyCatalog,
     loadErrors,
@@ -1330,7 +1982,7 @@ async function loadStatistics() {
   bodyEl.innerHTML = "";
 
   try {
-    statsDataCache = await fetchStatsData();
+    statsDataCache = await fetchStatsData(CLOSED_TRADES_FETCH_LIMIT);
     renderStatsModal(statsDataCache);
   } catch (e) {
     if (e.message === "auth") logout();
@@ -1344,14 +1996,14 @@ async function loadStatistics() {
 }
 
 function setStatsPeriod(period) {
-  statsPeriod = period === "today" ? "today" : "all";
+  statsPeriod = normalizeStatsPeriod(period);
   if (statsDataCache) renderStatsModal(statsDataCache);
   else loadStatistics();
 }
 
 function openStats(scope = "all", period = null) {
   statsScope = STATS_SCOPE_META[scope] ? scope : "all";
-  if (period) statsPeriod = period === "today" ? "today" : "all";
+  if (period) statsPeriod = normalizeStatsPeriod(period);
   $("stats-modal").classList.remove("hidden");
   $("stats-modal").setAttribute("aria-hidden", "false");
   loadStatistics();
@@ -1382,20 +2034,75 @@ function bindStatsPeriodButtons() {
   });
 }
 
+/** Stable display: `#num name` — num never changes when strategies are added/removed. */
+function strategyCatalogLabel(s) {
+  if (!s) return "—";
+  const name = s.name || s.id || "—";
+  if (s.num != null && s.num !== "" && Number.isFinite(Number(s.num))) {
+    return `#${Number(s.num)} ${name}`;
+  }
+  return name;
+}
+
 function strategyLabel(id) {
   const fromCatalog = strategyCatalog.find((s) => s.id === id);
-  return fromCatalog?.name || id || "—";
+  return fromCatalog ? strategyCatalogLabel(fromCatalog) : id || "—";
+}
+
+/** Stats/history row key by enter_tag base (+inv/hedge) — not by display name. */
+function tradeStatsRowKey(trade, bot) {
+  if (bot === "finder") return FINDER_STATS_LABEL;
+  if (bot === "grid") return GRID_STATS_LABEL;
+  const base = tradeSourceId(trade, bot);
+  if (!trade?.enter_tag) return base;
+  const raw = String(trade.enter_tag);
+  let key = base;
+  if (/:inv/i.test(raw)) key += ":inv";
+  if (/:hedge/i.test(raw)) key += ":hedge";
+  return key;
 }
 
 function syncEnabledFromPayload(data) {
   strategyCatalog = data.strategies || strategyCatalog;
+  strategyCatalog = [...strategyCatalog].sort((a, b) => {
+    const aHas = a.num != null && a.num !== "" && Number.isFinite(Number(a.num));
+    const bHas = b.num != null && b.num !== "" && Number.isFinite(Number(b.num));
+    if (aHas !== bHas) return aHas ? -1 : 1;
+    if (aHas && bHas) {
+      const an = Number(a.num);
+      const bn = Number(b.num);
+      if (an !== bn) return an - bn;
+    }
+    return String(a.id || "").localeCompare(String(b.id || ""));
+  });
   enabledStrategies = {};
   invertedStrategies = {};
+  trainedRiskStrategies = {};
+  mlConfidenceStrategies = {};
+  trainedRiskAvailable = data.trained_risk_available || {};
+  trainedRiskSpecs = data.trained_risk_specs || {};
+  mlConfidenceDefaults = data.ml_confidence_defaults || {};
+  if (Array.isArray(data.ml_confidence_choices) && data.ml_confidence_choices.length) {
+    mlConfidenceChoices = data.ml_confidence_choices.map(Number);
+  }
   const enabled = data.enabled || {};
   const inverted = data.inverted || {};
+  const trained = data.trained_risk || {};
+  const mlConf = data.ml_confidence || {};
   for (const s of strategyCatalog) {
     enabledStrategies[s.id] = !!enabled[s.id];
     invertedStrategies[s.id] = !!inverted[s.id];
+    trainedRiskStrategies[s.id] = trained[s.id] != null ? !!trained[s.id] : !!trainedRiskAvailable[s.id];
+    if (trainedRiskAvailable[s.id] == null) {
+      trainedRiskAvailable[s.id] = !!trainedRiskSpecs[s.id];
+    }
+    const def =
+      mlConfidenceDefaults[s.id] != null
+        ? Number(mlConfidenceDefaults[s.id])
+        : mlConf[s.id] != null
+          ? Number(mlConf[s.id])
+          : 0.55;
+    mlConfidenceStrategies[s.id] = mlConf[s.id] != null ? Number(mlConf[s.id]) : def;
   }
   syncStrategyRiskFromPayload(data);
   if (data?.dual_hedge != null) dualHedgeEnabled = !!data.dual_hedge;
@@ -1472,14 +2179,18 @@ function updateStrategyDisplay() {
 
   if (el) {
     el.classList.remove("warn");
+    const riskNote = strategyRiskSummaryText();
     if (!active.length) {
-      el.textContent = "Нет активных стратегий";
+      el.textContent = riskNote ? `Нет активных · ${riskNote}` : "Нет активных стратегий";
       el.classList.add("warn");
+    } else if (active.length === 1) {
+      el.textContent = riskNote
+        ? `${strategyCatalogLabel(active[0])} · ${riskNote}`
+        : strategyCatalogLabel(active[0]);
     } else {
-      el.textContent =
-        active.length === 1
-          ? active[0].name
-          : `${active.length} активны: ${active.map((s) => s.name).join(", ")}`;
+      el.textContent = riskNote
+        ? `${active.length} из ${strategyCatalog.length} активны · ${riskNote}`
+        : `${active.length} из ${strategyCatalog.length} активны`;
     }
   }
 
@@ -1497,7 +2208,7 @@ function updateStrategyDisplay() {
     if (!active.length) {
       panelSummary.textContent = riskNote ? `${riskNote} · развернуть` : "нет активных · развернуть";
     } else if (active.length === 1) {
-      panelSummary.textContent = `${active[0].name}${riskNote ? ` · ${riskNote}` : ""} · изменить`;
+      panelSummary.textContent = `${strategyCatalogLabel(active[0])}${riskNote ? ` · ${riskNote}` : ""} · изменить`;
     } else {
       panelSummary.textContent = `${active.length} из ${strategyCatalog.length} включено${riskNote ? ` · ${riskNote}` : ""} · изменить`;
     }
@@ -1536,16 +2247,205 @@ function renderWhitelist(bot, whitelist) {
   if (summary) summary.textContent = whitelistSummaryText(pairs);
 }
 
+function trainedRiskHint(id) {
+  const spec = trainedRiskSpecs[id];
+  if (!spec) return "";
+  const sl = Math.abs(Number(spec.stoploss) * 100);
+  const tp = Number(spec.tp) * 100;
+  if (!Number.isFinite(sl) || !Number.isFinite(tp)) return "";
+  return `SL −${sl.toFixed(sl < 2 ? 1 : 0)}% · TP +${tp.toFixed(tp < 2 ? 1 : 0)}%`;
+}
+
+function mlConfidencePct(id) {
+  const v = Number(mlConfidenceStrategies[id]);
+  if (!Number.isFinite(v)) return 55;
+  return Math.round(v * 100);
+}
+
+function mlConfidenceChoicesFor(id) {
+  const cur = Number(mlConfidenceStrategies[id]);
+  const def = Number(mlConfidenceDefaults[id]);
+  const set = new Set(mlConfidenceChoices.map(Number));
+  if (Number.isFinite(cur)) set.add(cur);
+  if (Number.isFinite(def)) set.add(def);
+  return [...set].sort((a, b) => a - b);
+}
+
+function bulkMlConfidenceChoices() {
+  const set = new Set(mlConfidenceChoices.map(Number));
+  for (const v of Object.values(mlConfidenceDefaults)) {
+    if (Number.isFinite(Number(v))) set.add(Number(v));
+  }
+  return [...set].sort((a, b) => a - b);
+}
+
+async function setAllStrategiesMlConfidence(value, { reset = false } = {}) {
+  const payload = reset
+    ? { action: "set_all_strategies_ml_confidence", reset: true }
+    : { action: "set_all_strategies_ml_confidence", ml_confidence: value };
+  const data = await pairConfigApi("/pairs", "POST", payload);
+  syncEnabledFromPayload(data);
+  updateStrategyDisplay();
+  renderStrategyToggles();
+  renderBulkMlConfidenceControls();
+  return data;
+}
+
+function renderBulkMlConfidenceControls() {
+  const ids = ["strategy-ml-conf-bulk", "strategy-ml-conf-bulk-settings"];
+  const choices = bulkMlConfidenceChoices();
+  const common = (() => {
+    const vals = strategyCatalog.map((s) => Number(mlConfidenceStrategies[s.id])).filter(Number.isFinite);
+    if (!vals.length) return null;
+    const first = vals[0];
+    return vals.every((v) => Math.abs(v - first) < 1e-9) ? first : null;
+  })();
+  const options = choices
+    .map((v) => {
+      const p = Math.round(Number(v) * 100);
+      const sel = common != null && Math.abs(common - Number(v)) < 1e-9 ? " selected" : "";
+      return `<option value="${v}"${sel}>${p}%</option>`;
+    })
+    .join("");
+  const html = `
+    <div class="strategy-ml-conf-bulk-inner">
+      <label class="strategy-ml-conf-bulk-label">
+        <span>Уверенность ML для всех</span>
+        <select class="strategy-ml-conf-bulk-select" data-ml-conf-bulk-select>
+          ${options}
+        </select>
+      </label>
+      <div class="strategy-ml-conf-bulk-actions">
+        <button type="button" class="btn btn-sm primary" data-ml-conf-bulk-apply>Применить ко всем</button>
+        <button type="button" class="btn btn-sm ghost" data-ml-conf-bulk-reset title="Вернуть порог из обучения (pack) для каждой стратегии">Стандарт</button>
+      </div>
+    </div>
+    <p class="muted strategy-ml-conf-bulk-hint">Один порог на все стратегии · без рестарта бота · «Стандарт» = дефолт каждой стратегии из pack</p>
+  `;
+  for (const id of ids) {
+    const el = $(id);
+    if (!el) continue;
+    el.innerHTML = html;
+    const select = el.querySelector("[data-ml-conf-bulk-select]");
+    const applyBtn = el.querySelector("[data-ml-conf-bulk-apply]");
+    const resetBtn = el.querySelector("[data-ml-conf-bulk-reset]");
+    if (applyBtn && !applyBtn.dataset.bound) {
+      applyBtn.dataset.bound = "1";
+      applyBtn.addEventListener("click", async () => {
+        const value = Number(select?.value);
+        if (!Number.isFinite(value)) return;
+        const pct = Math.round(value * 100);
+        if (!confirm(`Поставить уверенность ML ${pct}% для всех стратегий?`)) return;
+        applyBtn.disabled = true;
+        if (resetBtn) resetBtn.disabled = true;
+        try {
+          await setAllStrategiesMlConfidence(value);
+          const msg = `Уверенность ML ${pct}% для всех стратегий`;
+          if (isSettingsOpen()) showPairMsg(msg);
+        } catch (e) {
+          if (e.message === "auth") logout();
+          else alert(formatApiError(e.message));
+        } finally {
+          applyBtn.disabled = false;
+          if (resetBtn) resetBtn.disabled = false;
+        }
+      });
+    }
+    if (resetBtn && !resetBtn.dataset.bound) {
+      resetBtn.dataset.bound = "1";
+      resetBtn.addEventListener("click", async () => {
+        if (!confirm("Сбросить уверенность ML к стандарту (pack) для всех стратегий?")) return;
+        applyBtn.disabled = true;
+        resetBtn.disabled = true;
+        try {
+          await setAllStrategiesMlConfidence(null, { reset: true });
+          const msg = "Уверенность ML сброшена к стандарту для всех";
+          if (isSettingsOpen()) showPairMsg(msg);
+        } catch (e) {
+          if (e.message === "auth") logout();
+          else alert(formatApiError(e.message));
+        } finally {
+          applyBtn.disabled = false;
+          resetBtn.disabled = false;
+        }
+      });
+    }
+  }
+}
+
+function renderMlConfidenceControl(id) {
+  const pct = mlConfidencePct(id);
+  const defPct = Math.round((Number(mlConfidenceDefaults[id]) || 0.55) * 100);
+  const options = mlConfidenceChoicesFor(id)
+    .map((v) => {
+      const p = Math.round(Number(v) * 100);
+      const isCur = p === pct;
+      const isDef = p === defPct;
+      const label = isDef ? `${p}% (стандарт)` : `${p}%`;
+      return `<button type="button" class="strategy-ml-conf-option${isCur ? " is-selected" : ""}" data-strategy-ml-confidence-option="${id}" data-value="${v}" role="option" aria-selected="${isCur ? "true" : "false"}">${label}</button>`;
+    })
+    .join("");
+  return `
+    <div class="strategy-ml-conf" data-strategy-ml-confidence-wrap="${id}">
+      <button type="button" class="strategy-ml-conf-btn" data-strategy-ml-confidence-btn="${id}" aria-haspopup="listbox" aria-expanded="false" title="Минимальная уверенность ML (profit) для входа">
+        <span class="strategy-ml-conf-label">Уверенность ML</span>
+        <span class="strategy-ml-conf-value">${pct}%</span>
+        <span class="strategy-ml-conf-caret" aria-hidden="true">▾</span>
+      </button>
+      <div class="strategy-ml-conf-menu" data-strategy-ml-confidence-menu="${id}" hidden role="listbox" aria-label="Уверенность ML">
+        ${options}
+      </div>
+    </div>`;
+}
+
+function closeAllMlConfidenceMenus(exceptId) {
+  document.querySelectorAll("[data-strategy-ml-confidence-wrap]").forEach((wrap) => {
+    const id = wrap.getAttribute("data-strategy-ml-confidence-wrap");
+    if (exceptId && id === exceptId) return;
+    const menu = wrap.querySelector("[data-strategy-ml-confidence-menu]");
+    const btn = wrap.querySelector("[data-strategy-ml-confidence-btn]");
+    if (menu) menu.hidden = true;
+    if (btn) btn.setAttribute("aria-expanded", "false");
+    wrap.classList.remove("is-open");
+  });
+}
+
+function bindMlConfidenceMenusOnce() {
+  if (document.documentElement.dataset.mlConfBound) return;
+  document.documentElement.dataset.mlConfBound = "1";
+  document.addEventListener("click", (ev) => {
+    const t = ev.target;
+    if (!(t instanceof Element)) return;
+    if (t.closest("[data-strategy-ml-confidence-wrap]")) return;
+    closeAllMlConfidenceMenus();
+  });
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape") closeAllMlConfidenceMenus();
+  });
+}
+
 function renderStrategyTogglesInto(container) {
   if (!container) return;
+  bindMlConfidenceMenusOnce();
   container.innerHTML = strategyCatalog
-    .map(
-      (s) => `
-    <li class="strategy-toggle-item${invertedStrategies[s.id] ? " is-inverted" : ""}">
+    .map((s) => {
+      const hasTrain = !!trainedRiskAvailable[s.id] || !!trainedRiskSpecs[s.id];
+      const trainOn = !!trainedRiskStrategies[s.id];
+      const trainHint = trainedRiskHint(s.id);
+      const trainRow = hasTrain
+        ? `
+      <label class="strategy-invert-switch strategy-trained-risk-switch${trainOn ? " is-on" : ""}" title="SL/TP из обучения (player_scenarios). Выкл = глобальные SL/TP.">
+        <span class="strategy-invert-text">SL/TP из обучения${trainHint ? ` <span class="muted">(${trainHint})</span>` : ""}</span>
+        <input type="checkbox" data-strategy-trained-risk="${s.id}" ${trainOn ? "checked" : ""} />
+        <span class="strategy-invert-slider" aria-hidden="true"></span>
+      </label>`
+        : "";
+      return `
+    <li class="strategy-toggle-item${invertedStrategies[s.id] ? " is-inverted" : ""}${trainOn ? " is-trained-risk" : ""}">
       <label class="strategy-toggle-label">
         <input type="checkbox" data-strategy="${s.id}" ${enabledStrategies[s.id] ? "checked" : ""} />
         <span class="strategy-toggle-text">
-          <strong>${s.name}${invertedStrategies[s.id] ? ' <span class="strategy-inv-badge">инв</span>' : ""}</strong>
+          <strong>${strategyCatalogLabel(s)}${invertedStrategies[s.id] ? ' <span class="strategy-inv-badge">инв</span>' : ""}${trainOn ? ' <span class="strategy-train-badge">train SL/TP</span>' : ""} <span class="strategy-ml-badge">ML ${mlConfidencePct(s.id)}%</span></strong>
           <span class="muted strategy-toggle-desc">${s.desc}</span>
         </span>
       </label>
@@ -1554,8 +2454,10 @@ function renderStrategyTogglesInto(container) {
         <input type="checkbox" data-strategy-invert="${s.id}" ${invertedStrategies[s.id] ? "checked" : ""} />
         <span class="strategy-invert-slider" aria-hidden="true"></span>
       </label>
-    </li>`
-    )
+      ${trainRow}
+      ${renderMlConfidenceControl(s.id)}
+    </li>`;
+    })
     .join("");
 
   container.querySelectorAll('input[data-strategy]').forEach((cb) => {
@@ -1581,7 +2483,7 @@ function renderStrategyTogglesInto(container) {
         updateStrategyDisplay();
         renderStrategyToggles();
         const msg = `${strategyLabel(id)} ${next ? "включена" : "выключена"}`;
-        if (!$("settings-modal").classList.contains("hidden")) showPairMsg(msg);
+        if (isSettingsOpen()) showPairMsg(msg);
         await refreshAll();
       } catch (e) {
         document.querySelectorAll(`input[data-strategy="${id}"]`).forEach((el) => {
@@ -1614,7 +2516,7 @@ function renderStrategyTogglesInto(container) {
         updateStrategyDisplay();
         renderStrategyToggles();
         const msg = `${strategyLabel(id)}: инверсия ${next ? "вкл" : "выкл"}`;
-        if (!$("settings-modal").classList.contains("hidden")) showPairMsg(msg);
+        if (isSettingsOpen()) showPairMsg(msg);
       } catch (e) {
         document.querySelectorAll(`input[data-strategy-invert="${id}"]`).forEach((el) => {
           el.checked = !next;
@@ -1628,9 +2530,93 @@ function renderStrategyTogglesInto(container) {
       }
     });
   });
+
+  container.querySelectorAll("input[data-strategy-trained-risk]").forEach((cb) => {
+    cb.addEventListener("change", async () => {
+      const id = cb.dataset.strategyTrainedRisk;
+      const next = cb.checked;
+      document.querySelectorAll(`input[data-strategy-trained-risk="${id}"]`).forEach((el) => {
+        el.disabled = true;
+      });
+      try {
+        const data = await pairConfigApi("/pairs", "POST", {
+          action: "toggle_strategy_trained_risk",
+          strategy: id,
+          trained_risk: next,
+        });
+        syncEnabledFromPayload(data);
+        updateStrategyDisplay();
+        renderStrategyToggles();
+        const msg = `${strategyLabel(id)}: SL/TP из обучения ${next ? "вкл" : "выкл (глобальные)"}`;
+        if (isSettingsOpen()) showPairMsg(msg);
+      } catch (e) {
+        document.querySelectorAll(`input[data-strategy-trained-risk="${id}"]`).forEach((el) => {
+          el.checked = !next;
+        });
+        if (e.message === "auth") logout();
+        else alert(formatApiError(e.message));
+      } finally {
+        document.querySelectorAll(`input[data-strategy-trained-risk="${id}"]`).forEach((el) => {
+          el.disabled = false;
+        });
+      }
+    });
+  });
+
+  container.querySelectorAll("[data-strategy-ml-confidence-btn]").forEach((btn) => {
+    btn.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const id = btn.getAttribute("data-strategy-ml-confidence-btn");
+      const wrap = btn.closest("[data-strategy-ml-confidence-wrap]");
+      const menu = wrap?.querySelector("[data-strategy-ml-confidence-menu]");
+      if (!menu) return;
+      const willOpen = menu.hidden;
+      closeAllMlConfidenceMenus(willOpen ? id : null);
+      menu.hidden = !willOpen;
+      btn.setAttribute("aria-expanded", willOpen ? "true" : "false");
+      wrap?.classList.toggle("is-open", willOpen);
+    });
+  });
+
+  container.querySelectorAll("[data-strategy-ml-confidence-option]").forEach((opt) => {
+    opt.addEventListener("click", async (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const id = opt.getAttribute("data-strategy-ml-confidence-option");
+      const value = Number(opt.getAttribute("data-value"));
+      if (!id || !Number.isFinite(value)) return;
+      const prev = mlConfidenceStrategies[id];
+      closeAllMlConfidenceMenus();
+      document.querySelectorAll(`[data-strategy-ml-confidence-btn="${id}"]`).forEach((el) => {
+        el.disabled = true;
+      });
+      try {
+        const data = await pairConfigApi("/pairs", "POST", {
+          action: "set_strategy_ml_confidence",
+          strategy: id,
+          ml_confidence: value,
+        });
+        syncEnabledFromPayload(data);
+        updateStrategyDisplay();
+        renderStrategyToggles();
+        const msg = `${strategyLabel(id)}: уверенность ML ${Math.round(value * 100)}%`;
+        if (isSettingsOpen()) showPairMsg(msg);
+      } catch (e) {
+        mlConfidenceStrategies[id] = prev;
+        if (e.message === "auth") logout();
+        else alert(formatApiError(e.message));
+      } finally {
+        document.querySelectorAll(`[data-strategy-ml-confidence-btn="${id}"]`).forEach((el) => {
+          el.disabled = false;
+        });
+      }
+    });
+  });
 }
 
 function renderStrategyToggles() {
+  renderBulkMlConfidenceControls();
   renderStrategyTogglesInto($("strategy-panel-toggles"));
   renderStrategyTogglesInto($("strategy-toggle-list"));
 }
@@ -1677,7 +2663,7 @@ function renderStrategyRiskInputHtml() {
         </label>
         <button type="button" class="btn btn-sm primary numeric-setting-save">Сохранить</button>
       </div>
-      <span class="muted strategy-risk-hint">для всех стратегий · SL ${STRATEGY_SL_MIN}–${STRATEGY_SL_MAX}% · TP ${STRATEGY_TP_MIN}–${STRATEGY_TP_MAX}%</span>
+      <span class="muted strategy-risk-hint">глобальные (если у стратегии выкл. «SL/TP из обучения») · SL ${STRATEGY_SL_MIN}–${STRATEGY_SL_MAX}% · TP ${STRATEGY_TP_MIN}–${STRATEGY_TP_MAX}%</span>
     </div>
   `;
 }
@@ -1717,7 +2703,7 @@ function bindStrategyRiskInput(container) {
     try {
       await setStrategyRisk(sl, tp);
       await refreshAll();
-      if (!$("settings-modal").classList.contains("hidden")) {
+      if (isSettingsOpen()) {
         await loadPairSettings();
       }
     } catch (e) {
@@ -1754,7 +2740,7 @@ function updateMaxTradesHint() {
 
 async function setMaxTrades(bot, value) {
   const next = Number(value);
-  if (!Number.isFinite(next) || next < 1 || next > MAX_TRADES_LIMIT) return;
+  if (!Number.isFinite(next) || next < 0 || next > MAX_TRADES_LIMIT) return;
   const data = await pairConfigApi("/pairs", "POST", {
     action: "set_max_trades",
     bot,
@@ -1763,6 +2749,9 @@ async function setMaxTrades(bot, value) {
   BOTS[bot].maxTrades = next;
   updateMaxTradesHint();
   showReloadWarning(data);
+  if (data?.trade_warning) {
+    showReloadWarning({ reload_warning: data.trade_warning });
+  }
   return data;
 }
 
@@ -1801,7 +2790,7 @@ function bindNumericSetting(container, { validate, onSave }) {
     try {
       await onSave(next);
       await refreshAll();
-      if (!$("settings-modal").classList.contains("hidden")) {
+      if (isSettingsOpen()) {
         await loadPairSettings();
       }
     } catch (e) {
@@ -1821,7 +2810,9 @@ function bindNumericSetting(container, { validate, onSave }) {
 function bindMaxTradesInput(container, bot) {
   bindNumericSetting(container, {
     validate: (value) =>
-      value >= 1 && value <= MAX_TRADES_LIMIT ? true : `От 1 до ${MAX_TRADES_LIMIT}`,
+      value >= 0 && value <= MAX_TRADES_LIMIT
+        ? true
+        : `От 0 до ${MAX_TRADES_LIMIT} (0 = бот остановлен)`,
     onSave: (value) => setMaxTrades(bot, value),
   });
 }
@@ -1840,7 +2831,7 @@ function renderMaxTradesInput(bot) {
   const maxTrades = BOTS[bot].maxTrades;
   return `
     <div class="numeric-setting" data-max-trades-input data-bot="${bot}">
-      <input type="number" class="numeric-setting-input" min="1" max="${MAX_TRADES_LIMIT}" step="1" value="${maxTrades}" inputmode="numeric" aria-label="Макс. сделок ${BOTS[bot].label}" />
+      <input type="number" class="numeric-setting-input" min="0" max="${MAX_TRADES_LIMIT}" step="1" value="${maxTrades}" inputmode="numeric" aria-label="Макс. сделок ${BOTS[bot].label}" />
       <button type="button" class="btn btn-sm primary numeric-setting-save">Сохранить</button>
     </div>
   `;
@@ -2024,6 +3015,31 @@ function renderActions(bot, running) {
       '<p class="muted finder-disabled-note">ML Finder отключён на сервере. Кнопка «Старт» недоступна.</p>';
     return;
   }
+  const slotsDisabled = Number(cfg.maxTrades) <= 0;
+  if (slotsDisabled) {
+    $(cfg.actionsEl).innerHTML = `
+      <p class="muted finder-disabled-note">Макс. сделок = 0 — бот остановлен и не торгует. Установите 1 или больше в Настройках.</p>
+      <button class="btn" data-bot="${bot}" data-act="stop" ${!running ? "disabled" : ""}>Стоп</button>
+      <button class="btn" data-bot="${bot}" data-act="reload">Reload config</button>
+    `;
+    $(cfg.actionsEl).querySelectorAll("button").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const act = btn.dataset.act;
+        try {
+          if (act === "stop") {
+            if (!confirm(`Остановить бота «${BOTS[bot].label}»?`)) return;
+            await api(bot, "/stop", "POST");
+          }
+          if (act === "reload") await api(bot, "/reload_config", "POST");
+          await refreshAll();
+        } catch (e) {
+          if (e.message === "auth") logout();
+          else alert(formatApiError(e.message));
+        }
+      });
+    });
+    return;
+  }
   const scanBtn =
     bot === "grid"
       ? `<button class="btn" data-bot="grid" data-act="scan-ranging" title="Поиск боковика среди 150 ликвидных пар">Скан боковика</button>`
@@ -2044,6 +3060,10 @@ function renderActions(bot, running) {
         if (act === "start") {
           if (bot === "finder" && !finderBotEnabled) {
             alert("ML Finder отключён на сервере.");
+            return;
+          }
+          if (Number(BOTS[bot].maxTrades) <= 0) {
+            alert("Макс. сделок = 0. Установите 1 или больше в Настройках.");
             return;
           }
           await api(bot, "/start", "POST");
@@ -2244,7 +3264,7 @@ async function refreshBot(bot) {
   const running = String(config?.state || "").toLowerCase() === "running";
   const openTrades = Array.isArray(status) ? status : [];
   const maxFromConfig = Number(config?.max_open_trades);
-  if (Number.isFinite(maxFromConfig) && maxFromConfig > 0) {
+  if (Number.isFinite(maxFromConfig) && maxFromConfig >= 0) {
     BOTS[bot].maxTrades = Math.round(maxFromConfig);
   }
   const openCount = openTrades.length;
@@ -2519,7 +3539,7 @@ async function saveBybitGridSettings(payload) {
 
 function renderBybitGridMaxBotsInput(maxBots) {
   return `
-    <input id="bg-cfg-max-bots" type="number" class="numeric-setting-input" min="1" max="${BYBIT_GRID_MAX_LIMIT}" step="1" value="${maxBots}" inputmode="numeric" aria-label="Макс. активных Bybit Grid ботов" />
+    <input id="bg-cfg-max-bots" type="number" class="numeric-setting-input" min="0" max="${BYBIT_GRID_MAX_LIMIT}" step="1" value="${maxBots}" inputmode="numeric" aria-label="Макс. активных Bybit Grid ботов" />
   `;
 }
 
@@ -2528,7 +3548,7 @@ function renderBybitGridSettings(data) {
   if (!el) return;
   const cfg = data?.config || {};
   const defs = cfg.defaults || {};
-  const maxBots = Number(cfg.max_active_bots || 1);
+  const maxBots = cfg.max_active_bots != null ? Number(cfg.max_active_bots) : 1;
   const invest = String(defs.total_investment || "10");
   const tpUsdt = Number(defs.take_profit_usdt ?? 0.4);
   const slUsdt = Number(defs.stop_loss_usdt ?? 0.4);
@@ -2570,8 +3590,8 @@ function renderBybitGridSettings(data) {
     const investVal = Number($("bg-cfg-invest")?.value || 0);
     const tpVal = Number($("bg-cfg-tp")?.value || 0);
     const slVal = Number($("bg-cfg-sl")?.value || 0);
-    if (maxBotsVal < 1 || maxBotsVal > BYBIT_GRID_MAX_LIMIT) {
-      alert(`Макс. активных ботов — от 1 до ${BYBIT_GRID_MAX_LIMIT}`);
+    if (maxBotsVal < 0 || maxBotsVal > BYBIT_GRID_MAX_LIMIT) {
+      alert(`Макс. активных ботов — от 0 до ${BYBIT_GRID_MAX_LIMIT} (0 = не создавать новые)`);
       return;
     }
     if (investVal < 5) {
@@ -2821,7 +3841,7 @@ async function refreshBybitGrid({ scan = false } = {}) {
     await loadBybitGridScanInfo();
     if (hintEl) {
       hintEl.textContent = credsOk
-        ? "Биржевой grid: ордера на Bybit, не Freqtrade"
+        ? "Биржевой grid: ордера на Bybit, не через Grid-бота"
         : (data.credentials_error || "Настройте BYBIT_API_KEY в .env");
     }
   } catch (e) {
@@ -2968,7 +3988,7 @@ async function loadPairSettings() {
     el.innerHTML = `
       <span class="max-trades-label">${BOTS[bot].label}</span>
       ${renderMaxTradesInput(bot)}
-      <span class="muted max-trades-hint">от 1 до ${MAX_TRADES_LIMIT}</span>
+      <span class="muted max-trades-hint">0 = стоп · 1–${MAX_TRADES_LIMIT}</span>
     `;
     bindMaxTradesInput(el.querySelector("[data-max-trades-input]"), bot);
   });
@@ -3019,13 +4039,34 @@ async function loadPairSettings() {
   });
 }
 
+function isSettingsOpen() {
+  const v = $("settings-view");
+  return !!(v && !v.classList.contains("hidden"));
+}
+
 function openSettings() {
-  $("settings-modal").classList.remove("hidden");
-  $("settings-modal").setAttribute("aria-hidden", "false");
+  closeMobileMenu();
+  $("changelog-view")?.classList.add("hidden");
+  $("logs-view")?.classList.add("hidden");
+  $("history-view")?.classList.add("hidden");
+  $("pnl-dashboard-view")?.classList.add("hidden");
+  $("dashboard-view")?.classList.add("hidden");
+  const view = $("settings-view");
+  view?.classList.remove("hidden");
+  view?.setAttribute("aria-hidden", "false");
   loadPairSettings().catch((e) => {
     if (e.message === "auth") logout();
     else showPairMsg(e.message, true);
   });
+  refreshAuthMe().catch(() => {});
+  if (isAdminUser()) loadUsersAdmin().catch(() => {});
+}
+
+function closeSettings() {
+  $("settings-view")?.classList.add("hidden");
+  $("settings-view")?.setAttribute("aria-hidden", "true");
+  $("dashboard-view")?.classList.remove("hidden");
+  $("pair-msg")?.classList.add("hidden");
 }
 
 async function loadInfoContent() {
@@ -3039,7 +4080,7 @@ async function loadInfoContent() {
       .map(
         (s) => `
       <li class="info-strategy-item">
-        <strong class="info-strategy-name">${s.name}</strong>
+        <strong class="info-strategy-name">${strategyCatalogLabel(s)}</strong>
         <p class="info-strategy-desc">${s.desc}</p>
       </li>`
       )
@@ -3061,15 +4102,20 @@ function closeInfo() {
   $("info-modal").setAttribute("aria-hidden", "true");
 }
 
-function closeSettings() {
-  $("settings-modal").classList.add("hidden");
-  $("settings-modal").setAttribute("aria-hidden", "true");
-  $("pair-msg").classList.add("hidden");
+function openGuide() {
+  $("guide-modal")?.classList.remove("hidden");
+  $("guide-modal")?.setAttribute("aria-hidden", "false");
+}
+
+function closeGuide() {
+  $("guide-modal")?.classList.add("hidden");
+  $("guide-modal")?.setAttribute("aria-hidden", "true");
 }
 
 $("login-btn").addEventListener("click", async () => {
   creds.user = $("login-user").value.trim();
   creds.pass = $("login-pass").value;
+  sessionToken = "";
   $("login-error").classList.add("hidden");
   try {
     await loginAll();
@@ -3082,6 +4128,109 @@ $("login-btn").addEventListener("click", async () => {
         ? "Неверный логин или пароль"
         : e.message || "Ошибка входа";
     $("login-error").classList.remove("hidden");
+  }
+});
+
+function showUsersMsg(text, isError = false) {
+  const el = $("users-msg");
+  if (!el) return;
+  el.textContent = text;
+  el.classList.toggle("error", !!isError);
+  el.classList.remove("hidden");
+}
+
+function showSecretsMsg(text, isError = false) {
+  const el = $("secrets-msg");
+  if (!el) return;
+  el.textContent = text;
+  el.classList.toggle("error", !!isError);
+  el.classList.remove("hidden");
+}
+
+async function loadUsersAdmin() {
+  const list = $("users-list");
+  if (!list || !isAdminUser()) return;
+  const data = await pairConfigApi("/users");
+  const users = data.users || [];
+  list.innerHTML = users
+    .map((u) => {
+      const role = escapeHtml(u.role || "user");
+      const name = escapeHtml(u.username || u.id);
+      const en = u.enabled !== false;
+      const isAdm = u.role === "admin" || u.id === "admin";
+      return `<li class="users-list-item">
+        <div>
+          <strong>${name}</strong>
+          <span class="muted"> · ${role}${en ? "" : " · выкл"}</span>
+        </div>
+        <div class="users-list-actions">
+          ${
+            isAdm
+              ? ""
+              : `<button type="button" class="btn btn-sm ghost" data-user-toggle="${escapeHtml(u.id)}" data-enabled="${en ? "0" : "1"}">${en ? "Выкл" : "Вкл"}</button>
+                 <button type="button" class="btn btn-sm ghost" data-user-pass="${escapeHtml(u.id)}">Пароль</button>`
+          }
+        </div>
+      </li>`;
+    })
+    .join("");
+  list.querySelectorAll("[data-user-toggle]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      try {
+        await pairConfigApi(`/users/${btn.dataset.userToggle}`, "PATCH", {
+          enabled: btn.dataset.enabled === "1",
+        });
+        showUsersMsg("Статус обновлён");
+        await loadUsersAdmin();
+      } catch (e) {
+        showUsersMsg(formatApiError(e.message), true);
+      }
+    });
+  });
+  list.querySelectorAll("[data-user-pass]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const password = prompt("Новый пароль пользователя:");
+      if (!password) return;
+      try {
+        await pairConfigApi(`/users/${btn.dataset.userPass}/password`, "POST", { password });
+        showUsersMsg("Пароль обновлён");
+      } catch (e) {
+        showUsersMsg(formatApiError(e.message), true);
+      }
+    });
+  });
+}
+
+$("users-create-btn")?.addEventListener("click", async () => {
+  const username = $("users-new-name")?.value.trim();
+  const password = $("users-new-pass")?.value || "";
+  if (!username || !password) return showUsersMsg("Укажите логин и пароль", true);
+  try {
+    await pairConfigApi("/users", "POST", { username, password });
+    $("users-new-name").value = "";
+    $("users-new-pass").value = "";
+    showUsersMsg(`Пользователь ${username} создан (лимиты 1/1/1). Пусть задаст ключи Bybit.`);
+    await loadUsersAdmin();
+  } catch (e) {
+    showUsersMsg(formatApiError(e.message), true);
+  }
+});
+
+$("secrets-save-btn")?.addEventListener("click", async () => {
+  const key = $("secrets-api-key")?.value.trim() || "";
+  const secret = $("secrets-api-secret")?.value || "";
+  if (!key || !secret) return showSecretsMsg("Введите API Key и Secret", true);
+  try {
+    await pairConfigApi("/secrets", "PUT", {
+      bybit_api_key: key,
+      bybit_api_secret: secret,
+    });
+    $("secrets-api-key").value = "";
+    $("secrets-api-secret").value = "";
+    showSecretsMsg("Ключи сохранены, боты перезапускаются");
+    await refreshAuthMe();
+  } catch (e) {
+    showSecretsMsg(formatApiError(e.message), true);
   }
 });
 
@@ -3208,6 +4357,8 @@ function openLogs() {
   closeMobileMenu();
   $("changelog-view")?.classList.add("hidden");
   $("history-view")?.classList.add("hidden");
+  $("settings-view")?.classList.add("hidden");
+  $("pnl-dashboard-view")?.classList.add("hidden");
   $("dashboard-view")?.classList.add("hidden");
   const view = $("logs-view");
   view?.classList.remove("hidden");
@@ -3229,7 +4380,7 @@ const CHANGELOG_CAT_LABELS = {
   telegram_bot: "Telegram-бот",
   finder: "ML Finder",
   strategy: "Стратегии",
-  grid_ft: "Grid Freqtrade",
+  grid_ft: "Grid",
   ranging_scanner: "Сканер боковика",
   strategy_scanner: "Сканер стратегий",
   bybit_grid: "Bybit Grid",
@@ -3358,6 +4509,8 @@ function openChangelog() {
   $("dashboard-view")?.classList.add("hidden");
   $("logs-view")?.classList.add("hidden");
   $("history-view")?.classList.add("hidden");
+  $("settings-view")?.classList.add("hidden");
+  $("pnl-dashboard-view")?.classList.add("hidden");
   const view = $("changelog-view");
   view?.classList.remove("hidden");
   view?.setAttribute("aria-hidden", "false");
@@ -3370,10 +4523,32 @@ function closeChangelog() {
   $("dashboard-view")?.classList.remove("hidden");
 }
 
+function goHome() {
+  closeMobileMenu();
+  stopLogsPoll();
+  closeStats();
+  closeInfo();
+  closeGuide();
+  closeBybitGridModal();
+  $("changelog-view")?.classList.add("hidden");
+  $("changelog-view")?.setAttribute("aria-hidden", "true");
+  $("logs-view")?.classList.add("hidden");
+  $("logs-view")?.setAttribute("aria-hidden", "true");
+  $("history-view")?.classList.add("hidden");
+  $("history-view")?.setAttribute("aria-hidden", "true");
+  $("settings-view")?.classList.add("hidden");
+  $("settings-view")?.setAttribute("aria-hidden", "true");
+  $("pnl-dashboard-view")?.classList.add("hidden");
+  $("pnl-dashboard-view")?.setAttribute("aria-hidden", "true");
+  $("dashboard-view")?.classList.remove("hidden");
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
 $("logout-btn").addEventListener("click", () => {
   closeMobileMenu();
   logout();
 });
+$("brand-home-btn")?.addEventListener("click", goHome);
 $("refresh-btn").addEventListener("click", () => {
   closeMobileMenu();
   refreshAll();
@@ -3382,6 +4557,10 @@ $("stats-btn").addEventListener("click", () => {
   closeMobileMenu();
   openStats("all", "all");
 });
+$("pnl-dashboard-btn")?.addEventListener("click", () => {
+  closeMobileMenu();
+  openPnlDashboard();
+});
 $("history-btn")?.addEventListener("click", () => {
   closeMobileMenu();
   openHistory();
@@ -3389,6 +4568,10 @@ $("history-btn")?.addEventListener("click", () => {
 $("info-btn").addEventListener("click", () => {
   closeMobileMenu();
   openInfo();
+});
+$("guide-btn")?.addEventListener("click", () => {
+  closeMobileMenu();
+  openGuide();
 });
 $("settings-btn").addEventListener("click", () => {
   closeMobileMenu();
@@ -3440,14 +4623,22 @@ document.addEventListener("keydown", (e) => {
       closeLogs();
       return;
     }
+    if ($("pnl-dashboard-view") && !$("pnl-dashboard-view").classList.contains("hidden")) {
+      closePnlDashboard();
+      return;
+    }
     if ($("history-view") && !$("history-view").classList.contains("hidden")) {
       closeHistory();
+      return;
+    }
+    if ($("settings-view") && !$("settings-view").classList.contains("hidden")) {
+      closeSettings();
       return;
     }
     closeMobileMenu();
     closeStats();
     closeInfo();
-    closeSettings();
+    closeGuide();
     closeBybitGridModal();
   }
 });
@@ -3460,8 +4651,9 @@ $("stats-modal").querySelector(".modal-backdrop").addEventListener("click", clos
 $("bybitgrid-history-toggle")?.addEventListener("click", toggleBybitGridHistory);
 $("info-close").addEventListener("click", closeInfo);
 $("info-modal").querySelector(".modal-backdrop").addEventListener("click", closeInfo);
-$("settings-close").addEventListener("click", closeSettings);
-$("settings-modal").querySelector(".modal-backdrop").addEventListener("click", closeSettings);
+$("guide-close")?.addEventListener("click", closeGuide);
+$("guide-modal")?.querySelector(".modal-backdrop")?.addEventListener("click", closeGuide);
+$("settings-back-btn")?.addEventListener("click", closeSettings);
 
 $("pair-add-btn").addEventListener("click", async () => {
   const pair = $("pair-input").value.trim();
@@ -3549,5 +4741,6 @@ bindTradeLists();
 bindPanelStatsButtons();
 bindStatsPeriodButtons();
 bindHistoryControls();
+bindPnlDashboardControls();
 renderStrategyRiskControls();
 renderDualHedgeControl();

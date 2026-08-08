@@ -1,9 +1,9 @@
 #!/bin/bash
 set -euo pipefail
-source /home/freqtrade/.freqtrade.env
+source /home/cryptotools/.cryptotools.env
 
 echo "Restarting bots..."
-systemctl restart freqtrade freqtrade-strategy freqtrade-grid
+systemctl restart ctengine cryptotools-strategy cryptotools-grid
 sleep 20
 
 OLD_PAIRS=(
@@ -27,4 +27,4 @@ for port in 8080 8081 8082; do
   echo
 done
 
-systemctl is-active freqtrade freqtrade-strategy freqtrade-grid
+systemctl is-active cryptotools-finder cryptotools-strategy cryptotools-grid

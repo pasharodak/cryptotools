@@ -301,7 +301,12 @@ def model_registry() -> dict[str, Any]:
     }
 
 
-def make_pipeline(model_name: str = "lightgbm", *, calibrate: bool = True) -> Pipeline:
+def make_pipeline(
+    model_name: str = "lightgbm",
+    *,
+    calibrate: bool = True,
+    calibrate_method: str = "sigmoid",
+) -> Pipeline:
     registry = model_registry()
     if model_name not in registry:
         raise ValueError(f"unknown model: {model_name}; choose from {sorted(registry)}")
@@ -309,7 +314,8 @@ def make_pipeline(model_name: str = "lightgbm", *, calibrate: bool = True) -> Pi
     base = registry[model_name]
     clf: Any = base
     if calibrate:
-        clf = CalibratedClassifierCV(base, cv=3, method="isotonic")
+        # sigmoid (Platt) keeps a smooth confidence scale; isotonic often collapses to 0/1.
+        clf = CalibratedClassifierCV(base, cv=3, method=calibrate_method)
     return Pipeline([("pre", _FramePreprocess(pre)), ("clf", clf)])
 
 

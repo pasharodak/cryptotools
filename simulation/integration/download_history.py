@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Download historical OHLCV for replay pairs via freqtrade download-data."""
+"""Download historical OHLCV for replay pairs via ctengine download-data."""
 from __future__ import annotations
 
 import argparse
@@ -47,14 +47,14 @@ def main() -> int:
         return 1
 
     config = args.config or (r / "simulation" / "config" / "download_only.json")
-    datadir = r / cfg["freqtrade_datadir"]
+    datadir = r / cfg["ctengine_datadir"]
     datadir.mkdir(parents=True, exist_ok=True)
     runtime_cfg = r / "simulation" / "data" / "runtime" / "download_batch.json"
 
     timerange = cfg.get("timerange", "20260618-20260626")
-    ft = r / ".venv" / "Scripts" / "freqtrade.exe"
+    ft = r / ".venv" / "Scripts" / "ctbot.exe"
     if not ft.is_file():
-        ft = Path("freqtrade")
+        ft = Path("ctengine")
 
     batch_size = max(1, args.batch_size)
     batches = [pairs[i : i + batch_size] for i in range(0, len(pairs), batch_size)]

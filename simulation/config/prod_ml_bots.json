@@ -1,5 +1,5 @@
 {
-    "updated": "2026-07-13",
+    "updated": "2026-08-07",
     "ml_gate": {
         "enabled": true,
         "gate_mode": "block_loss",
@@ -15,22 +15,77 @@
         },
         "strategy_bots": {
             "gate_mode": "profit_only",
-            "min_confidence": 0.6
+            "min_confidence": 0.45,
+            "note": "Floor; per-scenario min_profit_proba from model meta overrides"
         }
     },
     "min_ml_pnl_usdt": 5.0,
     "enabled_scenarios": [
         "live_grid",
-        "trend_breakout",
-        "trend_ema",
-        "lite_mean_rev",
-        "lite_intraday",
-        "lite_range"
+        "scalp_liq_breakout",
+        "new_psar",
+        "chart3_atrch",
+        "chart2_cmf",
+        "scalp_ema",
+        "chart3_adosc",
+        "new_donchian",
+        "chart3_ppo",
+        "combo_don_adx_vol",
+        "chart2_obv",
+        "chart3_elder",
+        "scalp_macd",
+        "new_keltner",
+        "chart_ha",
+        "chart2_vortex",
+        "chart3_ao",
+        "combo_kc_stoch_vol",
+        "chart3_tema",
+        "chart2_trix",
+        "chart3_roc",
+        "combo_hma_ppo_atr",
+        "chart_willr",
+        "chart_squeeze",
+        "combo_ema_rsi_atr",
+        "chart2_aroon",
+        "combo_adx_macd_vol",
+        "chart2_engulf",
+        "chart_adxdi",
+        "chart2_mfi",
+        "new_ichimoku",
+        "combo_st_rsi_obv"
     ],
     "prod_strategy_bots": [
-        "trend_supertrend",
-        "trend_macd_ema",
-        "trend_fib"
+        "scalp_liq_breakout",
+        "new_psar",
+        "chart3_atrch",
+        "chart2_cmf",
+        "scalp_ema",
+        "chart3_adosc",
+        "new_donchian",
+        "chart3_ppo",
+        "combo_don_adx_vol",
+        "chart2_obv",
+        "chart3_elder",
+        "scalp_macd",
+        "new_keltner",
+        "chart_ha",
+        "chart2_vortex",
+        "chart3_ao",
+        "combo_kc_stoch_vol",
+        "chart3_tema",
+        "chart2_trix",
+        "chart3_roc",
+        "combo_hma_ppo_atr",
+        "chart_willr",
+        "chart_squeeze",
+        "combo_ema_rsi_atr",
+        "chart2_aroon",
+        "combo_adx_macd_vol",
+        "chart2_engulf",
+        "chart_adxdi",
+        "chart2_mfi",
+        "new_ichimoku",
+        "combo_st_rsi_obv"
     ],
     "extended_training_scenarios": [
         "trend_supertrend",
@@ -54,12 +109,21 @@
         "lite_hft": "ML PnL +3.84 minimal",
         "lite_scalp": "ML PnL +4.51 minimal",
         "live_grid_safe": "duplicate grid — keep live_grid only",
-        "live_freqai": "replaced — old classic ML bot (replaced by TradeFinder)",
+        "live_legacy_finder": "replaced — old classic ML bot (replaced by TradeFinder)",
         "live_strategy": "replaced — old strategy prod bot"
     },
     "live_vps": {
-        "keep_services": ["freqtrade-grid", "freqtrade-strategy"],
-        "disable_services": ["freqtrade"],
-        "update_services": ["freqtrade-strategy", "freqtrade-grid"]
-    }
+        "keep_services": [
+            "cryptotools-grid",
+            "cryptotools-strategy"
+        ],
+        "disable_services": [
+            "ctengine"
+        ],
+        "update_services": [
+            "cryptotools-strategy",
+            "cryptotools-grid"
+        ]
+    },
+    "pack": "prod_top30_pack.json"
 }

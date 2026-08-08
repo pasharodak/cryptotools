@@ -1,0 +1,98 @@
+{
+  "scenario_id": "chart2_cmf",
+  "experiment_id": "exp10_xgb_pos_weight",
+  "model": "xgboost + sigmoid",
+  "model_key": "xgboost",
+  "calibrate": true,
+  "calibrate_method": "sigmoid",
+  "min_profit_proba": 0.55,
+  "params": {
+    "n_estimators": 400,
+    "learning_rate": 0.05,
+    "max_depth": 6,
+    "min_child_weight": 20,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "scale_pos_weight": 1.5
+  },
+  "trained_at": "2026-08-08T08:24:31.487012+00:00",
+  "train_range": "20250101-20260331",
+  "test_range": "20260401-20260625",
+  "fit_mode": "all_cached",
+  "n_train_trades": 10138,
+  "n_test_trades": 5594,
+  "n_train": 10138,
+  "n_test": 5594,
+  "features": [
+    "scenario_id",
+    "pair_base",
+    "scan_type",
+    "group",
+    "strategy",
+    "is_short",
+    "stake_usdt",
+    "stoploss",
+    "roi_at_entry",
+    "hour_utc",
+    "dow_utc",
+    "mins_since_armed",
+    "log_open_rate",
+    "rsi_14",
+    "atr_pct_14",
+    "adx_14",
+    "vol_ratio_20",
+    "ret_1",
+    "ret_4",
+    "ret_12",
+    "trend_12h",
+    "ema_spread_pct",
+    "range_pct",
+    "dist_high_20_pct",
+    "dist_low_20_pct"
+  ],
+  "source": "ml_param_experiments_per_scenario",
+  "accuracy": 0.7413,
+  "roc_auc": 0.7688,
+  "loss_recall": 0.8666,
+  "loss_precision": 0.7564,
+  "profit_recall": 0.5307,
+  "profit_precision": 0.7029,
+  "macro_f1": 0.7063,
+  "confusion_matrix": [
+    [
+      3040,
+      468
+    ],
+    [
+      979,
+      1107
+    ]
+  ],
+  "classification_report": {
+    "loss": {
+      "precision": 0.7564070664344364,
+      "recall": 0.8665906499429875,
+      "f1-score": 0.8077587352198751,
+      "support": 3508.0
+    },
+    "profit": {
+      "precision": 0.7028571428571428,
+      "recall": 0.5306807286673059,
+      "f1-score": 0.6047527997814804,
+      "support": 2086.0
+    },
+    "accuracy": 0.7413299964247408,
+    "macro avg": {
+      "precision": 0.7296321046457896,
+      "recall": 0.6986356893051466,
+      "f1-score": 0.7062557675006778,
+      "support": 5594.0
+    },
+    "weighted avg": {
+      "precision": 0.7364383248215952,
+      "recall": 0.7413299964247408,
+      "f1-score": 0.7320579162487469,
+      "support": 5594.0
+    }
+  }
+}

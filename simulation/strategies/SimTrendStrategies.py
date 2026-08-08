@@ -9,7 +9,7 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 import talib.abstract as ta
-from freqtrade.strategy.strategy_helper import merge_informative_pair
+from ctengine.strategy.strategy_helper import merge_informative_pair
 from pandas import DataFrame
 from technical import qtpylib
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Scan for Grid entry + optional force-enter via Freqtrade API."""
+"""Scan for Grid entry + optional force-enter via bot API."""
 from __future__ import annotations
 
 import argparse
@@ -170,9 +170,9 @@ def main() -> int:
     parser.add_argument("--wait", type=int, default=0, help="Poll every N sec until signal")
     args = parser.parse_args()
 
-    base = Path(os.environ.get("FT_BASE", "/home/freqtrade/freqtrade"))
-    env = load_env(Path(os.environ.get("FT_ENV", "/home/freqtrade/.freqtrade.env")))
-    user = os.environ.get("FREQUI_USERNAME") or env.get("FREQUI_USERNAME", "freqtrader")
+    base = Path(os.environ.get("CT_BASE", "/home/cryptotools/app"))
+    env = load_env(Path(os.environ.get("CT_ENV", "/home/cryptotools/.cryptotools.env")))
+    user = os.environ.get("FREQUI_USERNAME") or env.get("FREQUI_USERNAME", "cryptotools")
     password = os.environ.get("FREQUI_PASSWORD") or env.get("FREQUI_PASSWORD", "")
     if not password:
         print("ERROR: no API password", file=sys.stderr)

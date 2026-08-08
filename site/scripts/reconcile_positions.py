@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reconcile Freqtrade open trades with Bybit live positions."""
+"""Reconcile open bot trades with Bybit live positions."""
 from __future__ import annotations
 
 import argparse
@@ -21,8 +21,8 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_BASE = Path(os.environ.get("FT_BASE", "/home/freqtrade/freqtrade"))
-DEFAULT_ENV = Path(os.environ.get("FT_ENV", "/home/freqtrade/.freqtrade.env"))
+DEFAULT_BASE = Path(os.environ.get("CT_BASE", "/home/cryptotools/app"))
+DEFAULT_ENV = Path(os.environ.get("CT_ENV", "/home/cryptotools/.cryptotools.env"))
 
 BOTS: dict[str, dict[str, Any]] = {
     "finder": {
@@ -591,8 +591,8 @@ def fix_reconcile(
     base = base or DEFAULT_BASE
     env_path = env_path or DEFAULT_ENV
     env = load_env(env_path)
-    user = env.get("FREQUI_USERNAME", "freqtrader")
-    password = env.get("FREQUI_PASSWORD", "freqtrader")
+    user = env.get("FREQUI_USERNAME", "cryptotools")
+    password = env.get("FREQUI_PASSWORD", "cryptotools")
     key = env.get("BYBIT_API_KEY", "")
     secret = env.get("BYBIT_API_SECRET", "")
 
@@ -655,8 +655,8 @@ def archive_stale_trade(
     ghost["side"] = ft_side_key(row["is_short"])
     return fix_ghost_trade(
         ghost,
-        env.get("FREQUI_USERNAME", "freqtrader"),
-        env.get("FREQUI_PASSWORD", "freqtrader"),
+        env.get("FREQUI_USERNAME", "cryptotools"),
+        env.get("FREQUI_PASSWORD", "cryptotools"),
         base=base,
         key=env.get("BYBIT_API_KEY", ""),
         secret=env.get("BYBIT_API_SECRET", ""),

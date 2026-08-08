@@ -24,7 +24,7 @@ def period_months(start_year: int = 2025, start_month: int = 1, end_year: int = 
 
 
 def pairs_from_source(root: Path, source: str, *, min_start: str | None = None) -> list[str]:
-    datadir = root / "simulation/data/freqtrade"
+    datadir = root / "simulation/data/ctengine"
     ds = HistoricalDatastore(datadir)
 
     if source == "pool":

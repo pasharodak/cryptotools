@@ -19,8 +19,8 @@ user_data/
 /user_data/
 /.venv/
 
-# Archive from removed D:\freqtrade sibling
-_archive_from_freqtrade/
+# Archive from removed D:\ctengine sibling
+_archive_from_ctengine/
 
 # Local dumps / artifacts
 grid_trades_*
@@ -35,3 +35,14 @@ deploy/*.zip
 **/id_rsa.pub
 **/id_rsa/
 site/deploy/id_rsa/
+
+# Local sync staging / bulky model archives
+_prod_sync/
+archives/
+
+user_data/users.json
+user_data/secrets/
+user_data/tenants/
+user_data/data/
+user_data/logs/
+

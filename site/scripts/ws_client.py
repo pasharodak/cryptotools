@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
 Simple command line client for Testing/debugging
-a Freqtrade bot's message websocket
+a bot message websocket
 
-Should not import anything from freqtrade,
+Should not import anything from ctengine,
 so it can be used as a standalone script.
 """
 

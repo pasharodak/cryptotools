@@ -64,8 +64,6 @@ function updateenv() {
     ${PIP} install --upgrade pip wheel setuptools
     REQUIREMENTS_HYPEROPT=""
     REQUIREMENTS_PLOT=""
-    REQUIREMENTS_FREQAI=""
-    REQUIREMENTS_FREQAI_RL=""
     REQUIREMENTS=requirements.txt
 
     read -p "Do you want to install dependencies for development (Performs a full install with all dependencies) [y/N]? "
@@ -92,31 +90,21 @@ function updateenv() {
             fi
         fi
 
-        read -p "Do you want to install dependencies for optional upstream freqai extras (unused in prod) [y/N]? "
-        if [[ $REPLY =~ ^[Yy]$ ]]
-        then
-            REQUIREMENTS_FREQAI="-r requirements-freqai.txt"
-            read -p "Do you also want dependencies for finder-rl or PyTorch (~700mb additional space required) [y/N]? "
-            if [[ $REPLY =~ ^[Yy]$ ]]
-            then
-                REQUIREMENTS_FREQAI="-r requirements-freqai-rl.txt"
-            fi
-        fi
     fi
 
-    ${PIP} install --upgrade -r ${REQUIREMENTS} ${REQUIREMENTS_HYPEROPT} ${REQUIREMENTS_PLOT} ${REQUIREMENTS_FREQAI} ${REQUIREMENTS_FREQAI_RL}
+    ${PIP} install --upgrade -r ${REQUIREMENTS} ${REQUIREMENTS_HYPEROPT} ${REQUIREMENTS_PLOT} 
     if [ $? -ne 0 ]; then
         echo "Failed installing dependencies"
         exit 1
     fi
     ${PIP} install -e .
     if [ $? -ne 0 ]; then
-        echo "Failed installing Freqtrade"
+        echo "Failed installing CryptoTools dependencies"
         exit 1
     fi
 
     echo "Installing freqUI"
-    freqtrade install-ui
+    ctengine install-ui
 
     echo "pip install completed"
     echo
@@ -236,7 +224,7 @@ function reset() {
 }
 
 function config() {
-    echo_block "Please use 'freqtrade new-config -c user_data/config.json' to generate a new configuration file."
+    echo_block "Please use the bot CLI 'ctengine new-config -c user_data/config.json' to generate a new configuration file."
 }
 
 function install() {
@@ -262,9 +250,9 @@ function install() {
     reset
     config
     echo_block "Run the bot !"
-    echo "You can now use the bot by executing 'source .venv/bin/activate; freqtrade <subcommand>'."
-    echo "You can see the list of available bot sub-commands by executing 'source .venv/bin/activate; freqtrade --help'."
-    echo "You verify that freqtrade is installed successfully by running 'source .venv/bin/activate; freqtrade --version'."
+    echo "You can now use the bot by executing 'source .venv/bin/activate; ctengine <subcommand>'."
+    echo "You can see the list of available bot sub-commands by executing 'source .venv/bin/activate; ctengine --help'."
+    echo "You verify that ctengine is installed successfully by running 'source .venv/bin/activate; ctengine --version'."
 }
 
 function plot() {
@@ -274,7 +262,7 @@ function plot() {
 
 function help() {
     echo "usage:"
-    echo "	-i,--install    Install freqtrade from scratch"
+    echo "	-i,--install    Install ctengine from scratch"
     echo "	-u,--update     Command git pull to update."
     echo "	-r,--reset      Hard reset your develop/stable branch."
     echo "	-c,--config     Easy config generator (Will override your existing file)."

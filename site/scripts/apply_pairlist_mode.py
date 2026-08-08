@@ -226,7 +226,7 @@ def main() -> int:
     parser.add_argument("--api-pass", default="")
     args = parser.parse_args()
 
-    api_user = args.api_user or __import__("os").environ.get("FREQUI_USERNAME", "freqtrader")
+    api_user = args.api_user or __import__("os").environ.get("FREQUI_USERNAME", "cryptotools")
     api_pass = args.api_pass or __import__("os").environ.get("FREQUI_PASSWORD", "")
 
     if args.mode == "all_volume":

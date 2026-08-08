@@ -4,7 +4,7 @@ $Timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
 
 $Global:LogFilePath = Join-Path ([System.IO.Path]::GetTempPath()) "script_log_$Timestamp.txt"
 
-$RequirementFiles = @("requirements.txt", "requirements-dev.txt", "requirements-hyperopt.txt", "requirements-freqai.txt", "requirements-freqai-rl.txt", "requirements-plot.txt")
+$RequirementFiles = @("requirements.txt", "requirements-dev.txt", "requirements-hyperopt.txt", "requirements-plot.txt")
 $VenvName = ".venv"
 $VenvDir = Join-Path $PSScriptRoot $VenvName
 
@@ -267,16 +267,16 @@ function Main {
     & pip install @PipInstallArguments # Use array splatting to pass arguments correctly
   }
 
-  # Install freqtrade from setup using the virtual environment's Python
-  Write-Log "Installing freqtrade from setup..."
+  # Install ctengine from setup using the virtual environment's Python
+  Write-Log "Installing ctengine from setup..."
   pip install -e . 2>&1 | Out-File $LogFilePath -Append
   if ($LASTEXITCODE -ne 0) {
-    Write-Log "Failed to install freqtrade." -Level 'ERROR'
+    Write-Log "Failed to install ctengine." -Level 'ERROR'
     Exit-Script -exitCode 1
   }
 
   Write-Log "Installing freqUI..."
-  python freqtrade install-ui 2>&1 | Out-File $LogFilePath -Append
+  python ctengine install-ui 2>&1 | Out-File $LogFilePath -Append
   if ($LASTEXITCODE -ne 0) {
     Write-Log "Failed to install freqUI." -Level 'ERROR'
     Exit-Script -exitCode 1

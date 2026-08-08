@@ -34,7 +34,7 @@ _STATE_LOCK = threading.Lock()
 def _auth_header() -> str:
     import base64
 
-    user = os.environ.get("FREQUI_USERNAME", "freqtrader")
+    user = os.environ.get("FREQUI_USERNAME", "cryptotools")
     password = os.environ.get("FREQUI_PASSWORD", "")
     return "Basic " + base64.b64encode(f"{user}:{password}".encode()).decode()
 

@@ -132,7 +132,7 @@ def run_export_month(
     scan_workers: int | None = None,
 ) -> tuple[str, list[dict], dict]:
     start_ms, end_ms, label = month_range(year, month)
-    datadir = ROOT / "simulation/data/freqtrade"
+    datadir = ROOT / "simulation/data/ctengine"
     mgr = BotSessionManager(ROOT)
     mgr._get_ml_gate().set_enabled(False)
     mgr.init_live_session(

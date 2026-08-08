@@ -54,7 +54,7 @@ def download_period(timerange: str, *, skip_1s: bool = False) -> int:
 
 def run_prgon(timerange: str, workers: int = WORKERS) -> dict:
     start_ms, end_ms = ms_range(timerange)
-    datadir = ROOT / "simulation/data/freqtrade"
+    datadir = ROOT / "simulation/data/ctengine"
     pairs = pool_pairs(ROOT)
     mgr = BotSessionManager(ROOT)
     print(f"=== prgon {timerange} · {len(pairs)} pairs · {len(mgr.enabled_scenario_ids())} bots ===")

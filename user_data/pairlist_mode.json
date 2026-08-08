@@ -1,0 +1,163 @@
+{
+    "mode": "ml_training",
+    "backup": {
+        "finder": {
+            "pairlists": [
+                {
+                    "method": "VolumePairList",
+                    "number_assets": 200,
+                    "sort_key": "quoteVolume",
+                    "min_value": 1000000,
+                    "refresh_period": 86400
+                },
+                {
+                    "method": "AgeFilter",
+                    "min_days_listed": 7
+                },
+                {
+                    "method": "PrecisionFilter"
+                },
+                {
+                    "method": "PriceFilter",
+                    "low_price_ratio": 0.01,
+                    "min_price": 1e-07
+                }
+            ],
+            "pair_whitelist": [],
+            "pair_blacklist": [
+                "AAVE/USDT:USDT",
+                "AERO/USDT:USDT",
+                "BEAT/USDT:USDT",
+                "BEL/USDT:USDT",
+                "BILL/USDT:USDT",
+                "BLEND/USDT:USDT",
+                "BLESS/USDT:USDT",
+                "ESPORTS/USDT:USDT",
+                "FARTCOIN/USDT:USDT",
+                "FOLKS/USDT:USDT",
+                "GRASS/USDT:USDT",
+                "H/USDT:USDT",
+                "JUP/USDT:USDT",
+                "LIT/USDT:USDT",
+                "LUMIA/USDT:USDT",
+                "MAVIA/USDT:USDT",
+                "OPG/USDT:USDT",
+                "RAVE/USDT:USDT",
+                "RESOLV/USDT:USDT",
+                "SAHARA/USDT:USDT",
+                "SKHYNIX/USDT:USDT",
+                "SLX/USDT:USDT",
+                "SPK/USDT:USDT",
+                "TNSR/USDT:USDT",
+                "UB/USDT:USDT",
+                "XPL/USDT:USDT"
+            ]
+        },
+        "strategy": {
+            "pairlists": [
+                {
+                    "method": "VolumePairList",
+                    "number_assets": 200,
+                    "sort_key": "quoteVolume",
+                    "min_value": 1000000,
+                    "refresh_period": 86400
+                },
+                {
+                    "method": "AgeFilter",
+                    "min_days_listed": 7
+                },
+                {
+                    "method": "PrecisionFilter"
+                },
+                {
+                    "method": "PriceFilter",
+                    "low_price_ratio": 0.01,
+                    "min_price": 1e-07
+                }
+            ],
+            "pair_whitelist": [],
+            "pair_blacklist": [
+                "AAVE/USDT:USDT",
+                "AERO/USDT:USDT",
+                "BEAT/USDT:USDT",
+                "BEL/USDT:USDT",
+                "BILL/USDT:USDT",
+                "BLEND/USDT:USDT",
+                "BLESS/USDT:USDT",
+                "ESPORTS/USDT:USDT",
+                "FARTCOIN/USDT:USDT",
+                "FOLKS/USDT:USDT",
+                "GRASS/USDT:USDT",
+                "H/USDT:USDT",
+                "JUP/USDT:USDT",
+                "LIT/USDT:USDT",
+                "LUMIA/USDT:USDT",
+                "MAVIA/USDT:USDT",
+                "OPG/USDT:USDT",
+                "RAVE/USDT:USDT",
+                "RESOLV/USDT:USDT",
+                "SAHARA/USDT:USDT",
+                "SKHYNIX/USDT:USDT",
+                "SLX/USDT:USDT",
+                "SPK/USDT:USDT",
+                "TNSR/USDT:USDT",
+                "UB/USDT:USDT",
+                "XPL/USDT:USDT"
+            ]
+        },
+        "grid": {
+            "pairlists": [
+                {
+                    "method": "VolumePairList",
+                    "number_assets": 200,
+                    "sort_key": "quoteVolume",
+                    "min_value": 1000000,
+                    "refresh_period": 86400
+                },
+                {
+                    "method": "AgeFilter",
+                    "min_days_listed": 7
+                },
+                {
+                    "method": "PrecisionFilter"
+                },
+                {
+                    "method": "PriceFilter",
+                    "low_price_ratio": 0.01,
+                    "min_price": 1e-07
+                }
+            ],
+            "pair_whitelist": [],
+            "pair_blacklist": [
+                "AAVE/USDT:USDT",
+                "AERO/USDT:USDT",
+                "BEAT/USDT:USDT",
+                "BEL/USDT:USDT",
+                "BILL/USDT:USDT",
+                "BLEND/USDT:USDT",
+                "BLESS/USDT:USDT",
+                "ESPORTS/USDT:USDT",
+                "FARTCOIN/USDT:USDT",
+                "FOLKS/USDT:USDT",
+                "GRASS/USDT:USDT",
+                "H/USDT:USDT",
+                "JUP/USDT:USDT",
+                "LIT/USDT:USDT",
+                "LUMIA/USDT:USDT",
+                "MAVIA/USDT:USDT",
+                "OPG/USDT:USDT",
+                "RAVE/USDT:USDT",
+                "RESOLV/USDT:USDT",
+                "SAHARA/USDT:USDT",
+                "SKHYNIX/USDT:USDT",
+                "SLX/USDT:USDT",
+                "SPK/USDT:USDT",
+                "TNSR/USDT:USDT",
+                "UB/USDT:USDT",
+                "XPL/USDT:USDT"
+            ]
+        }
+    },
+    "updated_at": "2026-07-06T19:15:28.166249+00:00",
+    "ml_training_pairs": 118
+}

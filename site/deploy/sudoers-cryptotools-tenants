@@ -1,0 +1,2 @@
+# Allow cryptotools to manage tenant bot units via wrapper only.
+cryptotools ALL=(root) NOPASSWD: /home/cryptotools/app/deploy/tenant-systemctl.sh

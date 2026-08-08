@@ -107,11 +107,11 @@ def run_backtest(scenario: dict, pairs: list[str], cfg: dict) -> dict[str, Any]:
     run_cfg = r / "simulation" / "data" / "runtime" / f"{scenario['id']}_config.json"
     patch_whitelist(config_src, pairs, run_cfg)
 
-    datadir = r / cfg["freqtrade_datadir"]
+    datadir = r / cfg["ctengine_datadir"]
     results = r / cfg["results_dir"] / scenario["id"]
     results.mkdir(parents=True, exist_ok=True)
 
-    ft = r / ".venv" / "Scripts" / "freqtrade.exe"
+    ft = r / ".venv" / "Scripts" / "ctbot.exe"
     timerange = cfg.get("timerange", "20250618-20250626")
     balance = str(cfg.get("starting_balance_usdt", 100))
 

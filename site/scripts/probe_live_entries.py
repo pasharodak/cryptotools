@@ -81,9 +81,9 @@ STRATEGY_MAP = {
 
 
 def _auth() -> str:
-    user = os.environ.get("FREQUI_USERNAME", "freqtrader")
+    user = os.environ.get("FREQUI_USERNAME", "cryptotools")
     pw = os.environ.get("FREQUI_PASSWORD", "")
-    env = Path(os.environ.get("FT_ENV", "/home/freqtrade/.freqtrade.env"))
+    env = Path(os.environ.get("CT_ENV", "/home/cryptotools/.cryptotools.env"))
     if env.is_file() and not pw:
         for line in env.read_text(encoding="utf-8").splitlines():
             if line.startswith("FREQUI_PASSWORD="):

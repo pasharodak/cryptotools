@@ -41,10 +41,10 @@ def extension_pairs(root: Path) -> list[str]:
 
 
 def download_pairs(root: Path, pairs: list[str], timerange: str) -> int:
-    datadir = root / "simulation/data/freqtrade"
+    datadir = root / "simulation/data/ctengine"
     runtime = root / "simulation/data/runtime/download_extension_pairs.json"
     patch_whitelist(root, "simulation/config/backtest_lite_base.json", pairs, runtime)
-    ft = root / ".venv/Scripts/freqtrade.exe"
+    ft = root / ".venv/Scripts/ctbot.exe"
     print(f"=== 5m download {timerange} · {len(pairs)} extension pairs ===")
     cmd = [
         str(ft),
@@ -155,7 +155,7 @@ def configure_gate(mgr: BotSessionManager, gate_mode: str) -> None:
 
 def run_month(pairs: list[str], year: int, month: int, workers: int, gate_mode: str) -> dict:
     start_ms, end_ms, label = month_range(year, month)
-    datadir = ROOT / "simulation/data/freqtrade"
+    datadir = ROOT / "simulation/data/ctengine"
     mgr = BotSessionManager(ROOT)
     configure_gate(mgr, gate_mode)
 

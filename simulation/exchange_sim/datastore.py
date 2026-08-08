@@ -1,4 +1,4 @@
-"""Load historical OHLCV from Freqtrade datadir (feather/json) or download via ccxt."""
+"""Load historical OHLCV from OHLCV datadir (feather/json) or download via ccxt."""
 from __future__ import annotations
 
 import json
@@ -10,7 +10,7 @@ import pandas as pd
 
 
 class HistoricalDatastore:
-    """Reads Freqtrade candle files and serves slices by simulated clock."""
+    """Reads candle files and serves slices by simulated clock."""
 
     def __init__(self, datadir: Path, exchange: str = "bybit", candle_type: str = "futures"):
         self.datadir = Path(datadir)
@@ -19,7 +19,7 @@ class HistoricalDatastore:
         self._cache: dict[tuple[str, str], pd.DataFrame] = {}
 
     def _candle_search_dirs(self) -> list[Path]:
-        """Freqtrade may store futures OHLCV under futures/ or exchange name."""
+        """Store may use futures OHLCV under futures/ or exchange name."""
         candidates = [
             self.datadir / "futures",
             self.datadir / self.exchange,
@@ -40,7 +40,7 @@ class HistoricalDatastore:
         hits like ETHBTC when looking up BTC.
         """
         safe = pair.replace("/", "_").replace(":", "_")
-        # Freqtrade futures naming: BASE_QUOTE_SETTLE-tf-candletype.feather
+        # Futures naming: BASE_QUOTE_SETTLE-tf-candletype.feather
         exact_names = {
             f"{pair}-{timeframe}-{self.candle_type}.feather",
             f"{pair.replace('/', '')}-{timeframe}-{self.candle_type}.feather",

@@ -1,29 +1,28 @@
 ﻿# Настройка VPS — CryptoTools (Bybit)
 
-Стек: **3 Freqtrade-бота** + **pair-config** + **custom-ui** + **ML entry-gate**.  
+Стек: **3 бота** + **pair-config** + **custom-ui** + **ML entry-gate**.  
 ОС: Ubuntu 22.04/24.04/26.04 LTS. Рекомендуется ≥4 CPU / 6 GB RAM.
 
-Корень на сервере: `/home/freqtrade/freqtrade` (= содержимое `site/`).
+Корень приложения на сервере: `/home/cryptotools/app` (= содержимое `site/`).  
+Linux-пользователь: `cryptotools`. Секреты: `/home/cryptotools/.cryptotools.env`.
 
 ---
 
 ## Сервисы
 
-| systemd | Роль | Порт API |
-|---------|------|----------|
-| `freqtrade-strategy` | `MultiStrategyRouter` | 8081 |
-| `freqtrade-grid` | `VolatilityGridStrategy` | 8082 |
-| `freqtrade` | `TradeFinderStrategy` (ML Finder) | 8080 |
+| systemd unit | Роль | Порт API |
+|--------------|------|----------|
+| `cryptotools-strategy` | Strategy (`MultiStrategyRouter`) | 8081 |
+| `cryptotools-grid` | Grid (`VolatilityGridStrategy`) | 8082 |
+| `cryptotools-finder` | ML Finder (`TradeFinderStrategy`, обычно off) | 8080 |
 | `pair-config` | whitelist / лимиты / UI API | 8090 |
 | nginx | UI + прокси `:8443` | — |
 
-UI API:
-- `/api/finder/` → :8080 (legacy alias `/api/freqai/` тоже работает)
-- `/api/strategy/` → :8081
-- `/api/grid/` → :8082
-- `/api/pair-config/` → :8090
+UI API: `/api/finder/`, `/api/strategy/`, `/api/grid/`, `/api/pair-config/`.
 
-Strategy risk (актуально): **SL −15%**, **ROI +5%**.
+Strategy risk: **SL −15%**, **ROI +5%**.
+
+Первый реbrand с legacy: `site/scripts/deploy_cutover_rebrand.ps1`.
 
 ---
 
@@ -34,47 +33,34 @@ cd D:\cryptotools\site\scripts
 .\deploy_prod_ml.ps1
 ```
 
-Секреты: `site/.env` → на VPS `~/.freqtrade.env`.  
+Секреты: `site/.env` → на VPS `~/.cryptotools.env`.  
 SSH-ключ: `site/deploy/id_rsa/`.
 
-После смены nginx/UI:
-
 ```bash
-sudo cp /home/freqtrade/freqtrade/deploy/nginx-freqtrade.conf /etc/nginx/sites-available/freqtrade
+sudo cp /home/cryptotools/app/deploy/nginx-cryptotools.conf /etc/nginx/sites-available/cryptotools
 sudo nginx -t && sudo systemctl reload nginx
-sudo systemctl restart pair-config freqtrade-strategy freqtrade-grid
-# Finder по желанию:
-# sudo systemctl start freqtrade
+sudo systemctl restart pair-config cryptotools-strategy cryptotools-grid
 ```
-
-Юниты: `site/deploy/*.service`, таймеры сканеров, `disable-finder-bot.sh` если Finder выключен.
 
 ---
 
-## Базовая безопасность (новый VPS)
+## Новый VPS (кратко)
 
 ```bash
 apt update && apt upgrade -y
-adduser freqtrade
-usermod -aG sudo freqtrade
-ufw allow OpenSSH
-ufw allow 8443/tcp
-ufw enable
-timedatectl set-timezone UTC
-timedatectl set-ntp true
+adduser cryptotools && usermod -aG sudo cryptotools
+ufw allow OpenSSH && ufw allow 8443/tcp && ufw enable
+timedatectl set-timezone UTC && timedatectl set-ntp true
 ```
 
-Python venv и зависимости — через `deploy_prod_ml.ps1` / `SERVER` скрипты в `deploy/`.  
-Классический upstream FreqAI **не используется** (не нужен `pip install -e ".[freqai]"` для прода).
+Дальше — `deploy_prod_ml.ps1` / скрипты в `deploy/`.
 
 ---
 
 ## Проверка
 
 ```bash
-systemctl is-active freqtrade-strategy freqtrade-grid pair-config
+systemctl is-active cryptotools-strategy cryptotools-grid pair-config
 curl -sk https://127.0.0.1:8443/api/strategy/ping
 curl -sk https://127.0.0.1:8443/api/pair-config/state
 ```
-
-Подробности продукта: [`README.md`](README.md) в корне `cryptotools`, UI: `custom-ui/`.

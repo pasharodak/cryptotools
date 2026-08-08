@@ -13,8 +13,8 @@ SEED_VERSION = 7
 CATEGORY_LABELS = {
     "telegram_bot": "Telegram-бот (Kronos)",
     "finder": "ML Finder",
-    "strategy": "Стратегии Freqtrade",
-    "grid_ft": "Grid Freqtrade",
+    "strategy": "Стратегии",
+    "grid_ft": "Grid",
     "ranging_scanner": "Сканер боковика",
     "strategy_scanner": "Сканер пар стратегий",
     "bybit_grid": "Bybit Grid",
@@ -198,7 +198,7 @@ def record_config_diff(old_cfg: dict[str, Any], new_cfg: dict[str, Any], *, sour
 
 
 def record_max_open_trades(bot: str, old: int, new: int) -> None:
-    bot_labels = {"finder": "ML Finder", "strategy": "Стратегии", "grid": "Grid Freqtrade"}
+    bot_labels = {"finder": "ML Finder", "strategy": "Стратегии", "grid": "Grid"}
     label = f"Макс. сделок ({bot_labels.get(bot, bot)})"
     append_entry(
         field="max_open_trades",
@@ -210,7 +210,7 @@ def record_max_open_trades(bot: str, old: int, new: int) -> None:
 
 
 def record_stake_amount(bot: str, old: float, new: float) -> None:
-    bot_labels = {"grid": "Grid Freqtrade", "strategy": "Стратегии"}
+    bot_labels = {"grid": "Grid", "strategy": "Стратегии"}
     label = f"Stake USDT ({bot_labels.get(bot, bot)})"
     append_entry(
         field="stake_amount",
@@ -244,7 +244,7 @@ def record_ml_gate_confidence(old: float, new: float, *, source: str = "deploy")
     for cat, label in (
         ("finder", "ML Finder"),
         ("strategy", "Стратегии"),
-        ("grid_ft", "Grid Freqtrade"),
+        ("grid_ft", "Grid"),
     ):
         append_entry(
             field="ml_gate_min_confidence",
@@ -352,9 +352,9 @@ def _seed_rows() -> list[tuple[str, str, str, Any, Any, str | None]]:
          "Исправлена синхронизация времени с Bybit (ошибка 10002)"),
         ("2026-06-21T15:00:00+00:00", "telegram_bot", "_note", None, None,
          "Исправлен минимум ордера futures (110094), расчёт qty с minNotional"),
-        # --- Freqtrade / VPS ---
+        # --- VPS ---
         ("2026-06-22T10:00:00+00:00", "finder", "_note", None, None,
-         "Развёрнут Freqtrade на VPS 77.222.35.209, Bybit futures dry-run/live"),
+         "Развёрнут CryptoTools на VPS 77.222.35.209, Bybit futures dry-run/live"),
         ("2026-06-22T12:00:00+00:00", "finder", "max_open_trades", None, "3",
          "Бот ML Finder (legacy)"),
         ("2026-06-22T12:00:00+00:00", "strategy", "max_open_trades", None, "2",
@@ -368,7 +368,7 @@ def _seed_rows() -> list[tuple[str, str, str, Any, Any, str | None]]:
         ("2026-06-23T11:00:00+00:00", "strategy", "_note", None, None,
          "Добавлены стратегии: Supertrend, MACD, TripleEMA, BB+RSI, ADX; мульти-включение"),
         ("2026-06-23T14:00:00+00:00", "grid_ft", "max_open_trades", None, "2",
-         "Третий бот: VolatilityGridStrategy (Freqtrade Grid)"),
+         "Третий бот: VolatilityGridStrategy (Grid)"),
         ("2026-06-23T16:00:00+00:00", "strategy_scanner", "_note", None, None,
          "Сканер пар под включённые стратегии (150 ликвидных, timer на VPS)"),
         # --- Ranging scanner v3 ---
@@ -441,7 +441,7 @@ def _seed_rows() -> list[tuple[str, str, str, Any, Any, str | None]]:
         ("2026-07-04T21:15:00+00:00", "finder", "_note", None, None,
          "ML Finder (TradeFinderStrategy + XGBoost scanner) включён на VPS вместо ML Finder · pnl gate block_loss"),
         ("2026-07-04T21:15:00+00:00", "ui_infra", "_note", None, None,
-         "Панель CriptoTools: ML Finder → ML Finder, сервис freqtrade снова активен"),
+         "Панель CriptoTools: ML Finder → ML Finder, сервис Finder снова активен"),
         ("2026-07-05T12:00:00+00:00", "finder", "ml_gate_min_confidence", "80%", "60%",
          "profit_only — все входы ML Finder"),
         ("2026-07-05T12:00:00+00:00", "strategy", "ml_gate_min_confidence", "80%", "60%",

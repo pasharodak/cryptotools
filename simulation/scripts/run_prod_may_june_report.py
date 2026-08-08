@@ -105,7 +105,7 @@ def main() -> int:
         "period": "2026-05 — 2026-06",
         "bots": sorted(enabled),
         "ml_gate": ml_gate,
-        "excluded": ["live_freqai", "TradeFinderStrategy"],
+        "excluded": ["live_legacy_finder", "TradeFinderStrategy"],
         "months": month_rows,
         "bot_totals": bot_totals,
         "portfolio": {

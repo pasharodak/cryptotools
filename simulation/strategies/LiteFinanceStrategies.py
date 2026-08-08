@@ -4,8 +4,8 @@
 from datetime import UTC, datetime, timedelta
 
 import talib.abstract as ta
-from freqtrade.persistence import Trade
-from freqtrade.strategy import IStrategy
+from ctengine.persistence import Trade
+from ctengine.strategy import IStrategy
 from pandas import DataFrame
 from technical import qtpylib
 

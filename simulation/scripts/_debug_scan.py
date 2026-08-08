@@ -12,7 +12,7 @@ from simulation.exchange_sim.datastore import HistoricalDatastore  # noqa: E402
 from simulation.exchange_sim.scan_replay import grid_scan_at, load_scan_configs, resample_ohlcv, slice_at  # noqa: E402
 
 pairs = json.loads((ROOT / "simulation/config/manifest.json").read_text())["player_pairs"]
-ds = HistoricalDatastore(ROOT / "simulation/data/freqtrade")
+ds = HistoricalDatastore(ROOT / "simulation/data/ctengine")
 cfg, _, _ = load_scan_configs(ROOT)
 bl = set()
 

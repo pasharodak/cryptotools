@@ -90,7 +90,7 @@ def avg_market(rows: list[dict], field: str) -> float | None:
 def run_grid_backtest(pairs: list[str], timerange: str, strategy: str, config: str) -> dict[str, Any]:
     from simulation.exchange_sim.bot_session import parse_backtest_pnl, patch_whitelist
 
-    ft = ROOT / ".venv/Scripts/freqtrade.exe"
+    ft = ROOT / ".venv/Scripts/ctbot.exe"
     runtime = ROOT / "simulation/data/runtime/grid_pattern_test.json"
     cfg = patch_whitelist(ROOT, config, pairs, runtime)
     cfg["pairlists"] = [{"method": "StaticPairList"}]
@@ -113,7 +113,7 @@ def run_grid_backtest(pairs: list[str], timerange: str, strategy: str, config: s
         "--strategy-path",
         strat_path,
         "--datadir",
-        str(ROOT / "simulation/data/freqtrade"),
+        str(ROOT / "simulation/data/ctengine"),
         "--timerange",
         timerange,
         "--timeframe",

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -15,26 +16,64 @@ if str(_ROOT) not in sys.path:
 from pandas import DataFrame
 
 import talib.abstract as ta
-from freqtrade.persistence import Trade
-from freqtrade.strategy import IStrategy
+from ctengine.persistence import Trade
+from ctengine.strategy import IStrategy
 
+from AdxDiCrossStrategy import AdxDiCrossStrategy
+from AdxMacdVolComboStrategy import AdxMacdVolComboStrategy
 from AdxMomentumStrategy import AdxMomentumStrategy
+from AltVolumeBreakoutStrategy import AltVolumeBreakoutStrategy
+from AroonCrossStrategy import AroonCrossStrategy
+from AtrChannelBreakoutStrategy import AtrChannelBreakoutStrategy
+from AwesomeOscStrategy import AwesomeOscStrategy
+from BbSqueezeBreakoutStrategy import BbSqueezeBreakoutStrategy
 from BollingerRsiStrategy import BollingerRsiStrategy
+from ChaikinOscStrategy import ChaikinOscStrategy
+from CmfZeroCrossStrategy import CmfZeroCrossStrategy
 from CriptoPairsStrategy import CriptoPairsStrategy
+from DonchianAdxVolComboStrategy import DonchianAdxVolComboStrategy
+from DonchianBreakoutStrategy import DonchianBreakoutStrategy
+from ElderRayStrategy import ElderRayStrategy
+from EmaRsiAtrComboStrategy import EmaRsiAtrComboStrategy
+from EngulfingTrendStrategy import EngulfingTrendStrategy
 from FibPullbackStrategy import FibPullbackStrategy
+from HeikinAshiFlipStrategy import HeikinAshiFlipStrategy
+from HmaPpoAtrComboStrategy import HmaPpoAtrComboStrategy
+from IchimokuTkCrossStrategy import IchimokuTkCrossStrategy
+from KeltnerBreakoutStrategy import KeltnerBreakoutStrategy
+from KeltnerStochVolComboStrategy import KeltnerStochVolComboStrategy
 from LiteIntradayStrategy import LiteIntradayStrategy
 from LiteRangeStrategy import LiteRangeStrategy
 from MacdEmaStrategy import MacdEmaStrategy
+from MfiReclaimStrategy import MfiReclaimStrategy
+from ObvEmaCrossStrategy import ObvEmaCrossStrategy
+from PpoSignalStrategy import PpoSignalStrategy
+from PsaraFlipStrategy import PsaraFlipStrategy
+from RocMomentumStrategy import RocMomentumStrategy
+from ScalpEmaCrossStrategy import ScalpEmaCrossStrategy
+from ScalpMacdHistStrategy import ScalpMacdHistStrategy
+from SupertrendRsiObvComboStrategy import SupertrendRsiObvComboStrategy
 from SupertrendStrategy import SupertrendStrategy
+from TemaCrossStrategy import TemaCrossStrategy
 from TripleEmaStrategy import TripleEmaStrategy
+from TrixSignalStrategy import TrixSignalStrategy
+from VortexCrossStrategy import VortexCrossStrategy
+from WilliamsRReclaimStrategy import WilliamsRReclaimStrategy
 
 _USER_DATA = Path(__file__).resolve().parent.parent
 if str(_USER_DATA) not in sys.path:
     sys.path.insert(0, str(_USER_DATA))
-from ml.gate import allow_trade_entry, pop_entry_ml, save_ml_to_trade  # noqa: E402
+from ml.gate import allow_trade_entry, persist_entry_ml  # noqa: E402
 from _sim_live import PROD_STRATEGY_MINIMAL_ROI, PROD_STRATEGY_STOPLOSS  # noqa: E402
 
-ENABLED_FILE = Path(__file__).resolve().parent.parent / "enabled_strategies.json"
+from ctengine.strategy import stoploss_from_open
+
+ENABLED_FILE = Path(
+    os.environ.get(
+        "CT_ENABLED_STRATEGIES",
+        str(Path(__file__).resolve().parent.parent / "enabled_strategies.json"),
+    )
+)
 DUAL_HEDGE_FILE = Path(__file__).resolve().parent.parent / "dual_hedge.json"
 HEDGE_TAG_SUFFIX = ":hedge"
 INV_TAG_SUFFIX = ":inv"
@@ -49,9 +88,78 @@ STRATEGY_REGISTRY: dict[str, type[IStrategy]] = {
     "AdxMomentumStrategy": AdxMomentumStrategy,
     "LiteIntradayStrategy": LiteIntradayStrategy,
     "LiteRangeStrategy": LiteRangeStrategy,
+    "AltVolumeBreakoutStrategy": AltVolumeBreakoutStrategy,
+    "PsaraFlipStrategy": PsaraFlipStrategy,
+    "AtrChannelBreakoutStrategy": AtrChannelBreakoutStrategy,
+    "CmfZeroCrossStrategy": CmfZeroCrossStrategy,
+    "ScalpEmaCrossStrategy": ScalpEmaCrossStrategy,
+    "ChaikinOscStrategy": ChaikinOscStrategy,
+    "DonchianBreakoutStrategy": DonchianBreakoutStrategy,
+    "PpoSignalStrategy": PpoSignalStrategy,
+    "DonchianAdxVolComboStrategy": DonchianAdxVolComboStrategy,
+    "ObvEmaCrossStrategy": ObvEmaCrossStrategy,
+    "ElderRayStrategy": ElderRayStrategy,
+    "ScalpMacdHistStrategy": ScalpMacdHistStrategy,
+    "KeltnerBreakoutStrategy": KeltnerBreakoutStrategy,
+    "HeikinAshiFlipStrategy": HeikinAshiFlipStrategy,
+    "VortexCrossStrategy": VortexCrossStrategy,
+    "AwesomeOscStrategy": AwesomeOscStrategy,
+    "KeltnerStochVolComboStrategy": KeltnerStochVolComboStrategy,
+    "TemaCrossStrategy": TemaCrossStrategy,
+    "TrixSignalStrategy": TrixSignalStrategy,
+    "RocMomentumStrategy": RocMomentumStrategy,
+    "HmaPpoAtrComboStrategy": HmaPpoAtrComboStrategy,
+    "WilliamsRReclaimStrategy": WilliamsRReclaimStrategy,
+    "BbSqueezeBreakoutStrategy": BbSqueezeBreakoutStrategy,
+    "EmaRsiAtrComboStrategy": EmaRsiAtrComboStrategy,
+    "AroonCrossStrategy": AroonCrossStrategy,
+    "AdxMacdVolComboStrategy": AdxMacdVolComboStrategy,
+    "EngulfingTrendStrategy": EngulfingTrendStrategy,
+    "AdxDiCrossStrategy": AdxDiCrossStrategy,
+    "MfiReclaimStrategy": MfiReclaimStrategy,
+    "IchimokuTkCrossStrategy": IchimokuTkCrossStrategy,
+    "SupertrendRsiObvComboStrategy": SupertrendRsiObvComboStrategy,
 }
 
-# ADX cap applies only to mean-reversion entries (not trend/momentum/intraday).
+# Per-tag risk for ML pack — SL/ROI as in player_scenarios (sim test).
+TAG_RISK: dict[str, dict] = {
+    "AltVolumeBreakoutStrategy": {
+        "stoploss": -0.015,
+        "tp": 0.012,
+        "minimal_roi": {"0": 0.012, "25": 0.006, "75": 0.0},
+    },
+    "PsaraFlipStrategy": {"stoploss": -0.02, "tp": 0.014, "minimal_roi": {"0": 0.014, "50": 0.007, "150": 0.0}},
+    "AtrChannelBreakoutStrategy": {"stoploss": -0.02, "tp": 0.014, "minimal_roi": {"0": 0.014, "60": 0.007, "180": 0.0}},
+    "CmfZeroCrossStrategy": {"stoploss": -0.017, "tp": 0.011, "minimal_roi": {"0": 0.011, "45": 0.0055, "130": 0.0}},
+    "ScalpEmaCrossStrategy": {"stoploss": -0.01, "tp": 0.008, "minimal_roi": {"0": 0.008, "20": 0.004, "60": 0.0}},
+    "ChaikinOscStrategy": {"stoploss": -0.017, "tp": 0.011, "minimal_roi": {"0": 0.011, "45": 0.0055, "130": 0.0}},
+    "DonchianBreakoutStrategy": {"stoploss": -0.025, "tp": 0.018, "minimal_roi": {"0": 0.018, "90": 0.009, "240": 0.0}},
+    "PpoSignalStrategy": {"stoploss": -0.016, "tp": 0.01, "minimal_roi": {"0": 0.01, "40": 0.005, "120": 0.0}},
+    "DonchianAdxVolComboStrategy": {"stoploss": -0.022, "tp": 0.018, "minimal_roi": {"0": 0.018, "70": 0.009, "200": 0.0}},
+    "ObvEmaCrossStrategy": {"stoploss": -0.018, "tp": 0.012, "minimal_roi": {"0": 0.012, "55": 0.006, "160": 0.0}},
+    "ElderRayStrategy": {"stoploss": -0.017, "tp": 0.011, "minimal_roi": {"0": 0.011, "45": 0.0055, "130": 0.0}},
+    "ScalpMacdHistStrategy": {"stoploss": -0.012, "tp": 0.009, "minimal_roi": {"0": 0.009, "30": 0.0045, "90": 0.0}},
+    "KeltnerBreakoutStrategy": {"stoploss": -0.02, "tp": 0.015, "minimal_roi": {"0": 0.015, "60": 0.008, "180": 0.0}},
+    "HeikinAshiFlipStrategy": {"stoploss": -0.016, "tp": 0.011, "minimal_roi": {"0": 0.011, "45": 0.0055, "120": 0.0}},
+    "VortexCrossStrategy": {"stoploss": -0.019, "tp": 0.013, "minimal_roi": {"0": 0.013, "55": 0.0065, "160": 0.0}},
+    "AwesomeOscStrategy": {"stoploss": -0.017, "tp": 0.011, "minimal_roi": {"0": 0.011, "45": 0.0055, "130": 0.0}},
+    "KeltnerStochVolComboStrategy": {"stoploss": -0.02, "tp": 0.015, "minimal_roi": {"0": 0.015, "55": 0.0075, "160": 0.0}},
+    "TemaCrossStrategy": {"stoploss": -0.018, "tp": 0.012, "minimal_roi": {"0": 0.012, "50": 0.006, "150": 0.0}},
+    "TrixSignalStrategy": {"stoploss": -0.017, "tp": 0.011, "minimal_roi": {"0": 0.011, "45": 0.0055, "130": 0.0}},
+    "RocMomentumStrategy": {"stoploss": -0.016, "tp": 0.01, "minimal_roi": {"0": 0.01, "40": 0.005, "120": 0.0}},
+    "HmaPpoAtrComboStrategy": {"stoploss": -0.018, "tp": 0.014, "minimal_roi": {"0": 0.014, "50": 0.007, "150": 0.0}},
+    "WilliamsRReclaimStrategy": {"stoploss": -0.015, "tp": 0.01, "minimal_roi": {"0": 0.01, "40": 0.005, "100": 0.0}},
+    "BbSqueezeBreakoutStrategy": {"stoploss": -0.018, "tp": 0.013, "minimal_roi": {"0": 0.013, "50": 0.006, "150": 0.0}},
+    "EmaRsiAtrComboStrategy": {"stoploss": -0.018, "tp": 0.014, "minimal_roi": {"0": 0.014, "50": 0.007, "150": 0.0}},
+    "AroonCrossStrategy": {"stoploss": -0.018, "tp": 0.012, "minimal_roi": {"0": 0.012, "50": 0.006, "150": 0.0}},
+    "AdxMacdVolComboStrategy": {"stoploss": -0.02, "tp": 0.016, "minimal_roi": {"0": 0.016, "60": 0.008, "180": 0.0}},
+    "EngulfingTrendStrategy": {"stoploss": -0.016, "tp": 0.011, "minimal_roi": {"0": 0.011, "40": 0.0055, "110": 0.0}},
+    "AdxDiCrossStrategy": {"stoploss": -0.02, "tp": 0.014, "minimal_roi": {"0": 0.014, "60": 0.007, "180": 0.0}},
+    "MfiReclaimStrategy": {"stoploss": -0.015, "tp": 0.01, "minimal_roi": {"0": 0.01, "40": 0.005, "110": 0.0}},
+    "IchimokuTkCrossStrategy": {"stoploss": -0.022, "tp": 0.016, "minimal_roi": {"0": 0.016, "80": 0.008, "200": 0.0}},
+    "SupertrendRsiObvComboStrategy": {"stoploss": -0.019, "tp": 0.015, "minimal_roi": {"0": 0.015, "55": 0.0075, "160": 0.0}},
+}
+
 MEAN_REV_ADX_TAGS = frozenset({"BollingerRsiStrategy", "LiteRangeStrategy", "CriptoPairsStrategy"})
 
 SCENARIO_BY_TAG: dict[str, dict[str, str]] = {
@@ -111,6 +219,223 @@ SCENARIO_BY_TAG: dict[str, dict[str, str]] = {
         "strategy": "FibPullbackStrategy",
         "label": "Fib pullback (DCA) (ML Gate)",
     },
+    "AltVolumeBreakoutStrategy": {
+        "scenario_id": "scalp_liq_breakout",
+        "scan_type": "strategy",
+        "group": "scalp_liq",
+        "strategy": "AltVolumeBreakoutStrategy",
+        "label": "Alt volume breakout",
+    },
+    "PsaraFlipStrategy": {
+        "scenario_id": "new_psar",
+        "scan_type": "strategy",
+        "group": "newset",
+        "strategy": "PsaraFlipStrategy",
+        "label": "Parabolic SAR flip",
+    },
+    "AtrChannelBreakoutStrategy": {
+        "scenario_id": "chart3_atrch",
+        "scan_type": "strategy",
+        "group": "chart3",
+        "strategy": "AtrChannelBreakoutStrategy",
+        "label": "ATR channel breakout",
+    },
+    "CmfZeroCrossStrategy": {
+        "scenario_id": "chart2_cmf",
+        "scan_type": "strategy",
+        "group": "chart2",
+        "strategy": "CmfZeroCrossStrategy",
+        "label": "CMF zero cross",
+    },
+    "ScalpEmaCrossStrategy": {
+        "scenario_id": "scalp_ema",
+        "scan_type": "strategy",
+        "group": "scalp",
+        "strategy": "ScalpEmaCrossStrategy",
+        "label": "Scalp EMA 8/21",
+    },
+    "ChaikinOscStrategy": {
+        "scenario_id": "chart3_adosc",
+        "scan_type": "strategy",
+        "group": "chart3",
+        "strategy": "ChaikinOscStrategy",
+        "label": "Chaikin Oscillator",
+    },
+    "DonchianBreakoutStrategy": {
+        "scenario_id": "new_donchian",
+        "scan_type": "strategy",
+        "group": "newset",
+        "strategy": "DonchianBreakoutStrategy",
+        "label": "Donchian / Turtle",
+    },
+    "PpoSignalStrategy": {
+        "scenario_id": "chart3_ppo",
+        "scan_type": "strategy",
+        "group": "chart3",
+        "strategy": "PpoSignalStrategy",
+        "label": "PPO signal cross",
+    },
+    "DonchianAdxVolComboStrategy": {
+        "scenario_id": "combo_don_adx_vol",
+        "scan_type": "strategy",
+        "group": "combo",
+        "strategy": "DonchianAdxVolComboStrategy",
+        "label": "Donchian+ADX+Vol",
+    },
+    "ObvEmaCrossStrategy": {
+        "scenario_id": "chart2_obv",
+        "scan_type": "strategy",
+        "group": "chart2",
+        "strategy": "ObvEmaCrossStrategy",
+        "label": "OBV EMA cross",
+    },
+    "ElderRayStrategy": {
+        "scenario_id": "chart3_elder",
+        "scan_type": "strategy",
+        "group": "chart3",
+        "strategy": "ElderRayStrategy",
+        "label": "Elder Ray Bull/Bear",
+    },
+    "ScalpMacdHistStrategy": {
+        "scenario_id": "scalp_macd",
+        "scan_type": "strategy",
+        "group": "scalp",
+        "strategy": "ScalpMacdHistStrategy",
+        "label": "Scalp MACD hist",
+    },
+    "KeltnerBreakoutStrategy": {
+        "scenario_id": "new_keltner",
+        "scan_type": "strategy",
+        "group": "newset",
+        "strategy": "KeltnerBreakoutStrategy",
+        "label": "Keltner breakout",
+    },
+    "HeikinAshiFlipStrategy": {
+        "scenario_id": "chart_ha",
+        "scan_type": "strategy",
+        "group": "chart",
+        "strategy": "HeikinAshiFlipStrategy",
+        "label": "Heikin Ashi flip",
+    },
+    "VortexCrossStrategy": {
+        "scenario_id": "chart2_vortex",
+        "scan_type": "strategy",
+        "group": "chart2",
+        "strategy": "VortexCrossStrategy",
+        "label": "Vortex VI+/VI−",
+    },
+    "AwesomeOscStrategy": {
+        "scenario_id": "chart3_ao",
+        "scan_type": "strategy",
+        "group": "chart3",
+        "strategy": "AwesomeOscStrategy",
+        "label": "Awesome Oscillator",
+    },
+    "KeltnerStochVolComboStrategy": {
+        "scenario_id": "combo_kc_stoch_vol",
+        "scan_type": "strategy",
+        "group": "combo",
+        "strategy": "KeltnerStochVolComboStrategy",
+        "label": "Keltner+Stoch+Vol",
+    },
+    "TemaCrossStrategy": {
+        "scenario_id": "chart3_tema",
+        "scan_type": "strategy",
+        "group": "chart3",
+        "strategy": "TemaCrossStrategy",
+        "label": "TEMA fast/slow",
+    },
+    "TrixSignalStrategy": {
+        "scenario_id": "chart2_trix",
+        "scan_type": "strategy",
+        "group": "chart2",
+        "strategy": "TrixSignalStrategy",
+        "label": "TRIX signal cross",
+    },
+    "RocMomentumStrategy": {
+        "scenario_id": "chart3_roc",
+        "scan_type": "strategy",
+        "group": "chart3",
+        "strategy": "RocMomentumStrategy",
+        "label": "ROC momentum",
+    },
+    "HmaPpoAtrComboStrategy": {
+        "scenario_id": "combo_hma_ppo_atr",
+        "scan_type": "strategy",
+        "group": "combo",
+        "strategy": "HmaPpoAtrComboStrategy",
+        "label": "HMA+PPO+ATR",
+    },
+    "WilliamsRReclaimStrategy": {
+        "scenario_id": "chart_willr",
+        "scan_type": "strategy",
+        "group": "chart",
+        "strategy": "WilliamsRReclaimStrategy",
+        "label": "Williams %R reclaim",
+    },
+    "BbSqueezeBreakoutStrategy": {
+        "scenario_id": "chart_squeeze",
+        "scan_type": "strategy",
+        "group": "chart",
+        "strategy": "BbSqueezeBreakoutStrategy",
+        "label": "BB squeeze breakout",
+    },
+    "EmaRsiAtrComboStrategy": {
+        "scenario_id": "combo_ema_rsi_atr",
+        "scan_type": "strategy",
+        "group": "combo",
+        "strategy": "EmaRsiAtrComboStrategy",
+        "label": "EMA+RSI+ATR triad",
+    },
+    "AroonCrossStrategy": {
+        "scenario_id": "chart2_aroon",
+        "scan_type": "strategy",
+        "group": "chart2",
+        "strategy": "AroonCrossStrategy",
+        "label": "Aroon Up/Down cross",
+    },
+    "AdxMacdVolComboStrategy": {
+        "scenario_id": "combo_adx_macd_vol",
+        "scan_type": "strategy",
+        "group": "combo",
+        "strategy": "AdxMacdVolComboStrategy",
+        "label": "ADX+MACD+Vol",
+    },
+    "EngulfingTrendStrategy": {
+        "scenario_id": "chart2_engulf",
+        "scan_type": "strategy",
+        "group": "chart2",
+        "strategy": "EngulfingTrendStrategy",
+        "label": "Engulfing + EMA",
+    },
+    "AdxDiCrossStrategy": {
+        "scenario_id": "chart_adxdi",
+        "scan_type": "strategy",
+        "group": "chart",
+        "strategy": "AdxDiCrossStrategy",
+        "label": "ADX DI+/DI− cross",
+    },
+    "MfiReclaimStrategy": {
+        "scenario_id": "chart2_mfi",
+        "scan_type": "strategy",
+        "group": "chart2",
+        "strategy": "MfiReclaimStrategy",
+        "label": "MFI reclaim",
+    },
+    "IchimokuTkCrossStrategy": {
+        "scenario_id": "new_ichimoku",
+        "scan_type": "strategy",
+        "group": "newset",
+        "strategy": "IchimokuTkCrossStrategy",
+        "label": "Ichimoku TK cross",
+    },
+    "SupertrendRsiObvComboStrategy": {
+        "scenario_id": "combo_st_rsi_obv",
+        "scan_type": "strategy",
+        "group": "combo",
+        "strategy": "SupertrendRsiObvComboStrategy",
+        "label": "Supertrend+RSI+OBV",
+    },
 }
 
 
@@ -131,6 +456,32 @@ def load_inverted_map() -> dict[str, bool]:
         return {sid: False for sid in STRATEGY_REGISTRY}
     inverted = data.get("inverted", {})
     return {sid: bool(inverted.get(sid, False)) for sid in STRATEGY_REGISTRY}
+
+
+def load_trained_risk_map() -> dict[str, bool]:
+    """Per-strategy: use TAG_RISK (sim/train SL+ROI) when True; else global config risk."""
+    defaults = {sid: (sid in TAG_RISK) for sid in STRATEGY_REGISTRY}
+    if not ENABLED_FILE.is_file():
+        return defaults
+    try:
+        data = json.loads(ENABLED_FILE.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return defaults
+    stored = data.get("trained_risk") or {}
+    out = dict(defaults)
+    for sid in STRATEGY_REGISTRY:
+        if sid in stored:
+            out[sid] = bool(stored[sid])
+        # Strategies without TAG_RISK cannot use trained risk.
+        if sid not in TAG_RISK:
+            out[sid] = False
+    return out
+
+
+def tag_uses_trained_risk(tag: str) -> bool:
+    if tag not in TAG_RISK:
+        return False
+    return bool(load_trained_risk_map().get(tag, True))
 
 
 def load_dual_hedge_enabled() -> bool:
@@ -170,7 +521,8 @@ class MultiStrategyRouter(IStrategy):
     stoploss = PROD_STRATEGY_STOPLOSS
     trailing_stop = False
     use_exit_signal = False
-    use_custom_stoploss = False
+    use_custom_stoploss = True
+    use_custom_roi = True
 
     # Block entries when market is trending (mean-reversion only)
     adx_max_entry = 25
@@ -266,6 +618,56 @@ class MultiStrategyRouter(IStrategy):
             )
         return min(3.0, max_leverage)
 
+    def custom_stoploss(
+        self,
+        pair: str,
+        trade: Trade,
+        current_time: datetime,
+        current_rate: float,
+        current_profit: float,
+        after_fill: bool,
+        **kwargs,
+    ) -> float | None:
+        tag = base_enter_tag(trade.enter_tag)
+        if not tag_uses_trained_risk(tag):
+            return None
+        risk = TAG_RISK.get(tag)
+        if not risk:
+            return None
+        return stoploss_from_open(
+            float(risk["stoploss"]),
+            current_profit,
+            is_short=trade.is_short,
+            leverage=float(trade.leverage or 1.0),
+        )
+
+    def custom_roi(
+        self,
+        pair: str,
+        trade: Trade,
+        current_time: datetime,
+        trade_duration: int,
+        entry_tag: str | None,
+        side: str,
+        **kwargs,
+    ) -> float | None:
+        tag = base_enter_tag(entry_tag or trade.enter_tag)
+        if not tag_uses_trained_risk(tag):
+            return None
+        risk = TAG_RISK.get(tag)
+        if not risk:
+            return None
+        roi_map = risk.get("minimal_roi")
+        if isinstance(roi_map, dict) and roi_map:
+            # Same rule as ctengine/freqtrade: largest key <= trade_duration (minutes).
+            keys = sorted((int(k), float(v)) for k, v in roi_map.items())
+            chosen = float(keys[0][1])
+            for mins, val in keys:
+                if trade_duration >= mins:
+                    chosen = val
+            return chosen
+        return float(risk["tp"])
+
     def confirm_trade_entry(
         self,
         pair: str,
@@ -292,6 +694,17 @@ class MultiStrategyRouter(IStrategy):
             return True
         df, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
         stake = float(self.config.get("stake_amount") or 0)
+        if tag_uses_trained_risk(tag):
+            risk = TAG_RISK.get(tag) or {}
+            sl = float(risk.get("stoploss", self.stoploss))
+            tp = risk.get("tp")
+            if isinstance(risk.get("minimal_roi"), dict) and risk["minimal_roi"]:
+                roi = {str(k): float(v) for k, v in risk["minimal_roi"].items()}
+            else:
+                roi = {"0": float(tp)} if tp is not None else dict(self.minimal_roi)
+        else:
+            sl = float(self.stoploss)
+            roi = dict(self.minimal_roi)
         return allow_trade_entry(
             scenario=scenario,
             pair=pair,
@@ -299,8 +712,8 @@ class MultiStrategyRouter(IStrategy):
             side=side,
             current_time=current_time,
             stake_usdt=stake,
-            stoploss=float(self.stoploss),
-            minimal_roi=dict(self.minimal_roi),
+            stoploss=sl,
+            minimal_roi=roi,
             timeframe=self.timeframe,
             ohlcv_df=df,
         )
@@ -319,6 +732,26 @@ class MultiStrategyRouter(IStrategy):
         scenario = SCENARIO_BY_TAG.get(tag)
         if not scenario:
             return
-        side = "short" if trade.is_short else "long"
-        ml = pop_entry_ml(pair, side, scenario["scenario_id"])
-        save_ml_to_trade(trade, ml)
+        stake = float(self.config.get("stake_amount") or 0)
+        if tag_uses_trained_risk(tag):
+            risk = TAG_RISK.get(tag) or {}
+            sl = float(risk.get("stoploss", self.stoploss))
+            tp = risk.get("tp")
+            if isinstance(risk.get("minimal_roi"), dict) and risk["minimal_roi"]:
+                roi = {str(k): float(v) for k, v in risk["minimal_roi"].items()}
+            else:
+                roi = {"0": float(tp)} if tp is not None else dict(self.minimal_roi)
+        else:
+            sl = float(self.stoploss)
+            roi = dict(self.minimal_roi)
+        df, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+        persist_entry_ml(
+            trade,
+            scenario=scenario,
+            ohlcv_df=df,
+            current_time=current_time,
+            stake_usdt=stake,
+            stoploss=sl,
+            minimal_roi=roi,
+            timeframe=self.timeframe,
+        )

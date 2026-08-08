@@ -1,5 +1,5 @@
 #!/bin/bash
-source /home/freqtrade/.freqtrade.env
+source /home/cryptotools/.cryptotools.env
 OLD=("ALGO/USDT:USDT" "EIGEN/USDT:USDT" "TRUMP/USDT:USDT" "RESOLV/USDT:USDT" "PUMPFUN/USDT:USDT")
 TOKEN=$(curl -s -u "$FREQUI_USERNAME:$FREQUI_PASSWORD" -X POST http://127.0.0.1:8080/api/v1/token/login | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
 for pair in "${OLD[@]}"; do

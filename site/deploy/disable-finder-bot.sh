@@ -1,8 +1,8 @@
 #!/bin/bash
 # Disable ML Finder systemd unit so it never starts on boot or deploy.
 set -euo pipefail
-UNIT="${1:-freqtrade.service}"
-APP="${FT_BASE:-/home/freqtrade/freqtrade}"
+UNIT="${1:-cryptotools-finder.service}"
+APP="${CT_BASE:-/home/cryptotools/app}"
 UNIT_PATH="/etc/systemd/system/${UNIT}"
 BACKUP="${APP}/deploy/${UNIT}.disabled"
 

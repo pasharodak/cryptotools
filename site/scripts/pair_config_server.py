@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Lightweight pair whitelist admin for both Freqtrade bots."""
+"""Pair whitelist / limits admin API for CryptoTools bots."""
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
@@ -15,6 +16,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Mapping
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from socketserver import ThreadingMixIn
@@ -25,6 +27,8 @@ _SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
+import tenant_manager as tm
+import tenant_context as tc
 from bybit_grid_manager import (
     close_grid,
     create_grid,
@@ -33,6 +37,7 @@ from bybit_grid_manager import (
     load_config as load_bybit_grid_config,
     suggest_params,
     sync_all_bots_from_bybit,
+    tenant_bybit_context,
     update_config as update_bybit_grid_config,
     validate_grid,
 )
@@ -54,7 +59,7 @@ from reconcile_positions import (
     reconcile as reconcile_positions,
 )
 
-BASE = Path(os.environ.get("FT_BASE", "/home/freqtrade/freqtrade"))
+BASE = Path(os.environ.get("CT_BASE", "/home/cryptotools/app"))
 FINDER_BOT_CFG = BASE / "user_data" / "finder_bot.json"
 
 _LOG_TS_RE = re.compile(
@@ -83,44 +88,83 @@ def _setup_server_logging() -> None:
 
 
 STRATEGIES_DIR = BASE / "user_data" / "strategies"
-ENABLED_STRATEGIES_FILE = BASE / "user_data" / "enabled_strategies.json"
-DUAL_HEDGE_FILE = BASE / "user_data" / "dual_hedge.json"
-BOT_LIMITS_FILE = BASE / "user_data" / "bot_limits.json"
-BOT_STRATEGIES_FILE = BASE / "user_data" / "bot_strategies.json"
 DEFAULT_BOT_LIMITS = {"finder": 3, "strategy": 2, "grid": 2}
-# Legacy API id (old UI used "freqai" for the Finder bot)
-BOT_ALIASES = {"freqai": "finder"}
+
+
+def enabled_strategies_file() -> Path:
+    return tc.user_data_dir(BASE) / "enabled_strategies.json"
+
+
+def dual_hedge_file() -> Path:
+    return tc.user_data_dir(BASE) / "dual_hedge.json"
+
+
+def bot_limits_file() -> Path:
+    return tc.user_data_dir(BASE) / "bot_limits.json"
+
+
+def bot_strategies_file() -> Path:
+    return tc.user_data_dir(BASE) / "bot_strategies.json"
 
 
 def resolve_bot(bot: str | None) -> str:
-    """Normalize bot id; map legacy names to current keys."""
-    name = (bot or "").strip().lower()
-    return BOT_ALIASES.get(name, name)
+    """Normalize bot id."""
+    return (bot or "").strip().lower()
 
 
 ROUTER_STRATEGY = "MultiStrategyRouter"
-CONFIGS = {
+_ADMIN_CONFIGS = {
     "finder": BASE / "user_data" / "config.json",
     "strategy": BASE / "user_data" / "config_strategy.json",
     "grid": BASE / "user_data" / "config_grid.json",
 }
-RELOAD = {
+_ADMIN_RELOAD = {
     "finder": "http://127.0.0.1:8080/api/v1/reload_config",
     "strategy": "http://127.0.0.1:8081/api/v1/reload_config",
     "grid": "http://127.0.0.1:8082/api/v1/reload_config",
 }
-BLACKLIST = {
+_ADMIN_BLACKLIST = {
     "finder": "http://127.0.0.1:8080/api/v1/blacklist",
     "strategy": "http://127.0.0.1:8081/api/v1/blacklist",
     "grid": "http://127.0.0.1:8082/api/v1/blacklist",
 }
-WHITELIST = {
+_ADMIN_WHITELIST = {
     "finder": "http://127.0.0.1:8080/api/v1/whitelist",
     "strategy": "http://127.0.0.1:8081/api/v1/whitelist",
     "grid": "http://127.0.0.1:8082/api/v1/whitelist",
 }
 
-AUTH_USER = os.environ.get("FREQUI_USERNAME", "freqtrader")
+
+class _ResolvedMapping(Mapping):
+    """Lazy Mapping that re-resolves under the current request tenant context."""
+
+    def __init__(self, resolver):
+        self._resolver = resolver
+
+    def _data(self) -> dict:
+        return self._resolver()
+
+    def __getitem__(self, key):
+        return self._data()[key]
+
+    def __iter__(self):
+        return iter(self._data())
+
+    def __len__(self) -> int:
+        return len(self._data())
+
+    def __repr__(self) -> str:
+        return repr(self._data())
+
+
+CONFIGS = _ResolvedMapping(lambda: tc.resolve_configs(BASE, _ADMIN_CONFIGS))
+RELOAD = _ResolvedMapping(lambda: tc.resolve_api_urls("reload_config"))
+START = _ResolvedMapping(lambda: tc.resolve_api_urls("start"))
+STOP = _ResolvedMapping(lambda: tc.resolve_api_urls("stop"))
+BLACKLIST = _ResolvedMapping(lambda: tc.resolve_api_urls("blacklist"))
+WHITELIST = _ResolvedMapping(lambda: tc.resolve_api_urls("whitelist"))
+
+AUTH_USER = os.environ.get("FREQUI_USERNAME", "cryptotools")
 AUTH_PASS = os.environ.get("FREQUI_PASSWORD", "")
 
 DEFAULT_GRID_STAKE = 10
@@ -132,88 +176,291 @@ MIN_STRATEGY_STOPLOSS = -0.20
 MAX_STRATEGY_STOPLOSS = -0.01
 MIN_STRATEGY_TAKE_PROFIT = 0.02
 MAX_STRATEGY_TAKE_PROFIT = 0.50
-MIN_MAX_TRADES = 1
-MAX_MAX_TRADES = 20
+MIN_MAX_TRADES = 0
+MAX_MAX_TRADES = 50
 MIN_STAKE_AMOUNT = 1
 MAX_STAKE_AMOUNT = 100
 
 AVAILABLE_STRATEGIES = [
     {
+        "id": "AltVolumeBreakoutStrategy",
+        "num": 31,
+        "ui_order": 0,
+        "name": "Alt volume breakout",
+        "desc": "ML pack · sim scalp_liq_breakout · test ML PnL 135.3 USDT · SL -1.5% · TP 1.2% · gate>=55% · exp exp31_mlp",
+    },
+    {
+        "id": "PsaraFlipStrategy",
+        "num": 1,
+        "ui_order": 1,
+        "name": "Parabolic SAR flip",
+        "desc": "ML pack · sim new_psar · test ML PnL 87.1 USDT · SL -2.0% · TP 1.4% · gate>=45% · exp exp14_lgbm_gate045",
+    },
+    {
+        "id": "AtrChannelBreakoutStrategy",
+        "num": 2,
+        "ui_order": 2,
+        "name": "ATR channel breakout",
+        "desc": "ML pack · sim chart3_atrch · test ML PnL 81.0 USDT · SL -2.0% · TP 1.4% · gate>=45% · exp exp14_lgbm_gate045",
+    },
+    {
+        "id": "CmfZeroCrossStrategy",
+        "num": 3,
+        "ui_order": 3,
+        "name": "CMF zero cross",
+        "desc": "ML pack · sim chart2_cmf · test ML PnL 79.9 USDT · SL -1.7% · TP 1.1% · gate>=55% · exp exp10_xgb_pos_weight",
+    },
+    {
+        "id": "ScalpEmaCrossStrategy",
+        "num": 4,
+        "ui_order": 4,
+        "name": "Scalp EMA 8/21",
+        "desc": "ML pack · sim scalp_ema · test ML PnL 76.7 USDT · SL -1.0% · TP 0.8% · gate>=55% · exp exp08_lgbm_regularized",
+    },
+    {
+        "id": "ChaikinOscStrategy",
+        "num": 5,
+        "ui_order": 5,
+        "name": "Chaikin Oscillator",
+        "desc": "ML pack · sim chart3_adosc · test ML PnL 68.2 USDT · SL -1.7% · TP 1.1% · gate>=45% · exp exp14_lgbm_gate045",
+    },
+    {
+        "id": "DonchianBreakoutStrategy",
+        "num": 6,
+        "ui_order": 6,
+        "name": "Donchian / Turtle",
+        "desc": "ML pack · sim new_donchian · test ML PnL 66.8 USDT · SL -2.5% · TP 1.8% · gate>=45% · exp exp14_lgbm_gate045",
+    },
+    {
+        "id": "PpoSignalStrategy",
+        "num": 7,
+        "ui_order": 7,
+        "name": "PPO signal cross",
+        "desc": "ML pack · sim chart3_ppo · test ML PnL 66.4 USDT · SL -1.6% · TP 1.0% · gate>=55% · exp exp22_xgb_shallow",
+    },
+    {
+        "id": "DonchianAdxVolComboStrategy",
+        "num": 8,
+        "ui_order": 8,
+        "name": "Donchian+ADX+Vol",
+        "desc": "ML pack · sim combo_don_adx_vol · test ML PnL 66.1 USDT · SL -2.2% · TP 1.8% · gate>=65% · exp exp15_lgbm_gate065_nocal",
+    },
+    {
+        "id": "ObvEmaCrossStrategy",
+        "num": 9,
+        "ui_order": 9,
+        "name": "OBV EMA cross",
+        "desc": "ML pack · sim chart2_obv · test ML PnL 62.3 USDT · SL -1.8% · TP 1.2% · gate>=45% · exp exp14_lgbm_gate045",
+    },
+    {
+        "id": "ElderRayStrategy",
+        "num": 10,
+        "ui_order": 10,
+        "name": "Elder Ray Bull/Bear",
+        "desc": "ML pack · sim chart3_elder · test ML PnL 62.2 USDT · SL -1.7% · TP 1.1% · gate>=45% · exp exp14_lgbm_gate045",
+    },
+    {
+        "id": "ScalpMacdHistStrategy",
+        "num": 11,
+        "ui_order": 11,
+        "name": "Scalp MACD hist",
+        "desc": "ML pack · sim scalp_macd · test ML PnL 60.5 USDT · SL -1.2% · TP 0.9% · gate>=55% · exp exp09_xgb_baseline",
+    },
+    {
+        "id": "KeltnerBreakoutStrategy",
+        "num": 12,
+        "ui_order": 12,
+        "name": "Keltner breakout",
+        "desc": "ML pack · sim new_keltner · test ML PnL 57.4 USDT · SL -2.0% · TP 1.5% · gate>=65% · exp exp15_lgbm_gate065_nocal",
+    },
+    {
+        "id": "HeikinAshiFlipStrategy",
+        "num": 13,
+        "ui_order": 13,
+        "name": "Heikin Ashi flip",
+        "desc": "ML pack · sim chart_ha · test ML PnL 57.2 USDT · SL -1.6% · TP 1.1% · gate>=45% · exp exp14_lgbm_gate045",
+    },
+    {
+        "id": "VortexCrossStrategy",
+        "num": 14,
+        "ui_order": 14,
+        "name": "Vortex VI+/VI−",
+        "desc": "ML pack · sim chart2_vortex · test ML PnL 57.1 USDT · SL -1.9% · TP 1.3% · gate>=45% · exp exp14_lgbm_gate045",
+    },
+    {
+        "id": "AwesomeOscStrategy",
+        "num": 15,
+        "ui_order": 15,
+        "name": "Awesome Oscillator",
+        "desc": "ML pack · sim chart3_ao · test ML PnL 56.7 USDT · SL -1.7% · TP 1.1% · gate>=55% · exp exp22_xgb_shallow",
+    },
+    {
+        "id": "KeltnerStochVolComboStrategy",
+        "num": 16,
+        "ui_order": 16,
+        "name": "Keltner+Stoch+Vol",
+        "desc": "ML pack · sim combo_kc_stoch_vol · test ML PnL 52.9 USDT · SL -2.0% · TP 1.5% · gate>=45% · exp exp14_lgbm_gate045",
+    },
+    {
+        "id": "TemaCrossStrategy",
+        "num": 17,
+        "ui_order": 17,
+        "name": "TEMA fast/slow",
+        "desc": "ML pack · sim chart3_tema · test ML PnL 50.7 USDT · SL -1.8% · TP 1.2% · gate>=50% · exp exp29_lgbm_gate050",
+    },
+    {
+        "id": "TrixSignalStrategy",
+        "num": 18,
+        "ui_order": 18,
+        "name": "TRIX signal cross",
+        "desc": "ML pack · sim chart2_trix · test ML PnL 49.1 USDT · SL -1.7% · TP 1.1% · gate>=55% · exp exp23_xgb_deep",
+    },
+    {
+        "id": "RocMomentumStrategy",
+        "num": 19,
+        "ui_order": 19,
+        "name": "ROC momentum",
+        "desc": "ML pack · sim chart3_roc · test ML PnL 46.2 USDT · SL -1.6% · TP 1.0% · gate>=45% · exp exp14_lgbm_gate045",
+    },
+    {
+        "id": "HmaPpoAtrComboStrategy",
+        "num": 20,
+        "ui_order": 20,
+        "name": "HMA+PPO+ATR",
+        "desc": "ML pack · sim combo_hma_ppo_atr · test ML PnL 45.5 USDT · SL -1.8% · TP 1.4% · gate>=45% · exp exp14_lgbm_gate045",
+    },
+    {
+        "id": "WilliamsRReclaimStrategy",
+        "num": 21,
+        "ui_order": 21,
+        "name": "Williams %R reclaim",
+        "desc": "ML pack · sim chart_willr · test ML PnL 41.5 USDT · SL -1.5% · TP 1.0% · gate>=70% · exp exp30_lgbm_gate070",
+    },
+    {
+        "id": "BbSqueezeBreakoutStrategy",
+        "num": 22,
+        "ui_order": 22,
+        "name": "BB squeeze breakout",
+        "desc": "ML pack · sim chart_squeeze · test ML PnL 41.3 USDT · SL -1.8% · TP 1.3% · gate>=55% · exp exp03_lgbm_shallow",
+    },
+    {
+        "id": "EmaRsiAtrComboStrategy",
+        "num": 23,
+        "ui_order": 23,
+        "name": "EMA+RSI+ATR triad",
+        "desc": "ML pack · sim combo_ema_rsi_atr · test ML PnL 41.3 USDT · SL -1.8% · TP 1.4% · gate>=55% · exp exp24_xgb_slow",
+    },
+    {
+        "id": "AroonCrossStrategy",
+        "num": 24,
+        "ui_order": 24,
+        "name": "Aroon Up/Down cross",
+        "desc": "ML pack · sim chart2_aroon · test ML PnL 39.1 USDT · SL -1.8% · TP 1.2% · gate>=55% · exp exp22_xgb_shallow",
+    },
+    {
+        "id": "AdxMacdVolComboStrategy",
+        "num": 25,
+        "ui_order": 25,
+        "name": "ADX+MACD+Vol",
+        "desc": "ML pack · sim combo_adx_macd_vol · test ML PnL 38.0 USDT · SL -2.0% · TP 1.6% · gate>=45% · exp exp14_lgbm_gate045",
+    },
+    {
+        "id": "EngulfingTrendStrategy",
+        "num": 26,
+        "ui_order": 26,
+        "name": "Engulfing + EMA",
+        "desc": "ML pack · sim chart2_engulf · test ML PnL 36.0 USDT · SL -1.6% · TP 1.1% · gate>=45% · exp exp14_lgbm_gate045",
+    },
+    {
+        "id": "AdxDiCrossStrategy",
+        "num": 27,
+        "ui_order": 27,
+        "name": "ADX DI+/DI− cross",
+        "desc": "ML pack · sim chart_adxdi · test ML PnL 34.6 USDT · SL -2.0% · TP 1.4% · gate>=65% · exp exp15_lgbm_gate065_nocal",
+    },
+    {
+        "id": "MfiReclaimStrategy",
+        "num": 28,
+        "ui_order": 28,
+        "name": "MFI reclaim",
+        "desc": "ML pack · sim chart2_mfi · test ML PnL 31.8 USDT · SL -1.5% · TP 1.0% · gate>=55% · exp exp03_lgbm_shallow",
+    },
+    {
+        "id": "IchimokuTkCrossStrategy",
+        "num": 29,
+        "ui_order": 29,
+        "name": "Ichimoku TK cross",
+        "desc": "ML pack · sim new_ichimoku · test ML PnL 31.8 USDT · SL -2.2% · TP 1.6% · gate>=55% · exp exp10_xgb_pos_weight",
+    },
+    {
+        "id": "SupertrendRsiObvComboStrategy",
+        "num": 30,
+        "ui_order": 30,
+        "name": "Supertrend+RSI+OBV",
+        "desc": "ML pack · sim combo_st_rsi_obv · test ML PnL 31.0 USDT · SL -1.9% · TP 1.5% · gate>=45% · exp exp14_lgbm_gate045",
+    },
+    {
         "id": "CriptoPairsStrategy",
-        "name": "RSI + EMA + Bollinger",
-        "desc": (
-            "Консервативная стратегия на откатах. "
-            "Лонг: RSI ниже 35, быстрая EMA выше медленной, цена у нижней полосы Bollinger. "
-            "Шорт: RSI выше 65, EMA направлена вниз, цена у верхней полосы. "
-            "Условия строгие — сделки бывают редко. Опционально, без отдельной ML-модели."
-        ),
+        "num": None,
+        "ui_order": 1000,
+        "name": "CriptoPairs",
+        "desc": "Legacy · off by default. Kept in catalog for history/stats labels.",
     },
     {
         "id": "SupertrendStrategy",
-        "name": "Supertrend (тренд по ATR) (ML Gate)",
-        "desc": (
-            "Следует за индикатором Supertrend. "
-            "Лонг при смене тренда вверх, шорт при смене вниз; RSI отсекает слабые сигналы. "
-            "Хорошо подходит для выраженных трендовых движений на 5m. "
-            "Своя ML-модель (sim: trend_supertrend) · profit ≥60%."
-        ),
+        "num": None,
+        "ui_order": 1001,
+        "name": "Supertrend",
+        "desc": "Legacy · off by default. Kept in catalog for history/stats labels.",
     },
     {
         "id": "MacdEmaStrategy",
-        "name": "MACD + EMA 200 (ML Gate)",
-        "desc": (
-            "Классическое сочетание: пересечение линий MACD в сторону долгосрочного тренда. "
-            "Лонг — MACD вверх и цена выше EMA 200; шорт — MACD вниз и цена ниже EMA 200. "
-            "Своя ML-модель (sim: trend_macd_ema) · profit ≥60%."
-        ),
+        "num": None,
+        "ui_order": 1002,
+        "name": "MacdEma",
+        "desc": "Legacy · off by default. Kept in catalog for history/stats labels.",
     },
     {
         "id": "FibPullbackStrategy",
-        "name": "Fib pullback (DCA) (ML Gate)",
-        "desc": (
-            "Откат к зоне Fib 0.618–0.786 по тренду 4H, DCA до 2 доборов. "
-            "Своя ML-модель (sim: trend_fib) · profit ≥60%."
-        ),
+        "num": None,
+        "ui_order": 1003,
+        "name": "FibPullback",
+        "desc": "Legacy · off by default. Kept in catalog for history/stats labels.",
     },
     {
         "id": "TripleEmaStrategy",
-        "name": "EMA trend (sim: trend_ema)",
-        "desc": (
-            "Golden cross 4H · retest EMA50 · ADX>22. Sim ML +43 USDT. "
-            "ML gate profit ≥60% на входе."
-        ),
+        "num": None,
+        "ui_order": 1004,
+        "name": "TripleEma",
+        "desc": "Legacy · off by default. Kept in catalog for history/stats labels.",
     },
     {
         "id": "BollingerRsiStrategy",
-        "name": "Mean-reversion BB (sim: lite_mean_rev)",
-        "desc": (
-            "Отбой от полос Bollinger + RSI. Sim ML +11 USDT. "
-            "Работает во флэте; router блокирует вход при ADX ≥ 25. ML gate profit ≥60%."
-        ),
+        "num": None,
+        "ui_order": 1005,
+        "name": "BollingerRsi",
+        "desc": "Legacy · off by default. Kept in catalog for history/stats labels.",
     },
     {
         "id": "AdxMomentumStrategy",
-        "name": "Breakout / ADX (sim: trend_breakout)",
-        "desc": (
-            "Пробой диапазона · ретест · объём. Sim ML +52 USDT. "
-            "Трендовая стратегия — без ADX-cap роутера. ML gate profit ≥60%."
-        ),
+        "num": None,
+        "ui_order": 1006,
+        "name": "AdxMomentum",
+        "desc": "Legacy · off by default. Kept in catalog for history/stats labels.",
     },
     {
         "id": "LiteIntradayStrategy",
-        "name": "Внутридневная (sim: lite_intraday)",
-        "desc": (
-            "MACD + узкий ADX 17–21, объём. Sim ML +11 USDT. "
-            "Cooldown 6 ч после SL на паре. ML gate profit ≥60%."
-        ),
+        "num": None,
+        "ui_order": 1007,
+        "name": "LiteIntraday",
+        "desc": "Legacy · off by default. Kept in catalog for history/stats labels.",
     },
     {
         "id": "LiteRangeStrategy",
-        "name": "Диапазонная (sim: lite_range)",
-        "desc": (
-            "BB bounce в боковике (ADX < 18). Sim ML +8 USDT. "
-            "Cooldown 6 ч после SL. ML gate profit ≥60%."
-        ),
+        "num": None,
+        "ui_order": 1008,
+        "name": "LiteRange",
+        "desc": "Legacy · off by default. Kept in catalog for history/stats labels.",
     },
 ]
 
@@ -272,7 +519,7 @@ def load_trade_ml_meta(bot: str, trade_ids: list[int]) -> dict[int, dict[str, An
         SELECT ft_trade_id, cd_key, cd_value, cd_type
         FROM trade_custom_data
         WHERE ft_trade_id IN ({placeholders})
-          AND cd_key IN ('ml_confidence', 'ml_gate_confidence', 'ml_predicted')
+          AND cd_key IN ('ml_confidence', 'ml_gate_confidence', 'ml_predicted', 'ml_min_confidence')
     """
     out: dict[int, dict[str, Any]] = {}
     try:
@@ -326,15 +573,25 @@ def _closed_trade_row_to_json(row: sqlite3.Row, ml: dict[str, Any]) -> dict[str,
     return trade
 
 
+# Hard safety cap for closed-trade dumps (UI history / stats "all time").
+CLOSED_TRADES_HARD_CAP = 50000
+
+
 def load_closed_trades_from_db(bot: str, limit: int = 500) -> list[dict[str, Any]]:
-    """Fast closed-trade list from sqlite (no Freqtrade RPC / orders payload)."""
+    """Fast closed-trade list from sqlite (no bot RPC / orders payload).
+
+    ``limit <= 0`` means return all closed trades (up to CLOSED_TRADES_HARD_CAP).
+    """
     bot = resolve_bot(bot)
     if bot not in CONFIGS:
         return []
     db_path = _bot_db_path(bot)
     if not db_path:
         return []
-    limit = max(1, min(int(limit), 5000))
+    if int(limit) <= 0:
+        limit = CLOSED_TRADES_HARD_CAP
+    else:
+        limit = max(1, min(int(limit), CLOSED_TRADES_HARD_CAP))
     query = """
         SELECT id, pair, strategy, enter_tag, is_short,
                open_date, close_date, open_rate, close_rate,
@@ -346,7 +603,8 @@ def load_closed_trades_from_db(bot: str, limit: int = 500) -> list[dict[str, Any
         LIMIT ?
     """
     try:
-        with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+        # Prefer RW so WAL pages from the live bot process are visible.
+        with sqlite3.connect(db_path) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(query, (limit,)).fetchall()
         ids = [int(r["id"]) for r in rows]
@@ -360,7 +618,9 @@ def load_closed_trades_from_db(bot: str, limit: int = 500) -> list[dict[str, Any
 
 
 def get_closed_trades_payload(limit: int = 500, bot: str | None = None) -> dict[str, Any]:
-    limit = max(1, min(int(limit), 5000))
+    # limit <= 0 → all (capped server-side)
+    if int(limit) > 0:
+        limit = max(1, min(int(limit), CLOSED_TRADES_HARD_CAP))
     if bot:
         bot = resolve_bot(bot)
         if bot not in CONFIGS:
@@ -397,8 +657,8 @@ def load_strategy_risk() -> dict[str, float]:
             "stoploss": DEFAULT_STRATEGY_STOPLOSS,
             "take_profit": DEFAULT_STRATEGY_TAKE_PROFIT,
         }
-    if BOT_LIMITS_FILE.is_file():
-        stored = json.loads(BOT_LIMITS_FILE.read_text(encoding="utf-8")).get("strategy_risk", {})
+    if bot_limits_file().is_file():
+        stored = json.loads(bot_limits_file().read_text(encoding="utf-8")).get("strategy_risk", {})
         if "stoploss" in stored:
             risk["stoploss"] = float(stored["stoploss"])
         if "take_profit" in stored:
@@ -419,17 +679,17 @@ def strategy_risk_payload(risk: dict[str, float] | None = None) -> dict[str, Any
 
 
 def save_strategy_risk_to_limits(risk: dict[str, float]) -> None:
-    payload = load_bot_limits_file() if BOT_LIMITS_FILE.is_file() else _default_bot_limits_payload()
+    payload = load_bot_limits_file() if bot_limits_file().is_file() else _default_bot_limits_payload()
     payload["strategy_risk"] = {
         "stoploss": float(risk["stoploss"]),
         "take_profit": float(risk["take_profit"]),
     }
-    BOT_LIMITS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    tmp = BOT_LIMITS_FILE.with_suffix(".json.tmp")
+    bot_limits_file().parent.mkdir(parents=True, exist_ok=True)
+    tmp = bot_limits_file().with_suffix(".json.tmp")
     with tmp.open("w", encoding="utf-8") as fh:
         json.dump(payload, fh, indent=4, ensure_ascii=False)
         fh.write("\n")
-    tmp.replace(BOT_LIMITS_FILE)
+    tmp.replace(bot_limits_file())
 
 
 def apply_strategy_risk_to_config(risk: dict[str, float]) -> None:
@@ -491,22 +751,15 @@ def set_strategy_risk(stoploss_pct: float, take_profit_pct: float) -> dict[str, 
 
 def load_bot_limits_file() -> dict[str, Any]:
     """Read persistent bot limits (max trades + grid stake)."""
-    if not BOT_LIMITS_FILE.is_file():
+    if not bot_limits_file().is_file():
         return ensure_bot_limits_snapshot()
-    data = json.loads(BOT_LIMITS_FILE.read_text(encoding="utf-8"))
+    data = json.loads(bot_limits_file().read_text(encoding="utf-8"))
     payload = _default_bot_limits_payload()
     stored_trades = data.get("max_open_trades", data if "stake_amount" not in data else {})
-    # Migrate legacy bot id
-    if "freqai" in stored_trades and "finder" not in stored_trades:
-        stored_trades = dict(stored_trades)
-        stored_trades["finder"] = stored_trades.pop("freqai")
     for bot in CONFIGS:
         if bot in stored_trades:
             payload["max_open_trades"][bot] = int(stored_trades[bot])
     stored_stakes = data.get("stake_amount", {})
-    if "freqai" in stored_stakes and "finder" not in stored_stakes:
-        stored_stakes = dict(stored_stakes)
-        stored_stakes["finder"] = stored_stakes.pop("freqai")
     for bot, default in DEFAULT_STAKES.items():
         if bot in stored_stakes:
             payload["stake_amount"][bot] = float(stored_stakes[bot])
@@ -549,7 +802,7 @@ def snapshot_limits_from_configs() -> dict[str, int]:
 
 def ensure_bot_limits_snapshot() -> dict[str, int]:
     """Create bot_limits.json from configs only when missing."""
-    if BOT_LIMITS_FILE.is_file():
+    if bot_limits_file().is_file():
         return load_bot_limits()
     return snapshot_limits_from_configs()
 
@@ -560,9 +813,9 @@ def save_bot_limits(
     grid_stake: float | None = None,
     stakes: dict[str, float] | None = None,
 ) -> None:
-    BOT_LIMITS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    tmp = BOT_LIMITS_FILE.with_suffix(".json.tmp")
-    payload = load_bot_limits_file() if BOT_LIMITS_FILE.is_file() else _default_bot_limits_payload()
+    bot_limits_file().parent.mkdir(parents=True, exist_ok=True)
+    tmp = bot_limits_file().with_suffix(".json.tmp")
+    payload = load_bot_limits_file() if bot_limits_file().is_file() else _default_bot_limits_payload()
     payload["max_open_trades"] = {bot: int(limits[bot]) for bot in CONFIGS if bot in limits}
     if stakes:
         for bot, value in stakes.items():
@@ -573,7 +826,7 @@ def save_bot_limits(
     with tmp.open("w", encoding="utf-8") as fh:
         json.dump(payload, fh, indent=4, ensure_ascii=False)
         fh.write("\n")
-    tmp.replace(BOT_LIMITS_FILE)
+    tmp.replace(bot_limits_file())
 
 
 def apply_bot_limits_to_configs() -> dict[str, int]:
@@ -758,6 +1011,26 @@ def reload_bot(bot: str) -> Any:
     )
 
 
+def stop_bot(bot: str) -> Any:
+    return api_call(STOP[bot], "POST", retries=3, retry_delay=1.0)
+
+
+def start_bot(bot: str) -> Any:
+    return api_call(START[bot], "POST", retries=3, retry_delay=1.0)
+
+
+def bot_trading_disabled(bot: str) -> bool:
+    """True when max_open_trades is 0 — bot must not open new trades."""
+    bot = resolve_bot(bot)
+    if bot not in CONFIGS:
+        return False
+    try:
+        cfg = load_config(CONFIGS[bot])
+        return int(cfg.get("max_open_trades") or 0) <= 0
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return False
+
+
 def safe_get_state(bot: str) -> dict[str, Any]:
     bot = resolve_bot(bot)
     try:
@@ -784,9 +1057,12 @@ def safe_get_state(bot: str) -> dict[str, Any]:
 
 
 def _basic_header() -> str:
-    import base64
-
-    token = base64.b64encode(f"{AUTH_USER}:{AUTH_PASS}".encode()).decode()
+    user = tc.current_user()
+    if user and not tm.is_admin(user):
+        api_user, api_pass, _jwt = tm.derive_api_creds(str(user["id"]))
+    else:
+        api_user, api_pass = AUTH_USER, AUTH_PASS
+    token = base64.b64encode(f"{api_user}:{api_pass}".encode()).decode()
     return f"Basic {token}"
 
 
@@ -794,8 +1070,17 @@ def _strategy_ids() -> set[str]:
     return {s["id"] for s in AVAILABLE_STRATEGIES}
 
 
-def get_strategy_catalog() -> list[dict[str, str]]:
-    return list(AVAILABLE_STRATEGIES)
+def get_strategy_catalog() -> list[dict]:
+    """Catalog for UI. Sorted by num ascending; strategies without num go last."""
+    rows = list(AVAILABLE_STRATEGIES)
+
+    def _sort_key(s: dict) -> tuple:
+        has_num = s.get("num") is not None
+        num = int(s["num"]) if has_num else 10_000
+        return (0 if has_num else 1, num, s["id"])
+
+    rows.sort(key=_sort_key)
+    return rows
 
 
 def validate_strategy(strategy_id: str) -> str:
@@ -809,12 +1094,37 @@ def validate_strategy(strategy_id: str) -> str:
 
 
 PROD_DEFAULT_STRATEGIES = frozenset({
-    "BollingerRsiStrategy",
-    "AdxMomentumStrategy",
-    "LiteRangeStrategy",
-    "SupertrendStrategy",
-    "MacdEmaStrategy",
-    "FibPullbackStrategy",
+    "AltVolumeBreakoutStrategy",
+    "PsaraFlipStrategy",
+    "AtrChannelBreakoutStrategy",
+    "CmfZeroCrossStrategy",
+    "ScalpEmaCrossStrategy",
+    "ChaikinOscStrategy",
+    "DonchianBreakoutStrategy",
+    "PpoSignalStrategy",
+    "DonchianAdxVolComboStrategy",
+    "ObvEmaCrossStrategy",
+    "ElderRayStrategy",
+    "ScalpMacdHistStrategy",
+    "KeltnerBreakoutStrategy",
+    "HeikinAshiFlipStrategy",
+    "VortexCrossStrategy",
+    "AwesomeOscStrategy",
+    "KeltnerStochVolComboStrategy",
+    "TemaCrossStrategy",
+    "TrixSignalStrategy",
+    "RocMomentumStrategy",
+    "HmaPpoAtrComboStrategy",
+    "WilliamsRReclaimStrategy",
+    "BbSqueezeBreakoutStrategy",
+    "EmaRsiAtrComboStrategy",
+    "AroonCrossStrategy",
+    "AdxMacdVolComboStrategy",
+    "EngulfingTrendStrategy",
+    "AdxDiCrossStrategy",
+    "MfiReclaimStrategy",
+    "IchimokuTkCrossStrategy",
+    "SupertrendRsiObvComboStrategy",
 })
 
 
@@ -823,9 +1133,9 @@ def default_enabled_map() -> dict[str, bool]:
 
 
 def load_enabled_map() -> dict[str, bool]:
-    if not ENABLED_STRATEGIES_FILE.is_file():
+    if not enabled_strategies_file().is_file():
         return default_enabled_map()
-    data = json.loads(ENABLED_STRATEGIES_FILE.read_text(encoding="utf-8"))
+    data = json.loads(enabled_strategies_file().read_text(encoding="utf-8"))
     enabled = data.get("enabled", {})
     result = default_enabled_map()
     for sid in result:
@@ -836,10 +1146,10 @@ def load_enabled_map() -> dict[str, bool]:
 
 def load_inverted_map() -> dict[str, bool]:
     result = {s["id"]: False for s in AVAILABLE_STRATEGIES}
-    if not ENABLED_STRATEGIES_FILE.is_file():
+    if not enabled_strategies_file().is_file():
         return result
     try:
-        data = json.loads(ENABLED_STRATEGIES_FILE.read_text(encoding="utf-8"))
+        data = json.loads(enabled_strategies_file().read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return result
     inverted = data.get("inverted", {})
@@ -849,11 +1159,120 @@ def load_inverted_map() -> dict[str, bool]:
     return result
 
 
+def _trained_risk_catalog() -> dict[str, dict[str, Any]]:
+    """SL/ROI from prod_top30_pack (sim training) keyed by strategy class."""
+    pack_path = BASE.parent / "simulation" / "config" / "prod_top30_pack.json"
+    # monorepo: site/../simulation ; VPS: app/simulation
+    candidates = [
+        BASE.parent / "simulation" / "config" / "prod_top30_pack.json",
+        BASE / "simulation" / "config" / "prod_top30_pack.json",
+        Path(__file__).resolve().parents[2] / "simulation" / "config" / "prod_top30_pack.json",
+    ]
+    for pack_path in candidates:
+        if pack_path.is_file():
+            try:
+                pack = json.loads(pack_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            out: dict[str, dict[str, Any]] = {}
+            for s in pack.get("strategies") or []:
+                cls = s.get("class_name")
+                if not cls:
+                    continue
+                out[cls] = {
+                    "stoploss": float(s.get("stoploss") or 0),
+                    "tp": float(s.get("tp") or 0),
+                    "minimal_roi": s.get("minimal_roi") or {"0": float(s.get("tp") or 0)},
+                    "scenario_id": s.get("scenario_id"),
+                    "min_profit_proba": float(s.get("min_profit_proba") or 0.55),
+                }
+            return out
+    return {}
+
+
+ML_CONFIDENCE_CHOICES: tuple[float, ...] = (
+    0.45,
+    0.50,
+    0.55,
+    0.60,
+    0.65,
+    0.70,
+    0.75,
+    0.80,
+    0.85,
+    0.90,
+    0.95,
+)
+
+
+def _normalize_ml_confidence(value: float) -> float:
+    """Snap to nearest allowed confidence choice."""
+    v = float(value)
+    best = ML_CONFIDENCE_CHOICES[0]
+    best_d = abs(best - v)
+    for choice in ML_CONFIDENCE_CHOICES[1:]:
+        d = abs(choice - v)
+        if d < best_d:
+            best = choice
+            best_d = d
+    return float(best)
+
+
+def _ml_confidence_defaults() -> dict[str, float]:
+    """Default ML gate confidence per strategy class (from pack / model meta)."""
+    catalog = _trained_risk_catalog()
+    result: dict[str, float] = {}
+    for s in AVAILABLE_STRATEGIES:
+        sid = s["id"]
+        if sid in catalog and catalog[sid].get("min_profit_proba") is not None:
+            result[sid] = _normalize_ml_confidence(float(catalog[sid]["min_profit_proba"]))
+        else:
+            result[sid] = 0.55
+    return result
+
+
+def load_ml_confidence_map() -> dict[str, float]:
+    defaults = _ml_confidence_defaults()
+    result = dict(defaults)
+    if not enabled_strategies_file().is_file():
+        return result
+    try:
+        data = json.loads(enabled_strategies_file().read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return result
+    stored = data.get("ml_confidence") or {}
+    for sid in result:
+        if sid in stored:
+            try:
+                result[sid] = _normalize_ml_confidence(float(stored[sid]))
+            except (TypeError, ValueError):
+                pass
+    return result
+
+
+def load_trained_risk_map() -> dict[str, bool]:
+    catalog = _trained_risk_catalog()
+    result = {s["id"]: (s["id"] in catalog) for s in AVAILABLE_STRATEGIES}
+    if not enabled_strategies_file().is_file():
+        return result
+    try:
+        data = json.loads(enabled_strategies_file().read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return result
+    stored = data.get("trained_risk") or {}
+    for sid in result:
+        if sid in stored:
+            result[sid] = bool(stored[sid])
+        if sid not in catalog:
+            result[sid] = False
+    return result
+
+
 def _read_enabled_file() -> dict[str, Any]:
-    if not ENABLED_STRATEGIES_FILE.is_file():
+    if not enabled_strategies_file().is_file():
         return {}
     try:
-        return json.loads(ENABLED_STRATEGIES_FILE.read_text(encoding="utf-8"))
+        return json.loads(enabled_strategies_file().read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return {}
 
@@ -862,8 +1281,10 @@ def save_enabled_map(
     enabled: dict[str, bool],
     *,
     inverted: dict[str, bool] | None = None,
+    trained_risk: dict[str, bool] | None = None,
+    ml_confidence: dict[str, float] | None = None,
 ) -> None:
-    ENABLED_STRATEGIES_FILE.parent.mkdir(parents=True, exist_ok=True)
+    enabled_strategies_file().parent.mkdir(parents=True, exist_ok=True)
     data = _read_enabled_file()
     data["enabled"] = enabled
     if inverted is not None:
@@ -871,35 +1292,88 @@ def save_enabled_map(
     else:
         prev = data.get("inverted", {})
         data["inverted"] = {sid: bool(prev.get(sid, False)) for sid in enabled}
-    tmp = ENABLED_STRATEGIES_FILE.with_suffix(".json.tmp")
+    if trained_risk is not None:
+        data["trained_risk"] = {sid: bool(trained_risk.get(sid, False)) for sid in enabled}
+    else:
+        prev_tr = data.get("trained_risk", {})
+        catalog = _trained_risk_catalog()
+        data["trained_risk"] = {
+            sid: bool(prev_tr.get(sid, sid in catalog)) for sid in enabled
+        }
+        for sid in data["trained_risk"]:
+            if sid not in catalog:
+                data["trained_risk"][sid] = False
+    defaults_ml = _ml_confidence_defaults()
+    if ml_confidence is not None:
+        data["ml_confidence"] = {
+            sid: _normalize_ml_confidence(float(ml_confidence.get(sid, defaults_ml.get(sid, 0.55))))
+            for sid in enabled
+        }
+    else:
+        prev_ml = data.get("ml_confidence") or {}
+        data["ml_confidence"] = {}
+        for sid in enabled:
+            if sid in prev_ml:
+                try:
+                    data["ml_confidence"][sid] = _normalize_ml_confidence(float(prev_ml[sid]))
+                except (TypeError, ValueError):
+                    data["ml_confidence"][sid] = float(defaults_ml.get(sid, 0.55))
+            else:
+                data["ml_confidence"][sid] = float(defaults_ml.get(sid, 0.55))
+    tmp = enabled_strategies_file().with_suffix(".json.tmp")
     with tmp.open("w", encoding="utf-8") as fh:
         json.dump(data, fh, indent=4, ensure_ascii=False)
         fh.write("\n")
-    tmp.replace(ENABLED_STRATEGIES_FILE)
-    save_strategies_prefs(enabled, inverted=data["inverted"])
+    tmp.replace(enabled_strategies_file())
+    save_strategies_prefs(
+        enabled,
+        inverted=data["inverted"],
+        trained_risk=data["trained_risk"],
+        ml_confidence=data["ml_confidence"],
+    )
 
 
 def save_strategies_prefs(
     enabled: dict[str, bool],
     *,
     inverted: dict[str, bool] | None = None,
+    trained_risk: dict[str, bool] | None = None,
+    ml_confidence: dict[str, float] | None = None,
 ) -> None:
-    BOT_STRATEGIES_FILE.parent.mkdir(parents=True, exist_ok=True)
+    bot_strategies_file().parent.mkdir(parents=True, exist_ok=True)
     payload: dict[str, Any] = {"enabled": enabled}
     if inverted is not None:
         payload["inverted"] = inverted
-    elif BOT_STRATEGIES_FILE.is_file():
+    elif bot_strategies_file().is_file():
         try:
-            old = json.loads(BOT_STRATEGIES_FILE.read_text(encoding="utf-8"))
+            old = json.loads(bot_strategies_file().read_text(encoding="utf-8"))
             if "inverted" in old:
                 payload["inverted"] = old["inverted"]
         except (json.JSONDecodeError, OSError):
             pass
-    tmp = BOT_STRATEGIES_FILE.with_suffix(".json.tmp")
+    if trained_risk is not None:
+        payload["trained_risk"] = trained_risk
+    elif bot_strategies_file().is_file():
+        try:
+            old = json.loads(bot_strategies_file().read_text(encoding="utf-8"))
+            if "trained_risk" in old:
+                payload["trained_risk"] = old["trained_risk"]
+        except (json.JSONDecodeError, OSError):
+            pass
+    if ml_confidence is not None:
+        payload["ml_confidence"] = ml_confidence
+    elif bot_strategies_file().is_file():
+        try:
+            old = json.loads(bot_strategies_file().read_text(encoding="utf-8"))
+            if "ml_confidence" in old:
+                payload["ml_confidence"] = old["ml_confidence"]
+        except (json.JSONDecodeError, OSError):
+            pass
+    tmp = bot_strategies_file().with_suffix(".json.tmp")
     with tmp.open("w", encoding="utf-8") as fh:
         json.dump(payload, fh, indent=4, ensure_ascii=False)
         fh.write("\n")
-    tmp.replace(BOT_STRATEGIES_FILE)
+    tmp.replace(bot_strategies_file())
 
 
 def snapshot_strategies_from_file() -> dict[str, bool]:
@@ -911,9 +1385,9 @@ def snapshot_strategies_from_file() -> dict[str, bool]:
 
 def apply_strategies_prefs() -> dict[str, bool]:
     """Restore enabled strategies from bot_strategies.json after deploy."""
-    if not BOT_STRATEGIES_FILE.is_file():
+    if not bot_strategies_file().is_file():
         return load_enabled_map()
-    data = json.loads(BOT_STRATEGIES_FILE.read_text(encoding="utf-8"))
+    data = json.loads(bot_strategies_file().read_text(encoding="utf-8"))
     stored = data.get("enabled", {})
     result = default_enabled_map()
     for sid in result:
@@ -924,7 +1398,20 @@ def apply_strategies_prefs() -> dict[str, bool]:
     for sid in inverted:
         if sid in stored_inv:
             inverted[sid] = bool(stored_inv[sid])
-    save_enabled_map(result, inverted=inverted)
+    trained = load_trained_risk_map()
+    stored_tr = data.get("trained_risk", {})
+    for sid in trained:
+        if sid in stored_tr:
+            trained[sid] = bool(stored_tr[sid])
+    ml_conf = load_ml_confidence_map()
+    stored_ml = data.get("ml_confidence", {})
+    for sid in ml_conf:
+        if sid in stored_ml:
+            try:
+                ml_conf[sid] = _normalize_ml_confidence(float(stored_ml[sid]))
+            except (TypeError, ValueError):
+                pass
+    save_enabled_map(result, inverted=inverted, trained_risk=trained, ml_confidence=ml_conf)
     return result
 
 
@@ -936,17 +1423,17 @@ def ensure_router_config() -> None:
 
 
 def load_dual_hedge_enabled() -> bool:
-    if not DUAL_HEDGE_FILE.is_file():
+    if not dual_hedge_file().is_file():
         return False
     try:
-        data = json.loads(DUAL_HEDGE_FILE.read_text(encoding="utf-8"))
+        data = json.loads(dual_hedge_file().read_text(encoding="utf-8"))
         return bool(data.get("enabled", False))
     except (json.JSONDecodeError, OSError):
         return False
 
 
 def _save_dual_hedge_file(enabled: bool) -> None:
-    DUAL_HEDGE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    dual_hedge_file().parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "enabled": bool(enabled),
         "note": (
@@ -954,11 +1441,11 @@ def _save_dual_hedge_file(enabled: bool) -> None:
             "и противоположная (хедж). Требует hedge mode на Bybit."
         ),
     }
-    tmp = DUAL_HEDGE_FILE.with_suffix(".json.tmp")
+    tmp = dual_hedge_file().with_suffix(".json.tmp")
     with tmp.open("w", encoding="utf-8") as fh:
         json.dump(payload, fh, indent=4, ensure_ascii=False)
         fh.write("\n")
-    tmp.replace(DUAL_HEDGE_FILE)
+    tmp.replace(dual_hedge_file())
 
 
 def _apply_hedge_mode_to_configs(enabled: bool) -> None:
@@ -1018,6 +1505,10 @@ def get_strategies_payload() -> dict[str, Any]:
     enabled_ids = [sid for sid, on in enabled.items() if on]
     dual_hedge = load_dual_hedge_enabled()
     inverted = load_inverted_map()
+    trained_risk = load_trained_risk_map()
+    catalog = _trained_risk_catalog()
+    ml_confidence = load_ml_confidence_map()
+    ml_defaults = _ml_confidence_defaults()
     return {
         "router": ROUTER_STRATEGY,
         "enabled": enabled,
@@ -1027,6 +1518,12 @@ def get_strategies_payload() -> dict[str, Any]:
         "risk": strategy_risk_payload(),
         "dual_hedge": dual_hedge,
         "inverted": inverted,
+        "trained_risk": trained_risk,
+        "trained_risk_available": {sid: (sid in catalog) for sid in enabled},
+        "trained_risk_specs": catalog,
+        "ml_confidence": ml_confidence,
+        "ml_confidence_defaults": ml_defaults,
+        "ml_confidence_choices": list(ML_CONFIDENCE_CHOICES),
     }
 
 
@@ -1062,6 +1559,66 @@ def toggle_strategy_invert(strategy_id: str, inverted: bool) -> dict[str, Any]:
     return {
         "strategy": strategy_id,
         "inverted": state[strategy_id],
+        **get_strategies_payload(),
+    }
+
+
+def toggle_strategy_trained_risk(strategy_id: str, trained_risk: bool) -> dict[str, Any]:
+    strategy_id = validate_strategy(strategy_id)
+    catalog = _trained_risk_catalog()
+    if trained_risk and strategy_id not in catalog:
+        raise ValueError("no trained SL/TP for this strategy")
+    enabled = load_enabled_map()
+    state = load_trained_risk_map()
+    state[strategy_id] = bool(trained_risk)
+    save_enabled_map(enabled, trained_risk=state)
+    return {
+        "strategy": strategy_id,
+        "trained_risk": state[strategy_id],
+        **get_strategies_payload(),
+    }
+
+
+def set_strategy_ml_confidence(strategy_id: str, confidence: float) -> dict[str, Any]:
+    strategy_id = validate_strategy(strategy_id)
+    raw = float(confidence)
+    if raw > 1.0:
+        raw = raw / 100.0
+    conf = _normalize_ml_confidence(raw)
+    enabled = load_enabled_map()
+    state = load_ml_confidence_map()
+    state[strategy_id] = conf
+    save_enabled_map(enabled, ml_confidence=state)
+    return {
+        "strategy": strategy_id,
+        "ml_confidence": state[strategy_id],
+        **get_strategies_payload(),
+    }
+
+
+def set_all_strategies_ml_confidence(
+    confidence: float | None = None,
+    *,
+    reset: bool = False,
+) -> dict[str, Any]:
+    """Set the same ML confidence for every catalog strategy, or restore pack defaults."""
+    enabled = load_enabled_map()
+    defaults = _ml_confidence_defaults()
+    if reset:
+        state = {sid: float(val) for sid, val in defaults.items()}
+        bulk_value: float | str = "default"
+    else:
+        if confidence is None:
+            raise ValueError("ml_confidence required")
+        raw = float(confidence)
+        if raw > 1.0:
+            raw = raw / 100.0
+        conf = _normalize_ml_confidence(raw)
+        state = {s["id"]: conf for s in AVAILABLE_STRATEGIES}
+        bulk_value = conf
+    save_enabled_map(enabled, ml_confidence=state)
+    return {
+        "ml_confidence_bulk": bulk_value,
         **get_strategies_payload(),
     }
 
@@ -1155,14 +1712,43 @@ def set_max_open_trades(bot: str, value: int) -> dict[str, Any]:
         reload_result = reload_bot(bot)
     except BaseException as exc:  # noqa: BLE001
         reload_warning = str(exc)
+
+    trade_action: str | None = None
+    trade_result: Any = None
+    trade_warning: str | None = None
+    # 0 slots → stop trading; restore ≥1 after 0 → start again
+    if value <= 0:
+        trade_action = "stop"
+        try:
+            trade_result = stop_bot(bot)
+        except BaseException as exc:  # noqa: BLE001
+            trade_warning = str(exc)
+    elif old_val <= 0 and value >= 1:
+        if bot == "finder" and not is_finder_bot_enabled():
+            trade_action = "skip_start_finder_disabled"
+        else:
+            trade_action = "start"
+            try:
+                trade_result = start_bot(bot)
+            except BaseException as exc:  # noqa: BLE001
+                trade_warning = str(exc)
+
     result: dict[str, Any] = {
         "bot": bot,
         "max_open_trades": value,
         "reloaded": reload_result,
         "state": safe_get_state(bot),
+        "trading_disabled": value <= 0,
     }
+    if trade_action:
+        result["trade_action"] = trade_action
+        result["trade_result"] = trade_result
     if reload_warning:
         result["reload_warning"] = reload_warning
+    if trade_warning:
+        result["trade_warning"] = trade_warning
+        if not reload_warning:
+            result["reload_warning"] = trade_warning
     if old_val != value:
         try:
             record_max_open_trades(bot, old_val, value)
@@ -1249,9 +1835,9 @@ def remove_pair(pair: str) -> dict[str, Any]:
 
 
 LOG_SOURCES: dict[str, tuple[str, Path]] = {
-    "finder": ("ML Finder", BASE / "user_data" / "logs" / "freqtrade-finder.log"),
-    "strategy": ("Стратегии", BASE / "user_data" / "logs" / "freqtrade-strategy.log"),
-    "grid": ("Grid", BASE / "user_data" / "logs" / "freqtrade-grid.log"),
+    "finder": ("ML Finder", BASE / "user_data" / "logs" / "cryptotools-finder.log"),
+    "strategy": ("Стратегии", BASE / "user_data" / "logs" / "cryptotools-strategy.log"),
+    "grid": ("Grid", BASE / "user_data" / "logs" / "cryptotools-grid.log"),
     "scanner": ("Сканер Grid", BASE / "user_data" / "logs" / "ranging-scanner.log"),
     "strategy_scanner": ("Сканер страт.", BASE / "user_data" / "logs" / "strategy-scanner.log"),
     "pair_config": ("UI API", BASE / "user_data" / "logs" / "pair-config.log"),
@@ -1366,8 +1952,8 @@ def trigger_ranging_scan() -> dict[str, Any]:
     SCAN_LOCK.write_text(str(int(time.time())), encoding="utf-8")
     py = BASE / ".venv" / "bin" / "python3"
     env = os.environ.copy()
-    env["FT_BASE"] = str(BASE)
-    env.setdefault("FT_ENV", "/home/freqtrade/.freqtrade.env")
+    env["CT_BASE"] = str(BASE)
+    env.setdefault("CT_ENV", "/home/cryptotools/.cryptotools.env")
 
     try:
         proc = subprocess.run(
@@ -1443,8 +2029,8 @@ def trigger_strategy_scan() -> dict[str, Any]:
     STRATEGY_SCAN_LOCK.write_text(str(int(time.time())), encoding="utf-8")
     py = BASE / ".venv" / "bin" / "python3"
     env = os.environ.copy()
-    env["FT_BASE"] = str(BASE)
-    env.setdefault("FT_ENV", "/home/freqtrade/.freqtrade.env")
+    env["CT_BASE"] = str(BASE)
+    env.setdefault("CT_ENV", "/home/cryptotools/.cryptotools.env")
 
     try:
         proc = subprocess.run(
@@ -1483,22 +2069,42 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
 
 
 class Handler(BaseHTTPRequestHandler):
+    user: dict[str, Any] | None = None
+
     def log_message(self, fmt, *args):  # noqa: D401
         _server_log.info("%s - %s", self.address_string(), fmt % args)
 
-    def _auth_ok(self) -> bool:
-        if not AUTH_PASS:
-            return False
+    def _authenticate(self) -> dict[str, Any] | None:
         header = self.headers.get("Authorization", "")
-        if not header.startswith("Basic "):
-            return False
-        import base64
-
-        try:
-            user, pwd = base64.b64decode(header[6:]).decode().split(":", 1)
-        except Exception:
-            return False
-        return secrets.compare_digest(user, AUTH_USER) and secrets.compare_digest(pwd, AUTH_PASS)
+        if header.startswith("Bearer "):
+            payload = tm.verify_token(header[7:].strip())
+            if not payload:
+                return None
+            user = tm.get_user_by_id(str(payload.get("sub", "")))
+            if not user or not user.get("enabled", True):
+                return None
+            return user
+        if header.startswith("Basic "):
+            try:
+                raw_user, pwd = base64.b64decode(header[6:]).decode().split(":", 1)
+            except Exception:
+                return None
+            user = tm.get_user_by_username(raw_user)
+            if user and tm.verify_password(pwd, str(user.get("password_hash") or "")):
+                if not user.get("enabled", True):
+                    return None
+                return user
+            # Legacy Basic auth against FREQUI_* env → admin user
+            if (
+                AUTH_PASS
+                and secrets.compare_digest(raw_user, AUTH_USER)
+                and secrets.compare_digest(pwd, AUTH_PASS)
+            ):
+                admin = tm.get_user_by_id("admin") or tm.get_user_by_username(AUTH_USER)
+                if admin and admin.get("enabled", True):
+                    return admin
+            return None
+        return None
 
     def _json(self, code: int, payload: Any) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode()
@@ -1514,22 +2120,198 @@ class Handler(BaseHTTPRequestHandler):
             return {}
         return json.loads(self.rfile.read(length))
 
-    def do_GET(self) -> None:
-        if not self._auth_ok():
-            self.send_response(401)
-            self.send_header("WWW-Authenticate", 'Basic realm="pair-config"')
-            self.end_headers()
+    def _read_raw_body(self) -> bytes:
+        length = int(self.headers.get("Content-Length", 0))
+        if not length:
+            return b""
+        return self.rfile.read(length)
+
+    def _unauthorized(self) -> None:
+        # Do NOT send WWW-Authenticate: Basic — browsers show a native login
+        # popup over the UI. Session/Bearer auth is handled by the SPA form.
+        self._json(401, {"error": "unauthorized"})
+
+    def _require_admin(self) -> bool:
+        if not self.user or not tm.is_admin(self.user):
+            self._json(403, {"error": "admin required"})
+            return False
+        return True
+
+    def _auth_me_payload(self) -> dict[str, Any]:
+        user = self.user or {}
+        public = {k: v for k, v in user.items() if k != "password_hash"}
+        if tm.is_admin(user):
+            secrets_st = tm.admin_secrets_status()
+            bots_running: dict[str, Any] = {}
+            for bot, port in tm.ADMIN_BOT_PORTS.items():
+                unit = {
+                    "finder": "cryptotools-finder",
+                    "strategy": "cryptotools-strategy",
+                    "grid": "cryptotools-grid",
+                }.get(bot, "")
+                state = "unknown"
+                if unit:
+                    try:
+                        cp = subprocess.run(
+                            ["systemctl", "is-active", unit],
+                            capture_output=True,
+                            text=True,
+                            timeout=5,
+                            check=False,
+                        )
+                        state = (cp.stdout or "").strip() or "unknown"
+                    except (OSError, subprocess.SubprocessError):
+                        state = "unknown"
+                bots_running[bot] = {
+                    "unit": unit,
+                    "active": state == "active",
+                    "state": state,
+                    "port": port,
+                }
+        else:
+            secrets_st = tm.secrets_status(str(user["id"]))
+            bots_running = tm.tenant_bots_status(str(user["id"]))
+        return {
+            "user": public,
+            "role": public.get("role"),
+            "secrets": secrets_st,
+            "bots_running": bots_running,
+        }
+
+    def _handle_bot_proxy(self, path: str, parsed) -> None:
+        parts = [p for p in path.split("/") if p]
+        # parts: bot-proxy, bot, ...
+        if len(parts) < 2:
+            self._json(400, {"error": "bot required"})
             return
-        path = urlparse(self.path).path.rstrip("/") or "/"
-        if path == "/health":
+        bot = parts[1]
+        rest = "/".join(parts[2:])
+        if rest.rstrip("/") == "start" and bot_trading_disabled(bot):
+            self._json(
+                400,
+                {
+                    "error": "max_open_trades is 0 — set at least 1 active slot to start trading",
+                    "trading_disabled": True,
+                },
+            )
+            return
+        qs = parse_qs(parsed.query)
+        query = {k: (v[0] if len(v) == 1 else v) for k, v in qs.items()}
+        body = self._read_raw_body() if self.command.upper() not in ("GET", "HEAD") else b""
+        status, headers, body_out = tm.proxy_bot_request(
+            self.user or {},
+            bot,
+            self.command,
+            rest,
+            query=query or None,
+            body_bytes=body or None,
+            content_type=self.headers.get("Content-Type"),
+        )
+        self.send_response(status)
+        ct = headers.get("content-type") or "application/octet-stream"
+        self.send_header("Content-Type", ct)
+        self.send_header("Content-Length", str(len(body_out)))
+        self.end_headers()
+        self.wfile.write(body_out)
+
+    def _dispatch(self) -> None:
+        parsed = urlparse(self.path)
+        path = parsed.path.rstrip("/") or "/"
+        method = self.command.upper()
+
+        # Unauthenticated endpoints
+        if method == "GET" and path == "/health":
             self._json(200, {"ok": True})
+            return
+        if method == "POST" and path == "/auth/login":
+            data = self._read_json()
+            username = str(data.get("username") or "")
+            password = str(data.get("password") or "")
+            user = tm.get_user_by_username(username)
+            if not user or not tm.verify_password(password, str(user.get("password_hash") or "")):
+                # Legacy env fallback for admin bootstrap
+                if (
+                    AUTH_PASS
+                    and secrets.compare_digest(username, AUTH_USER)
+                    and secrets.compare_digest(password, AUTH_PASS)
+                ):
+                    user = tm.get_user_by_id("admin") or tm.get_user_by_username(AUTH_USER)
+                else:
+                    self._json(401, {"error": "invalid credentials"})
+                    return
+            if not user or not user.get("enabled", True):
+                self._json(401, {"error": "invalid credentials"})
+                return
+            token = tm.issue_token(user)
+            public = {k: v for k, v in user.items() if k != "password_hash"}
+            self._json(200, {"token": token, "user": public, "role": public.get("role")})
+            return
+
+        user = self._authenticate()
+        if not user:
+            self._unauthorized()
+            return
+
+        self.user = user
+        ctx_token = tc.set_request_user(user)
+        try:
+            if path.startswith("/bot-proxy/") or path == "/bot-proxy":
+                self._handle_bot_proxy(path, parsed)
+                return
+            if method == "GET":
+                self._handle_get(path, parsed)
+            elif method == "POST":
+                self._handle_post(path, parsed)
+            elif method == "PUT":
+                self._handle_put(path, parsed)
+            elif method == "PATCH":
+                self._handle_patch(path, parsed)
+            else:
+                self._json(405, {"error": "method not allowed"})
+        finally:
+            tc.reset_request_user(ctx_token)
+
+    def do_GET(self) -> None:
+        self._dispatch()
+
+    def do_POST(self) -> None:
+        self._dispatch()
+
+    def do_PUT(self) -> None:
+        self._dispatch()
+
+    def do_PATCH(self) -> None:
+        self._dispatch()
+
+    def do_DELETE(self) -> None:
+        self._dispatch()
+
+    def _handle_get(self, path: str, parsed) -> None:
+        if path == "/auth/me":
+            self._json(200, self._auth_me_payload())
+            return
+        if path == "/users":
+            if not self._require_admin():
+                return
+            self._json(200, {"users": tm.list_users_public()})
+            return
+        if path == "/secrets/status":
+            qs = parse_qs(parsed.query)
+            if tm.is_admin(self.user):
+                uid = (qs.get("user_id") or [None])[0]
+                if uid:
+                    self._json(200, tm.secrets_status(str(uid)))
+                else:
+                    self._json(200, tm.admin_secrets_status())
+            else:
+                self._json(200, tm.secrets_status(str(self.user["id"])))
             return
         if path == "/system":
             self._json(200, get_system_stats())
             return
         if path == "/pairs":
             payload = {b: safe_get_state(b) for b in CONFIGS}
-            mode_path = BASE / "user_data/pairlist_mode.json"
+            mode_path = tc.user_data_dir(BASE) / "pairlist_mode.json"
             if mode_path.is_file():
                 try:
                     payload["_pairlist_mode"] = json.loads(mode_path.read_text(encoding="utf-8")).get(
@@ -1547,7 +2329,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, get_strategies_payload())
             return
         if path == "/logs":
-            qs = parse_qs(urlparse(self.path).query)
+            qs = parse_qs(parsed.query)
             bots = _resolve_log_bots(qs.get("bots", ["all"])[0])
             tail = int(qs.get("tail", ["0"])[0] or 0)
             since_raw = qs.get("since", [None])[0]
@@ -1569,7 +2351,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, get_changelog_payload())
             return
         if path == "/trade-ml-meta":
-            qs = parse_qs(urlparse(self.path).query)
+            qs = parse_qs(parsed.query)
             bot = resolve_bot((qs.get("bot") or [""])[0])
             raw_ids = (qs.get("ids") or [""])[0]
             if bot not in CONFIGS:
@@ -1579,13 +2361,14 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, get_trade_ml_meta_payload(bot, trade_ids))
             return
         if path == "/closed-trades":
-            qs = parse_qs(urlparse(self.path).query)
+            qs = parse_qs(parsed.query)
             raw_bot = (qs.get("bot") or [""])[0] or None
             bot = resolve_bot(raw_bot) if raw_bot else None
             try:
-                limit = int((qs.get("limit") or ["500"])[0])
+                raw_limit = (qs.get("limit") or ["0"])[0]
+                limit = 0 if str(raw_limit).lower() in ("0", "all", "") else int(raw_limit)
             except ValueError:
-                limit = 500
+                limit = 0
             payload = get_closed_trades_payload(limit, bot)
             if payload.get("error"):
                 self._json(400, payload)
@@ -1601,28 +2384,33 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:  # noqa: BLE001
                 self._json(500, {"error": str(exc), "ok": False})
             return
-        if path == "/bybit-grid":
-            self._json(200, get_status_payload())
-            return
-        if path == "/bybit-grid/history":
-            self._json(200, get_history_payload())
-            return
-        if path == "/bybit-grid/config":
-            self._json(200, load_bybit_grid_config())
-            return
-        if path == "/bybit-grid/suggest":
-            qs = parse_qs(urlparse(self.path).query)
-            pair = (qs.get("pair") or [""])[0]
-            if not pair:
-                self._json(400, {"error": "pair required"})
-                return
-            try:
-                self._json(200, suggest_params(pair))
-            except (RuntimeError, ValueError) as exc:
-                self._json(400, {"error": str(exc)})
-            return
-        if path == "/bybit-grid/scan":
-            self._json(200, get_scan_status())
+        if path.startswith("/bybit-grid"):
+            ud, env = tc.bybit_context_paths(BASE)
+            with tenant_bybit_context(ud, env):
+                if path == "/bybit-grid":
+                    self._json(200, get_status_payload())
+                    return
+                if path == "/bybit-grid/history":
+                    self._json(200, get_history_payload())
+                    return
+                if path == "/bybit-grid/config":
+                    self._json(200, load_bybit_grid_config())
+                    return
+                if path == "/bybit-grid/suggest":
+                    qs = parse_qs(parsed.query)
+                    pair = (qs.get("pair") or [""])[0]
+                    if not pair:
+                        self._json(400, {"error": "pair required"})
+                        return
+                    try:
+                        self._json(200, suggest_params(pair))
+                    except (RuntimeError, ValueError) as exc:
+                        self._json(400, {"error": str(exc)})
+                    return
+                if path == "/bybit-grid/scan":
+                    self._json(200, get_scan_status())
+                    return
+            self._json(404, {"error": "not found"})
             return
         parts = path.split("/")
         if len(parts) == 3 and parts[1] == "pairs" and parts[2] in CONFIGS:
@@ -1630,14 +2418,34 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._json(404, {"error": "not found"})
 
-    def do_POST(self) -> None:
-        if not self._auth_ok():
-            self.send_response(401)
-            self.send_header("WWW-Authenticate", 'Basic realm="pair-config"')
-            self.end_headers()
-            return
+    def _handle_post(self, path: str, parsed) -> None:
         data = self._read_json()
-        path = urlparse(self.path).path.rstrip("/") or "/"
+        if path == "/users":
+            if not self._require_admin():
+                return
+            try:
+                created = tm.create_user(str(data.get("username") or ""), str(data.get("password") or ""))
+            except ValueError as exc:
+                self._json(400, {"error": str(exc)})
+                return
+            bots = None
+            st = tm.secrets_status(str(created["id"]))
+            if st.get("has_secrets"):
+                bots = tm.start_tenant_bots(str(created["id"]))
+            self._json(201, {"user": created, "bots_started": bots})
+            return
+        parts = path.split("/")
+        if len(parts) == 4 and parts[1] == "users" and parts[3] == "password":
+            if not self._require_admin():
+                return
+            try:
+                updated = tm.set_user_password(parts[2], str(data.get("password") or ""))
+            except (ValueError, KeyError) as exc:
+                code = 404 if isinstance(exc, KeyError) else 400
+                self._json(code, {"error": str(exc)})
+                return
+            self._json(200, {"user": updated})
+            return
         if path == "/ranging-scan":
             try:
                 self._json(200, trigger_ranging_scan())
@@ -1673,63 +2481,68 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:  # noqa: BLE001
                 self._json(500, {"error": str(exc), "ok": False})
             return
-        if path == "/bybit-grid/validate":
-            try:
-                self._json(200, validate_grid(data))
-            except (RuntimeError, ValueError) as exc:
-                self._json(400, {"error": str(exc)})
-            return
-        if path == "/bybit-grid/create":
-            try:
-                self._json(200, create_grid(data))
-            except (RuntimeError, ValueError) as exc:
-                self._json(400, {"error": str(exc)})
-            return
-        if path == "/bybit-grid/close":
-            bot_id = data.get("bot_id", "")
-            if not bot_id:
-                self._json(400, {"error": "bot_id required"})
-                return
-            try:
-                self._json(200, close_grid(str(bot_id)))
-            except (RuntimeError, ValueError) as exc:
-                self._json(400, {"error": str(exc)})
-            return
-        if path == "/bybit-grid/auto":
-            dry_run = bool(data.get("dry_run"))
-            force = bool(data.get("force"))
-            try:
-                self._json(200, deploy_best(dry_run=dry_run, force=force))
-            except (RuntimeError, ValueError) as exc:
-                self._json(400, {"error": str(exc)})
-            return
-        if path == "/bybit-grid/scan":
-            try:
-                self._json(200, run_scan_only())
-            except (RuntimeError, ValueError) as exc:
-                self._json(400, {"error": str(exc)})
-            return
-        if path == "/bybit-grid/sync":
-            try:
-                extra = data.get("bot_ids") if isinstance(data.get("bot_ids"), list) else None
-                scan = bool(data.get("scan", False))
-                full = bool(data.get("full")) or scan or bool(extra)
-                self._json(
-                    200,
-                    sync_all_bots_from_bybit(
-                        extra,
-                        scan_missing=scan,
-                        full_reconcile=full,
-                    ),
-                )
-            except (RuntimeError, ValueError) as exc:
-                self._json(400, {"error": str(exc)})
-            return
-        if path == "/bybit-grid/config":
-            try:
-                self._json(200, update_bybit_grid_config(data))
-            except (RuntimeError, ValueError) as exc:
-                self._json(400, {"error": str(exc)})
+        if path.startswith("/bybit-grid"):
+            ud, env = tc.bybit_context_paths(BASE)
+            with tenant_bybit_context(ud, env):
+                if path == "/bybit-grid/validate":
+                    try:
+                        self._json(200, validate_grid(data))
+                    except (RuntimeError, ValueError) as exc:
+                        self._json(400, {"error": str(exc)})
+                    return
+                if path == "/bybit-grid/create":
+                    try:
+                        self._json(200, create_grid(data))
+                    except (RuntimeError, ValueError) as exc:
+                        self._json(400, {"error": str(exc)})
+                    return
+                if path == "/bybit-grid/close":
+                    bot_id = data.get("bot_id", "")
+                    if not bot_id:
+                        self._json(400, {"error": "bot_id required"})
+                        return
+                    try:
+                        self._json(200, close_grid(str(bot_id)))
+                    except (RuntimeError, ValueError) as exc:
+                        self._json(400, {"error": str(exc)})
+                    return
+                if path == "/bybit-grid/auto":
+                    dry_run = bool(data.get("dry_run"))
+                    force = bool(data.get("force"))
+                    try:
+                        self._json(200, deploy_best(dry_run=dry_run, force=force))
+                    except (RuntimeError, ValueError) as exc:
+                        self._json(400, {"error": str(exc)})
+                    return
+                if path == "/bybit-grid/scan":
+                    try:
+                        self._json(200, run_scan_only())
+                    except (RuntimeError, ValueError) as exc:
+                        self._json(400, {"error": str(exc)})
+                    return
+                if path == "/bybit-grid/sync":
+                    try:
+                        extra = data.get("bot_ids") if isinstance(data.get("bot_ids"), list) else None
+                        scan = bool(data.get("scan", False))
+                        full = bool(data.get("full")) or scan or bool(extra)
+                        self._json(
+                            200,
+                            sync_all_bots_from_bybit(
+                                extra,
+                                scan_missing=scan,
+                                full_reconcile=full,
+                            ),
+                        )
+                    except (RuntimeError, ValueError) as exc:
+                        self._json(400, {"error": str(exc)})
+                    return
+                if path == "/bybit-grid/config":
+                    try:
+                        self._json(200, update_bybit_grid_config(data))
+                    except (RuntimeError, ValueError) as exc:
+                        self._json(400, {"error": str(exc)})
+                    return
+            self._json(404, {"error": "not found"})
             return
         action = data.get("action")
         pair = data.get("pair", "")
@@ -1776,6 +2589,48 @@ class Handler(BaseHTTPRequestHandler):
                     self._json(400, {"error": "inverted required"})
                     return
                 self._json(200, toggle_strategy_invert(strategy_id, bool(data["inverted"])))
+            elif action == "toggle_strategy_trained_risk":
+                strategy_id = data.get("strategy", "")
+                if not strategy_id:
+                    self._json(400, {"error": "strategy required"})
+                    return
+                if "trained_risk" not in data:
+                    self._json(400, {"error": "trained_risk required"})
+                    return
+                self._json(
+                    200,
+                    toggle_strategy_trained_risk(strategy_id, bool(data["trained_risk"])),
+                )
+            elif action == "set_strategy_ml_confidence":
+                strategy_id = data.get("strategy", "")
+                if not strategy_id:
+                    self._json(400, {"error": "strategy required"})
+                    return
+                if "ml_confidence" not in data:
+                    self._json(400, {"error": "ml_confidence required"})
+                    return
+                try:
+                    self._json(
+                        200,
+                        set_strategy_ml_confidence(strategy_id, float(data["ml_confidence"])),
+                    )
+                except ValueError as exc:
+                    self._json(400, {"error": str(exc)})
+            elif action == "set_all_strategies_ml_confidence":
+                reset = bool(data.get("reset"))
+                try:
+                    if reset:
+                        self._json(200, set_all_strategies_ml_confidence(reset=True))
+                    else:
+                        if "ml_confidence" not in data:
+                            self._json(400, {"error": "ml_confidence required (or reset=true)"})
+                            return
+                        self._json(
+                            200,
+                            set_all_strategies_ml_confidence(float(data["ml_confidence"])),
+                        )
+                except ValueError as exc:
+                    self._json(400, {"error": str(exc)})
             elif action == "set_dual_hedge":
                 if "enabled" not in data:
                     self._json(400, {"error": "enabled required"})
@@ -1798,6 +2653,8 @@ class Handler(BaseHTTPRequestHandler):
                         "error": (
                             "action must be add, remove, set_max_trades, set_stake, "
                             "set_strategy, toggle_strategy, toggle_strategy_invert, "
+                            "toggle_strategy_trained_risk, set_strategy_ml_confidence, "
+                            "set_all_strategies_ml_confidence, "
                             "set_dual_hedge, or set_strategy_risk"
                         )
                     },
@@ -1809,9 +2666,57 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:  # noqa: BLE001
             self._json(500, {"error": str(exc)})
 
+    def _handle_put(self, path: str, parsed) -> None:
+        if path != "/secrets":
+            self._json(404, {"error": "not found"})
+            return
+        data = self._read_json()
+        qs = parse_qs(parsed.query)
+        key = str(data.get("bybit_api_key") or "")
+        secret = str(data.get("bybit_api_secret") or "")
+        if tm.is_admin(self.user):
+            target_id = str(data.get("user_id") or (qs.get("user_id") or [None])[0] or "")
+            if not target_id:
+                self._json(400, {"error": "user_id required for admin secrets write"})
+                return
+            if target_id == "admin":
+                self._json(400, {"error": "admin secrets come from process env"})
+                return
+        else:
+            if data.get("user_id") and str(data.get("user_id")) != str(self.user["id"]):
+                self._json(403, {"error": "cannot write secrets for another user"})
+                return
+            target_id = str(self.user["id"])
+        try:
+            tm.save_user_secrets(target_id, key, secret)
+            bots = tm.restart_tenant_bots(target_id)
+        except ValueError as exc:
+            self._json(400, {"error": str(exc)})
+            return
+        self._json(200, {"ok": True, "user_id": target_id, "bots_restarted": bots})
+
+    def _handle_patch(self, path: str, parsed) -> None:
+        parts = path.split("/")
+        if len(parts) != 3 or parts[1] != "users":
+            self._json(404, {"error": "not found"})
+            return
+        if not self._require_admin():
+            return
+        data = self._read_json()
+        if "enabled" not in data:
+            self._json(400, {"error": "enabled required"})
+            return
+        try:
+            updated = tm.set_user_enabled(parts[2], bool(data["enabled"]))
+        except (ValueError, KeyError) as exc:
+            code = 404 if isinstance(exc, KeyError) else 400
+            self._json(code, {"error": str(exc)})
+            return
+        self._json(200, {"user": updated})
+
 
 def main() -> None:
-    env_file = Path(os.environ.get("FT_ENV", "/home/freqtrade/.freqtrade.env"))
+    env_file = Path(os.environ.get("CT_ENV", "/home/cryptotools/.cryptotools.env"))
     if env_file.exists():
         for line in env_file.read_text(encoding="utf-8").splitlines():
             line = line.strip().rstrip("\r")
@@ -1821,6 +2726,7 @@ def main() -> None:
     global AUTH_USER, AUTH_PASS
     AUTH_USER = os.environ.get("FREQUI_USERNAME", AUTH_USER)
     AUTH_PASS = os.environ.get("FREQUI_PASSWORD", AUTH_PASS)
+    tm.ensure_users_migrated()
     apply_bot_limits_to_configs()
     apply_strategies_prefs()
     ensure_router_config()
@@ -1839,7 +2745,7 @@ def main() -> None:
 
 def apply_limits_cli() -> None:
     """Restore max_open_trades from bot_limits.json into config files."""
-    env_file = Path(os.environ.get("FT_ENV", "/home/freqtrade/.freqtrade.env"))
+    env_file = Path(os.environ.get("CT_ENV", "/home/cryptotools/.cryptotools.env"))
     if env_file.exists():
         for line in env_file.read_text(encoding="utf-8").splitlines():
             line = line.strip().rstrip("\r")
@@ -1852,7 +2758,7 @@ def apply_limits_cli() -> None:
 
 def ensure_limits_cli() -> None:
     """Snapshot max_open_trades from live configs into bot_limits.json (before deploy)."""
-    env_file = Path(os.environ.get("FT_ENV", "/home/freqtrade/.freqtrade.env"))
+    env_file = Path(os.environ.get("CT_ENV", "/home/cryptotools/.cryptotools.env"))
     if env_file.exists():
         for line in env_file.read_text(encoding="utf-8").splitlines():
             line = line.strip().rstrip("\r")
@@ -1864,7 +2770,7 @@ def ensure_limits_cli() -> None:
 
 
 def snapshot_strategies_cli() -> None:
-    env_file = Path(os.environ.get("FT_ENV", "/home/freqtrade/.freqtrade.env"))
+    env_file = Path(os.environ.get("CT_ENV", "/home/cryptotools/.cryptotools.env"))
     if env_file.exists():
         for line in env_file.read_text(encoding="utf-8").splitlines():
             line = line.strip().rstrip("\r")
@@ -1876,7 +2782,7 @@ def snapshot_strategies_cli() -> None:
 
 
 def apply_strategies_cli() -> None:
-    env_file = Path(os.environ.get("FT_ENV", "/home/freqtrade/.freqtrade.env"))
+    env_file = Path(os.environ.get("CT_ENV", "/home/cryptotools/.cryptotools.env"))
     if env_file.exists():
         for line in env_file.read_text(encoding="utf-8").splitlines():
             line = line.strip().rstrip("\r")

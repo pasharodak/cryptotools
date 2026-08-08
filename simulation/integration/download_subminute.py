@@ -203,7 +203,7 @@ def main() -> int:
 
     timerange = args.timerange or cfg.get("player_timerange") or cfg.get("timerange", "20260613-20260628")
     start, end = parse_timerange(timerange)
-    datadir = args.datadir or (root() / cfg["freqtrade_datadir"])
+    datadir = args.datadir or (root() / cfg["ctengine_datadir"])
     datadir.mkdir(parents=True, exist_ok=True)
 
     summary = []

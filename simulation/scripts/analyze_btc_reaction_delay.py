@@ -89,7 +89,7 @@ def main() -> int:
     end = pd.Timestamp(end_s, tz="UTC")
     thr = args.thr_bps / 10000.0
 
-    ds = HistoricalDatastore(ROOT / "simulation/data/freqtrade")
+    ds = HistoricalDatastore(ROOT / "simulation/data/ctengine")
     btc = ds.load("BTC/USDT:USDT", "1m")
     btc = btc.loc[(btc.index >= start) & (btc.index < end)]
     btc_r = returns(btc["close"]).dropna()

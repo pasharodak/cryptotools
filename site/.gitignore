@@ -31,8 +31,8 @@ user_data/models/*
 !user_data/models/trade_finder/trade_finder.joblib
 !user_data/trade_finder.json
 user_data/notebooks/*
-freqtrade-plot.html
-freqtrade-profit-plot.html
+ctengine-plot.html
+ctengine-profit-plot.html
 deploy/*.tgz
 deploy/*.tar.gz
 deploy/*.zip
@@ -42,7 +42,7 @@ deploy/id_rsa.pub
 **/id_rsa
 **/id_rsa.pub
 scripts/_*.py
-freqtrade/rpc/api_server/ui/*
+ctengine/rpc/api_server/ui/*
 build_helpers/ta-lib/*
 
 # Macos related

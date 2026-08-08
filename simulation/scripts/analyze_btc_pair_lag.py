@@ -272,7 +272,7 @@ def main() -> int:
     )
     args = ap.parse_args()
 
-    datadir = ROOT / "simulation" / "data" / "freqtrade"
+    datadir = ROOT / "simulation" / "data" / "ctengine"
     ds = HistoricalDatastore(datadir)
     bar_min = TF_MINUTES.get(args.timeframe, 5)
 

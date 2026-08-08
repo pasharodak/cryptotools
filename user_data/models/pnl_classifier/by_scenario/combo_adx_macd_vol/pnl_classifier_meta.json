@@ -1,0 +1,99 @@
+{
+  "scenario_id": "combo_adx_macd_vol",
+  "experiment_id": "exp14_lgbm_gate045",
+  "model": "lightgbm + sigmoid",
+  "model_key": "lightgbm",
+  "calibrate": true,
+  "calibrate_method": "sigmoid",
+  "min_profit_proba": 0.45,
+  "params": {
+    "n_estimators": 400,
+    "learning_rate": 0.05,
+    "max_depth": 8,
+    "num_leaves": 63,
+    "min_child_samples": 25,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "class_weight": "balanced"
+  },
+  "trained_at": "2026-08-08T08:29:33.657386+00:00",
+  "train_range": "20250101-20260331",
+  "test_range": "20260401-20260625",
+  "fit_mode": "all_cached",
+  "n_train_trades": 6175,
+  "n_test_trades": 4228,
+  "n_train": 6175,
+  "n_test": 4228,
+  "features": [
+    "scenario_id",
+    "pair_base",
+    "scan_type",
+    "group",
+    "strategy",
+    "is_short",
+    "stake_usdt",
+    "stoploss",
+    "roi_at_entry",
+    "hour_utc",
+    "dow_utc",
+    "mins_since_armed",
+    "log_open_rate",
+    "rsi_14",
+    "atr_pct_14",
+    "adx_14",
+    "vol_ratio_20",
+    "ret_1",
+    "ret_4",
+    "ret_12",
+    "trend_12h",
+    "ema_spread_pct",
+    "range_pct",
+    "dist_high_20_pct",
+    "dist_low_20_pct"
+  ],
+  "source": "ml_param_experiments_per_scenario",
+  "accuracy": 0.7382,
+  "roc_auc": 0.711,
+  "loss_recall": 0.9359,
+  "loss_precision": 0.7539,
+  "profit_recall": 0.2579,
+  "profit_precision": 0.6235,
+  "macro_f1": 0.6,
+  "confusion_matrix": [
+    [
+      2803,
+      192
+    ],
+    [
+      915,
+      318
+    ]
+  ],
+  "classification_report": {
+    "loss": {
+      "precision": 0.7538999462076386,
+      "recall": 0.9358931552587646,
+      "f1-score": 0.8350960822285118,
+      "support": 2995.0
+    },
+    "profit": {
+      "precision": 0.6235294117647059,
+      "recall": 0.25790754257907544,
+      "f1-score": 0.3648881239242685,
+      "support": 1233.0
+    },
+    "accuracy": 0.7381740775780511,
+    "macro avg": {
+      "precision": 0.6887146789861722,
+      "recall": 0.59690034891892,
+      "f1-score": 0.5999921030763902,
+      "support": 4228.0
+    },
+    "weighted avg": {
+      "precision": 0.7158803461678713,
+      "recall": 0.7381740775780511,
+      "f1-score": 0.6979706298658979,
+      "support": 4228.0
+    }
+  }
+}

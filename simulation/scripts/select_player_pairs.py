@@ -121,7 +121,7 @@ def probe_pair(
     out_dir.mkdir(parents=True, exist_ok=True)
     strategy = meta["strategy"]
     cmd = [
-        str(root / ".venv/Scripts/freqtrade.exe"),
+        str(root / ".venv/Scripts/ctbot.exe"),
         "backtesting",
         "--config",
         str(runtime),
@@ -130,7 +130,7 @@ def probe_pair(
         "--strategy-path",
         str(root / meta["strategy_path"]),
         "--datadir",
-        str(root / "simulation/data/freqtrade"),
+        str(root / "simulation/data/ctengine"),
         "--timerange",
         timerange,
         "--export",
@@ -345,7 +345,7 @@ def _cache_valid(data: dict, at_ms: int, pool: list[str]) -> bool:
 def main() -> int:
     manifest = load_json(ROOT / "simulation/config/manifest.json")
     profile = load_json(ROOT / "simulation/config/player_profile.json")
-    datadir = ROOT / manifest.get("freqtrade_datadir", "simulation/data/freqtrade")
+    datadir = ROOT / manifest.get("ctengine_datadir", "simulation/data/ctengine")
     timerange = manifest.get("player_timerange", "20260601-20260625")
     start_s = timerange.split("-")[0]
     at_ms = int(datetime.strptime(start_s, "%Y%m%d").replace(tzinfo=UTC).timestamp() * 1000)

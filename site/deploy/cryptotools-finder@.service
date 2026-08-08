@@ -1,0 +1,18 @@
+[Unit]
+Description=CryptoTools finder bot for tenant %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cryptotools
+Group=cryptotools
+WorkingDirectory=/home/cryptotools/app
+EnvironmentFile=-/home/cryptotools/app/user_data/tenants/%i/.env
+ExecStart=/bin/bash -lc 'source /home/cryptotools/app/scripts/load_env.sh /home/cryptotools/app/user_data/tenants/%i/.env && exec /home/cryptotools/app/.venv/bin/ctbot trade --config user_data/tenants/%i/config.json --logfile user_data/tenants/%i/logs/finder.log'
+Restart=on-failure
+RestartSec=30
+MemoryMax=2G
+
+[Install]
+WantedBy=multi-user.target
