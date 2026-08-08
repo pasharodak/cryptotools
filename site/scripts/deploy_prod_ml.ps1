@@ -21,7 +21,7 @@ Write-Host "=== Upload user_data (ML gate, finder, strategies, config, models) =
 & $scp -i $KeyPath -r user_data/ml "${SshUser}@${ServerIp}:/home/cryptotools/app/user_data/"
 & $scp -i $KeyPath -r user_data/models/pnl_classifier/pnl_classifier.joblib user_data/models/pnl_classifier/pnl_classifier_meta.json "${SshUser}@${ServerIp}:/home/cryptotools/app/user_data/models/pnl_classifier/"
 & $scp -i $KeyPath -r user_data/models/pnl_classifier/by_scenario/live_grid "${SshUser}@${ServerIp}:/home/cryptotools/app/user_data/models/pnl_classifier/by_scenario/"
-foreach ($sid in @("trend_supertrend", "trend_macd_ema", "trend_fib", "lite_mean_rev", "trend_breakout", "lite_range")) {
+foreach ($sid in @("scalp_liq_breakout", "new_psar", "chart3_atrch", "chart2_cmf", "scalp_ema", "chart3_adosc", "new_donchian", "chart3_ppo", "combo_don_adx_vol", "chart2_obv", "chart3_elder", "scalp_macd", "new_keltner", "chart_ha", "chart2_vortex", "chart3_ao", "combo_kc_stoch_vol", "chart3_tema", "chart2_trix", "chart3_roc", "combo_hma_ppo_atr", "chart_willr", "chart_squeeze", "combo_ema_rsi_atr", "chart2_aroon", "combo_adx_macd_vol", "chart2_engulf", "chart_adxdi", "chart2_mfi", "new_ichimoku", "combo_st_rsi_obv")) {
     $local = "user_data/models/pnl_classifier/by_scenario/$sid"
     if (Test-Path $local) {
         & $ssh -i $KeyPath "${SshUser}@${ServerIp}" "mkdir -p /home/cryptotools/app/user_data/models/pnl_classifier/by_scenario/$sid"
@@ -29,22 +29,41 @@ foreach ($sid in @("trend_supertrend", "trend_macd_ema", "trend_fib", "lite_mean
     }
 }
 & $scp -i $KeyPath -r user_data/models/trade_finder "${SshUser}@${ServerIp}:/home/cryptotools/app/user_data/models/"
-& $scp -i $KeyPath user_data/strategies/TradeFinderStrategy.py user_data/strategies/MultiStrategyRouter.py user_data/strategies/VolatilityGridStrategy.py user_data/strategies/_sim_live.py user_data/strategies/TripleEmaStrategy.py user_data/strategies/AdxMomentumStrategy.py user_data/strategies/BollingerRsiStrategy.py user_data/strategies/LiteIntradayStrategy.py user_data/strategies/LiteRangeStrategy.py user_data/strategies/SupertrendStrategy.py user_data/strategies/MacdEmaStrategy.py user_data/strategies/FibPullbackStrategy.py "${SshUser}@${ServerIp}:/home/cryptotools/app/user_data/strategies/"
+& $scp -i $KeyPath -r user_data/strategies "${SshUser}@${ServerIp}:/home/cryptotools/app/user_data/"
+# Keep only .py strategy sources on VPS (drop local __pycache__ if scp brought it)
+& $ssh -i $KeyPath "${SshUser}@${ServerIp}" "rm -rf /home/cryptotools/app/user_data/strategies/__pycache__"
 & $ssh -i $KeyPath "${SshUser}@${ServerIp}" "mkdir -p /home/cryptotools/app/simulation/config /home/cryptotools/app/simulation/strategies /home/cryptotools/app/simulation/ml"
 & $scp -i $KeyPath -r "$Sim\strategies" "$Sim\ml" "$Sim\__init__.py" "${SshUser}@${ServerIp}:/home/cryptotools/app/simulation/"
-& $scp -i $KeyPath "$Sim\config\ml_training_pairs_whitelist.json" "${SshUser}@${ServerIp}:/home/cryptotools/app/simulation/config/"
+& $scp -i $KeyPath "$Sim\config\ml_training_pairs_whitelist.json" "$Sim\config\prod_top30_pack.json" "$Sim\config\prod_ml_bots.json" "${SshUser}@${ServerIp}:/home/cryptotools/app/simulation/config/"
+if (Test-Path "user_data/grid_changelog.json") {
+    & $scp -i $KeyPath user_data/grid_changelog.json "${SshUser}@${ServerIp}:/home/cryptotools/app/user_data/"
+} else {
+    Write-Host "skip grid_changelog.json (missing locally; ensure_seeded on VPS)"
+}
 & $scp -i $KeyPath deploy/cryptotools-finder.service deploy/disable-finder-bot.sh "${SshUser}@${ServerIp}:/home/cryptotools/app/deploy/"
-& $scp -i $KeyPath scripts/pair_config_server.py scripts/scan_strategy_pairs.py scripts/grid_changelog.py scripts/apply_pairlist_mode.py "${SshUser}@${ServerIp}:/home/cryptotools/app/scripts/"
+& $scp -i $KeyPath scripts/pair_config_server.py scripts/tenant_manager.py scripts/tenant_context.py scripts/bybit_grid_manager.py scripts/scan_strategy_pairs.py scripts/grid_changelog.py scripts/apply_pairlist_mode.py "${SshUser}@${ServerIp}:/home/cryptotools/app/scripts/"
+& $scp -i $KeyPath deploy/cryptotools-strategy@.service deploy/cryptotools-grid@.service deploy/cryptotools-finder@.service deploy/sudoers-cryptotools-tenants deploy/tenant-systemctl.sh "${SshUser}@${ServerIp}:/home/cryptotools/app/deploy/"
 & $ssh -i $KeyPath "${SshUser}@${ServerIp}" "mkdir -p /tmp/custom-ui"
 & $scp -i $KeyPath custom-ui/index.html custom-ui/app.js custom-ui/styles.css "${SshUser}@${ServerIp}:/tmp/custom-ui/"
 
 Write-Host "=== VPS: restart strategy + grid (ML Finder stays disabled) ==="
-& $ssh -i $KeyPath "${SshUser}@${ServerIp}" @"
+$remoteSh = Join-Path $env:TEMP "cryptotools_deploy_restart.sh"
+$remoteBody = @"
 set -e
 cp /tmp/custom-ui/index.html /tmp/custom-ui/app.js /tmp/custom-ui/styles.css /var/www/criptotools-ui/
 chown -R www-data:www-data /var/www/criptotools-ui
-chown -R cryptotools:cryptotools /home/cryptotools/app/user_data /home/cryptotools/app/simulation/strategies /home/cryptotools/app/scripts/pair_config_server.py /home/cryptotools/app/scripts/scan_strategy_pairs.py /home/cryptotools/app/scripts/grid_changelog.py
-cd /home/cryptotools/app && sudo -u cryptotools ./.venv/bin/python -c 'import sys; sys.path.insert(0,\"scripts\"); from grid_changelog import ensure_seeded; ensure_seeded(); print(\"changelog ok\")'
+chown -R cryptotools:cryptotools /home/cryptotools/app/user_data /home/cryptotools/app/simulation/strategies /home/cryptotools/app/scripts
+install -m 644 /home/cryptotools/app/deploy/cryptotools-strategy@.service /etc/systemd/system/cryptotools-strategy@.service
+install -m 644 /home/cryptotools/app/deploy/cryptotools-grid@.service /etc/systemd/system/cryptotools-grid@.service
+install -m 644 /home/cryptotools/app/deploy/cryptotools-finder@.service /etc/systemd/system/cryptotools-finder@.service
+install -m 755 /home/cryptotools/app/deploy/tenant-systemctl.sh /home/cryptotools/app/deploy/tenant-systemctl.sh
+install -m 440 /home/cryptotools/app/deploy/sudoers-cryptotools-tenants /etc/sudoers.d/cryptotools-tenants
+visudo -cf /etc/sudoers.d/cryptotools-tenants
+if ! grep -q '^SECRETS_MASTER_KEY=' /home/cryptotools/.cryptotools.env 2>/dev/null; then
+  python3 -c "import secrets,pathlib; p=pathlib.Path('/home/cryptotools/.cryptotools.env'); t=p.read_text(encoding='utf-8') if p.is_file() else ''; p.write_text(t + ('\n' if t and not t.endswith('\n') else '') + 'SECRETS_MASTER_KEY=' + secrets.token_urlsafe(32) + '\n', encoding='utf-8'); print('SECRETS_MASTER_KEY added')"
+  chmod 600 /home/cryptotools/.cryptotools.env
+fi
+cd /home/cryptotools/app && sudo -u cryptotools ./.venv/bin/python -c 'import sys; sys.path.insert(0,"scripts"); from grid_changelog import ensure_seeded; ensure_seeded(); print("changelog ok")'
 systemctl daemon-reload
 systemctl restart pair-config
 systemctl restart cryptotools-strategy cryptotools-grid
@@ -55,7 +74,13 @@ systemctl is-active cryptotools-finder || true
 systemctl is-active pair-config
 systemctl is-active cryptotools-strategy
 systemctl is-active cryptotools-grid
+# Smoke: health + auth login endpoint exists
+curl -s -o /dev/null -w 'health:%{http_code}\n' http://127.0.0.1:8090/health || true
 "@
+# Force LF so bash on VPS does not see CR as part of commands
+[System.IO.File]::WriteAllText($remoteSh, ($remoteBody -replace "`r`n", "`n" -replace "`r", "`n"))
+& $scp -i $KeyPath $remoteSh "${SshUser}@${ServerIp}:/tmp/cryptotools_deploy_restart.sh"
+& $ssh -i $KeyPath "${SshUser}@${ServerIp}" "bash /tmp/cryptotools_deploy_restart.sh"
 Pop-Location
 Write-Host "Done. Strategy + grid running; ML Finder disabled."
 

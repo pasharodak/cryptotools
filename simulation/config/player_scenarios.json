@@ -1,4 +1,4 @@
-﻿[
+[
     {
         "id": "lite_position",
         "label": "Позиционный (HODL)",
@@ -28,7 +28,7 @@
     {
         "id": "lite_intraday",
         "label": "Внутридневная",
-        "enabled": true,
+        "enabled": false,
         "strategy": "LiteIntradayStrategy",
         "strategy_path": "simulation/strategies",
         "config": "simulation/config/backtest_lite_base.json",
@@ -40,7 +40,7 @@
     {
         "id": "lite_range",
         "label": "Диапазонная",
-        "enabled": true,
+        "enabled": false,
         "strategy": "LiteRangeStrategy",
         "strategy_path": "simulation/strategies",
         "config": "simulation/config/backtest_lite_base.json",
@@ -103,7 +103,7 @@
     {
         "id": "lite_mean_rev",
         "label": "Mean-reversion (BB)",
-        "enabled": true,
+        "enabled": false,
         "strategy": "SimMeanReversionRange",
         "strategy_path": "simulation/strategies",
         "config": "simulation/config/backtest_lite_base.json",
@@ -115,7 +115,7 @@
     {
         "id": "trend_ema",
         "label": "EMA 50/200 (4H)",
-        "enabled": true,
+        "enabled": false,
         "strategy": "SimEmaGoldenCross",
         "strategy_path": "simulation/strategies",
         "config": "simulation/config/backtest_lite_base.json",
@@ -127,7 +127,7 @@
     {
         "id": "trend_breakout",
         "label": "Breakout-Retest",
-        "enabled": true,
+        "enabled": false,
         "strategy": "SimBreakoutRetest",
         "strategy_path": "simulation/strategies",
         "config": "simulation/config/backtest_lite_base.json",
@@ -211,7 +211,7 @@
         "group": "live",
         "stake_usdt": 30,
         "settings": "отключён — proxy без ML",
-        "prod_disabled_reason": "replaced by TradeFinderStrategy + ML gate"
+        "prod_disabled_reason": "replaced — old classic ML bot (replaced by TradeFinder)"
     },
     {
         "id": "trend_supertrend",
@@ -248,6 +248,815 @@
         "group": "lite",
         "stake_usdt": 15,
         "settings": "RSI 35/65 · EMA12/26 · BB filter · 3x"
+    },
+    {
+        "id": "scalp_ema",
+        "label": "Scalp EMA 8/21",
+        "enabled": true,
+        "strategy": "ScalpEmaCrossStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "scalp",
+        "stake_usdt": 15,
+        "stoploss": -0.01,
+        "minimal_roi": {
+            "0": 0.008,
+            "20": 0.004,
+            "60": 0
+        },
+        "settings": "EMA8/21 · SL −1% · TP 0.8%"
+    },
+    {
+        "id": "scalp_rsi",
+        "label": "Scalp RSI reclaim",
+        "enabled": false,
+        "strategy": "ScalpRsiReclaimStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "scalp",
+        "stake_usdt": 15,
+        "stoploss": -0.012,
+        "minimal_roi": {
+            "0": 0.009,
+            "25": 0.0045,
+            "70": 0
+        },
+        "settings": "RSI reclaim · SL −1.2% · TP 0.9%"
+    },
+    {
+        "id": "scalp_bb",
+        "label": "Scalp BB bounce",
+        "enabled": false,
+        "strategy": "ScalpBbBounceStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "scalp",
+        "stake_usdt": 15,
+        "stoploss": -0.011,
+        "minimal_roi": {
+            "0": 0.008,
+            "30": 0.004,
+            "80": 0
+        },
+        "settings": "BB bounce · SL −1.1% · TP 0.8%"
+    },
+    {
+        "id": "scalp_stoch",
+        "label": "Scalp Stochastic",
+        "enabled": false,
+        "strategy": "ScalpStochStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "scalp",
+        "stake_usdt": 15,
+        "stoploss": -0.01,
+        "minimal_roi": {
+            "0": 0.0075,
+            "20": 0.0035,
+            "55": 0
+        },
+        "settings": "Stoch · SL −1% · TP 0.75%"
+    },
+    {
+        "id": "scalp_macd",
+        "label": "Scalp MACD hist",
+        "enabled": true,
+        "strategy": "ScalpMacdHistStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "scalp",
+        "stake_usdt": 15,
+        "stoploss": -0.012,
+        "minimal_roi": {
+            "0": 0.009,
+            "30": 0.0045,
+            "90": 0
+        },
+        "settings": "MACD hist · SL −1.2% · TP 0.9%"
+    },
+    {
+        "id": "new_keltner",
+        "label": "Keltner breakout",
+        "enabled": true,
+        "strategy": "KeltnerBreakoutStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "newset",
+        "stake_usdt": 15,
+        "stoploss": -0.02,
+        "minimal_roi": {
+            "0": 0.015,
+            "60": 0.008,
+            "180": 0
+        },
+        "settings": "Keltner · SL −2% · TP 1.5%"
+    },
+    {
+        "id": "new_donchian",
+        "label": "Donchian / Turtle",
+        "enabled": true,
+        "strategy": "DonchianBreakoutStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "newset",
+        "stake_usdt": 15,
+        "stoploss": -0.025,
+        "minimal_roi": {
+            "0": 0.018,
+            "90": 0.009,
+            "240": 0
+        },
+        "settings": "Donchian · SL −2.5% · TP 1.8%"
+    },
+    {
+        "id": "new_cci",
+        "label": "CCI reclaim",
+        "enabled": false,
+        "strategy": "CciReversalStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "newset",
+        "stake_usdt": 15,
+        "stoploss": -0.018,
+        "minimal_roi": {
+            "0": 0.012,
+            "45": 0.006,
+            "120": 0
+        },
+        "settings": "CCI · SL −1.8% · TP 1.2%"
+    },
+    {
+        "id": "new_ichimoku",
+        "label": "Ichimoku TK cross",
+        "enabled": true,
+        "strategy": "IchimokuTkCrossStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "newset",
+        "stake_usdt": 15,
+        "stoploss": -0.022,
+        "minimal_roi": {
+            "0": 0.016,
+            "80": 0.008,
+            "200": 0
+        },
+        "settings": "Ichimoku · SL −2.2% · TP 1.6%"
+    },
+    {
+        "id": "new_psar",
+        "label": "Parabolic SAR flip",
+        "enabled": true,
+        "strategy": "PsaraFlipStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "newset",
+        "stake_usdt": 15,
+        "stoploss": -0.02,
+        "minimal_roi": {
+            "0": 0.014,
+            "50": 0.007,
+            "150": 0
+        },
+        "settings": "PSAR · SL −2% · TP 1.4%"
+    },
+    {
+        "id": "chart_willr",
+        "label": "Williams %R reclaim",
+        "enabled": true,
+        "strategy": "WilliamsRReclaimStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "chart",
+        "stake_usdt": 15,
+        "stoploss": -0.015,
+        "minimal_roi": {
+            "0": 0.01,
+            "40": 0.005,
+            "100": 0
+        },
+        "settings": "WillR · SL −1.5% · TP 1.0%"
+    },
+    {
+        "id": "chart_adxdi",
+        "label": "ADX DI+/DI− cross",
+        "enabled": true,
+        "strategy": "AdxDiCrossStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "chart",
+        "stake_usdt": 15,
+        "stoploss": -0.02,
+        "minimal_roi": {
+            "0": 0.014,
+            "60": 0.007,
+            "180": 0
+        },
+        "settings": "ADX/DI · SL −2% · TP 1.4%"
+    },
+    {
+        "id": "chart_squeeze",
+        "label": "BB squeeze breakout",
+        "enabled": true,
+        "strategy": "BbSqueezeBreakoutStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "chart",
+        "stake_usdt": 15,
+        "stoploss": -0.018,
+        "minimal_roi": {
+            "0": 0.013,
+            "50": 0.006,
+            "150": 0
+        },
+        "settings": "BB squeeze · SL −1.8% · TP 1.3%"
+    },
+    {
+        "id": "chart_ha",
+        "label": "Heikin Ashi flip",
+        "enabled": true,
+        "strategy": "HeikinAshiFlipStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "chart",
+        "stake_usdt": 15,
+        "stoploss": -0.016,
+        "minimal_roi": {
+            "0": 0.011,
+            "45": 0.0055,
+            "120": 0
+        },
+        "settings": "Heikin Ashi · SL −1.6% · TP 1.1%"
+    },
+    {
+        "id": "chart_pivot",
+        "label": "Pivot S1/R1 bounce",
+        "enabled": false,
+        "strategy": "PivotBounceStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "chart",
+        "stake_usdt": 15,
+        "stoploss": -0.017,
+        "minimal_roi": {
+            "0": 0.012,
+            "50": 0.006,
+            "140": 0
+        },
+        "settings": "Pivots · SL −1.7% · TP 1.2%"
+    },
+    {
+        "id": "chart2_aroon",
+        "label": "Aroon Up/Down cross",
+        "enabled": true,
+        "strategy": "AroonCrossStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "chart2",
+        "stake_usdt": 15,
+        "stoploss": -0.018,
+        "minimal_roi": {
+            "0": 0.012,
+            "50": 0.006,
+            "150": 0
+        },
+        "settings": "Aroon · SL −1.8% · TP 1.2%"
+    },
+    {
+        "id": "chart2_mfi",
+        "label": "MFI reclaim",
+        "enabled": true,
+        "strategy": "MfiReclaimStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "chart2",
+        "stake_usdt": 15,
+        "stoploss": -0.015,
+        "minimal_roi": {
+            "0": 0.01,
+            "40": 0.005,
+            "110": 0
+        },
+        "settings": "MFI · SL −1.5% · TP 1.0%"
+    },
+    {
+        "id": "chart2_stochrsi",
+        "label": "StochRSI cross",
+        "enabled": false,
+        "strategy": "StochRsiCrossStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "chart2",
+        "stake_usdt": 15,
+        "stoploss": -0.014,
+        "minimal_roi": {
+            "0": 0.009,
+            "35": 0.0045,
+            "90": 0
+        },
+        "settings": "StochRSI · SL −1.4% · TP 0.9%"
+    },
+    {
+        "id": "chart2_trix",
+        "label": "TRIX signal cross",
+        "enabled": true,
+        "strategy": "TrixSignalStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "chart2",
+        "stake_usdt": 15,
+        "stoploss": -0.017,
+        "minimal_roi": {
+            "0": 0.011,
+            "45": 0.0055,
+            "130": 0
+        },
+        "settings": "TRIX · SL −1.7% · TP 1.1%"
+    },
+    {
+        "id": "chart2_uo",
+        "label": "Ultimate Osc reclaim",
+        "enabled": false,
+        "strategy": "UltimateOscStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "chart2",
+        "stake_usdt": 15,
+        "stoploss": -0.016,
+        "minimal_roi": {
+            "0": 0.01,
+            "40": 0.005,
+            "120": 0
+        },
+        "settings": "UO · SL −1.6% · TP 1.0%"
+    },
+    {
+        "id": "chart2_obv",
+        "label": "OBV EMA cross",
+        "enabled": true,
+        "strategy": "ObvEmaCrossStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "chart2",
+        "stake_usdt": 15,
+        "stoploss": -0.018,
+        "minimal_roi": {
+            "0": 0.012,
+            "55": 0.006,
+            "160": 0
+        },
+        "settings": "OBV · SL −1.8% · TP 1.2%"
+    },
+    {
+        "id": "chart2_engulf",
+        "label": "Engulfing + EMA",
+        "enabled": true,
+        "strategy": "EngulfingTrendStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "chart2",
+        "stake_usdt": 15,
+        "stoploss": -0.016,
+        "minimal_roi": {
+            "0": 0.011,
+            "40": 0.0055,
+            "110": 0
+        },
+        "settings": "Engulfing · SL −1.6% · TP 1.1%"
+    },
+    {
+        "id": "chart2_vortex",
+        "label": "Vortex VI+/VI−",
+        "enabled": true,
+        "strategy": "VortexCrossStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "chart2",
+        "stake_usdt": 15,
+        "stoploss": -0.019,
+        "minimal_roi": {
+            "0": 0.013,
+            "55": 0.0065,
+            "160": 0
+        },
+        "settings": "Vortex · SL −1.9% · TP 1.3%"
+    },
+    {
+        "id": "chart2_cmf",
+        "label": "CMF zero cross",
+        "enabled": true,
+        "strategy": "CmfZeroCrossStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "chart2",
+        "stake_usdt": 15,
+        "stoploss": -0.017,
+        "minimal_roi": {
+            "0": 0.011,
+            "45": 0.0055,
+            "130": 0
+        },
+        "settings": "CMF · SL −1.7% · TP 1.1%"
+    },
+    {
+        "id": "chart2_kama",
+        "label": "KAMA trend cross",
+        "enabled": false,
+        "strategy": "KamaTrendStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "chart2",
+        "stake_usdt": 15,
+        "stoploss": -0.02,
+        "minimal_roi": {
+            "0": 0.014,
+            "60": 0.007,
+            "180": 0
+        },
+        "settings": "KAMA · SL −2% · TP 1.4%"
+    },
+    {
+        "id": "chart3_ao",
+        "label": "Awesome Oscillator",
+        "enabled": true,
+        "strategy": "AwesomeOscStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "chart3",
+        "stake_usdt": 15,
+        "stoploss": -0.017,
+        "minimal_roi": {
+            "0": 0.011,
+            "45": 0.0055,
+            "130": 0
+        },
+        "settings": "AO · SL −1.7% · TP 1.1%"
+    },
+    {
+        "id": "chart3_ppo",
+        "label": "PPO signal cross",
+        "enabled": true,
+        "strategy": "PpoSignalStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "chart3",
+        "stake_usdt": 15,
+        "stoploss": -0.016,
+        "minimal_roi": {
+            "0": 0.01,
+            "40": 0.005,
+            "120": 0
+        },
+        "settings": "PPO · SL −1.6% · TP 1.0%"
+    },
+    {
+        "id": "chart3_cmo",
+        "label": "CMO reclaim",
+        "enabled": false,
+        "strategy": "CmoReclaimStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "chart3",
+        "stake_usdt": 15,
+        "stoploss": -0.015,
+        "minimal_roi": {
+            "0": 0.01,
+            "40": 0.005,
+            "110": 0
+        },
+        "settings": "CMO · SL −1.5% · TP 1.0%"
+    },
+    {
+        "id": "chart3_tema",
+        "label": "TEMA fast/slow",
+        "enabled": true,
+        "strategy": "TemaCrossStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "chart3",
+        "stake_usdt": 15,
+        "stoploss": -0.018,
+        "minimal_roi": {
+            "0": 0.012,
+            "50": 0.006,
+            "150": 0
+        },
+        "settings": "TEMA · SL −1.8% · TP 1.2%"
+    },
+    {
+        "id": "chart3_adosc",
+        "label": "Chaikin Oscillator",
+        "enabled": true,
+        "strategy": "ChaikinOscStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "chart3",
+        "stake_usdt": 15,
+        "stoploss": -0.017,
+        "minimal_roi": {
+            "0": 0.011,
+            "45": 0.0055,
+            "130": 0
+        },
+        "settings": "ADOSC · SL −1.7% · TP 1.1%"
+    },
+    {
+        "id": "chart3_roc",
+        "label": "ROC momentum",
+        "enabled": true,
+        "strategy": "RocMomentumStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "chart3",
+        "stake_usdt": 15,
+        "stoploss": -0.016,
+        "minimal_roi": {
+            "0": 0.01,
+            "40": 0.005,
+            "120": 0
+        },
+        "settings": "ROC · SL −1.6% · TP 1.0%"
+    },
+    {
+        "id": "chart3_elder",
+        "label": "Elder Ray Bull/Bear",
+        "enabled": true,
+        "strategy": "ElderRayStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "chart3",
+        "stake_usdt": 15,
+        "stoploss": -0.017,
+        "minimal_roi": {
+            "0": 0.011,
+            "45": 0.0055,
+            "130": 0
+        },
+        "settings": "Elder Ray · SL −1.7% · TP 1.1%"
+    },
+    {
+        "id": "chart3_hma",
+        "label": "Hull MA cross",
+        "enabled": false,
+        "strategy": "HullMaCrossStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "chart3",
+        "stake_usdt": 15,
+        "stoploss": -0.018,
+        "minimal_roi": {
+            "0": 0.012,
+            "50": 0.006,
+            "150": 0
+        },
+        "settings": "HMA · SL −1.8% · TP 1.2%"
+    },
+    {
+        "id": "chart3_fisher",
+        "label": "Fisher Transform",
+        "enabled": false,
+        "strategy": "FisherTransformStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "chart3",
+        "stake_usdt": 15,
+        "stoploss": -0.015,
+        "minimal_roi": {
+            "0": 0.01,
+            "40": 0.005,
+            "110": 0
+        },
+        "settings": "Fisher · SL −1.5% · TP 1.0%"
+    },
+    {
+        "id": "chart3_atrch",
+        "label": "ATR channel breakout",
+        "enabled": true,
+        "strategy": "AtrChannelBreakoutStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "chart3",
+        "stake_usdt": 15,
+        "stoploss": -0.02,
+        "minimal_roi": {
+            "0": 0.014,
+            "60": 0.007,
+            "180": 0
+        },
+        "settings": "ATR ch · SL −2% · TP 1.4%"
+    },
+    {
+        "id": "combo_ema_rsi_atr",
+        "label": "EMA+RSI+ATR triad",
+        "enabled": true,
+        "strategy": "EmaRsiAtrComboStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "combo",
+        "stake_usdt": 15,
+        "stoploss": -0.018,
+        "minimal_roi": {
+            "0": 0.014,
+            "50": 0.007,
+            "150": 0
+        },
+        "settings": "EMA/RSI/ATR · SL −1.8% · TP 1.4%"
+    },
+    {
+        "id": "combo_adx_macd_vol",
+        "label": "ADX+MACD+Vol",
+        "enabled": true,
+        "strategy": "AdxMacdVolComboStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "combo",
+        "stake_usdt": 15,
+        "stoploss": -0.02,
+        "minimal_roi": {
+            "0": 0.016,
+            "60": 0.008,
+            "180": 0
+        },
+        "settings": "ADX/MACD/Vol · SL −2% · TP 1.6%"
+    },
+    {
+        "id": "combo_bb_rsi_adx",
+        "label": "BB+RSI+ADX mean-rev",
+        "enabled": false,
+        "strategy": "BbRsiAdxMeanRevComboStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "combo",
+        "stake_usdt": 15,
+        "stoploss": -0.014,
+        "minimal_roi": {
+            "0": 0.009,
+            "35": 0.0045,
+            "90": 0
+        },
+        "settings": "BB/RSI/ADX · SL −1.4% · TP 0.9%"
+    },
+    {
+        "id": "combo_st_rsi_obv",
+        "label": "Supertrend+RSI+OBV",
+        "enabled": true,
+        "strategy": "SupertrendRsiObvComboStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "combo",
+        "stake_usdt": 15,
+        "stoploss": -0.019,
+        "minimal_roi": {
+            "0": 0.015,
+            "55": 0.0075,
+            "160": 0
+        },
+        "settings": "ST/RSI/OBV · SL −1.9% · TP 1.5%"
+    },
+    {
+        "id": "combo_don_adx_vol",
+        "label": "Donchian+ADX+Vol",
+        "enabled": true,
+        "strategy": "DonchianAdxVolComboStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "combo",
+        "stake_usdt": 15,
+        "stoploss": -0.022,
+        "minimal_roi": {
+            "0": 0.018,
+            "70": 0.009,
+            "200": 0
+        },
+        "settings": "Don/ADX/Vol · SL −2.2% · TP 1.8%"
+    },
+    {
+        "id": "combo_stoch_cmf_ema",
+        "label": "Stoch+CMF+EMA",
+        "enabled": false,
+        "strategy": "StochCmfEmaComboStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "combo",
+        "stake_usdt": 15,
+        "stoploss": -0.016,
+        "minimal_roi": {
+            "0": 0.012,
+            "45": 0.006,
+            "130": 0
+        },
+        "settings": "Stoch/CMF/EMA · SL −1.6% · TP 1.2%"
+    },
+    {
+        "id": "combo_hma_ppo_atr",
+        "label": "HMA+PPO+ATR",
+        "enabled": true,
+        "strategy": "HmaPpoAtrComboStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "combo",
+        "stake_usdt": 15,
+        "stoploss": -0.018,
+        "minimal_roi": {
+            "0": 0.014,
+            "50": 0.007,
+            "150": 0
+        },
+        "settings": "HMA/PPO/ATR · SL −1.8% · TP 1.4%"
+    },
+    {
+        "id": "combo_kc_stoch_vol",
+        "label": "Keltner+Stoch+Vol",
+        "enabled": true,
+        "strategy": "KeltnerStochVolComboStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "combo",
+        "stake_usdt": 15,
+        "stoploss": -0.02,
+        "minimal_roi": {
+            "0": 0.015,
+            "55": 0.0075,
+            "160": 0
+        },
+        "settings": "KC/Stoch/Vol · SL −2% · TP 1.5%"
+    },
+    {
+        "id": "scalp_liq_breakout",
+        "label": "Alt volume breakout",
+        "enabled": true,
+        "strategy": "AltVolumeBreakoutStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "scalp_liq",
+        "stake_usdt": 15,
+        "stoploss": -0.015,
+        "minimal_roi": {
+            "0": 0.012,
+            "25": 0.006,
+            "75": 0
+        },
+        "settings": "Don12+vol/ATR pulse · SL −1.5% · TP 1.2% · HashHedge-style breakout proxy"
+    },
+    {
+        "id": "scalp_liq_sweep",
+        "label": "Liquidity sweep reclaim",
+        "enabled": false,
+        "strategy": "LiquiditySweepReclaimStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "scalp_liq",
+        "stake_usdt": 15,
+        "stoploss": -0.012,
+        "minimal_roi": {
+            "0": 0.009,
+            "20": 0.0045,
+            "60": 0
+        },
+        "settings": "Swing wick+reclaim · SL −1.2% · TP 0.9% · прострел candle proxy"
     }
 ]
-

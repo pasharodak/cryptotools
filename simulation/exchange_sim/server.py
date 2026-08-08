@@ -544,7 +544,36 @@ def create_app() -> FastAPI:
 
     @app.get("/sim/range")
     def sim_range(pair: str = Query(...), timeframe: str = Query("1s")):
-        return {"pair": pair, "timeframe": timeframe, **ds.pair_range(pair, timeframe)}
+        rng = ds.pair_range(pair, timeframe)
+        if not rng.get("start_ms") or not rng.get("end_ms"):
+            # Fallback: any available TF, then manifest player_timerange
+            for tf in ("1s", "1m", "5m"):
+                if tf == timeframe:
+                    continue
+                alt = ds.pair_range(pair, tf)
+                if alt.get("start_ms") and alt.get("end_ms"):
+                    rng = {**alt, "timeframe_source": tf}
+                    break
+            if not rng.get("start_ms") or not rng.get("end_ms"):
+                tr = str(cfg.get("player_timerange") or cfg.get("timerange") or "")
+                if "-" in tr:
+                    start_s, end_s = tr.split("-", 1)
+                    try:
+                        from datetime import datetime, timezone
+
+                        s = datetime.strptime(start_s.strip(), "%Y%m%d").replace(tzinfo=timezone.utc)
+                        e = datetime.strptime(end_s.strip(), "%Y%m%d").replace(
+                            hour=23, minute=59, second=59, tzinfo=timezone.utc
+                        )
+                        rng = {
+                            "start_ms": int(s.timestamp() * 1000),
+                            "end_ms": int(e.timestamp() * 1000),
+                            "count": 0,
+                            "source": "manifest",
+                        }
+                    except ValueError:
+                        pass
+        return {"pair": pair, "timeframe": timeframe, **rng}
 
     @app.get("/sim/chart")
     def sim_chart(

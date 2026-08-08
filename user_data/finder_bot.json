@@ -1,0 +1,6 @@
+{
+    "enabled": false,
+    "reason": "ML Finder отключён — только Strategy + Grid",
+    "disabled_at": "2026-07-12",
+    "systemd_unit": "ctengine.service"
+}

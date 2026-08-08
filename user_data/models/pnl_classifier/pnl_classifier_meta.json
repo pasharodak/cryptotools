@@ -1,0 +1,98 @@
+{
+  "model": "lightgbm + isotonic calibration",
+  "model_key": "lightgbm",
+  "train_source": "all",
+  "n_trades": 26339,
+  "n_train": 21071,
+  "n_test": 5268,
+  "market_coverage": {
+    "total": 26339,
+    "with_market": 26339,
+    "pct": 1.0
+  },
+  "accuracy": 0.7287,
+  "roc_auc": 0.7928,
+  "loss_recall": 0.5339,
+  "loss_precision": 0.7076,
+  "profit_recall": 0.856,
+  "profit_precision": 0.7377,
+  "macro_f1": 0.7005,
+  "confusion_matrix": [
+    [
+      1111,
+      970
+    ],
+    [
+      459,
+      2728
+    ]
+  ],
+  "classification_report": {
+    "loss": {
+      "precision": 0.7076433121019108,
+      "recall": 0.5338779432964921,
+      "f1-score": 0.6086003834565873,
+      "support": 2081.0
+    },
+    "profit": {
+      "precision": 0.7376960519199567,
+      "recall": 0.8559774082208974,
+      "f1-score": 0.7924473493100944,
+      "support": 3187.0
+    },
+    "accuracy": 0.7287395596051632,
+    "macro avg": {
+      "precision": 0.7226696820109337,
+      "recall": 0.6949276757586947,
+      "f1-score": 0.7005238663833409,
+      "support": 5268.0
+    },
+    "weighted avg": {
+      "precision": 0.725824421023724,
+      "recall": 0.7287395596051632,
+      "f1-score": 0.719822911963635,
+      "support": 5268.0
+    }
+  },
+  "features": [
+    "scenario_id",
+    "pair_base",
+    "scan_type",
+    "group",
+    "strategy",
+    "is_short",
+    "stake_usdt",
+    "stoploss",
+    "roi_at_entry",
+    "hour_utc",
+    "dow_utc",
+    "mins_since_armed",
+    "log_open_rate",
+    "rsi_14",
+    "atr_pct_14",
+    "adx_14",
+    "vol_ratio_20",
+    "ret_1",
+    "ret_4",
+    "ret_12",
+    "ema_spread_pct",
+    "range_pct",
+    "dist_high_20_pct",
+    "dist_low_20_pct"
+  ],
+  "market_features": [
+    "rsi_14",
+    "atr_pct_14",
+    "adx_14",
+    "vol_ratio_20",
+    "ret_1",
+    "ret_4",
+    "ret_12",
+    "ema_spread_pct",
+    "range_pct",
+    "dist_high_20_pct",
+    "dist_low_20_pct"
+  ],
+  "note": "trade_db + full_ml_study export merged; time-based split",
+  "trained_at": "2026-07-09T20:10:43.722799+00:00"
+}

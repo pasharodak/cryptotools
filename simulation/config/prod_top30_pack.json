@@ -1,0 +1,640 @@
+{
+  "updated": "2026-08-07T15:12:47.596472+00:00",
+  "top_n": 31,
+  "train_range": "20250101-20260331",
+  "test_range": "20260401-20260625",
+  "strategies": [
+    {
+      "rank": 0,
+      "num": 31,
+      "ui_order": 0,
+      "scenario_id": "scalp_liq_breakout",
+      "class_name": "AltVolumeBreakoutStrategy",
+      "label": "Alt volume breakout",
+      "group": "scalp_liq",
+      "stoploss": -0.015,
+      "tp": 0.012,
+      "winner_exp": "exp31_mlp",
+      "score_ml_test_pnl": 135.2809,
+      "min_profit_proba": 0.55,
+      "sim_module": "SimLiquidityScalpStrategies",
+      "minimal_roi": {
+        "0": 0.012,
+        "25": 0.006,
+        "75": 0.0
+      }
+    },
+    {
+      "rank": 1,
+      "scenario_id": "new_psar",
+      "class_name": "PsaraFlipStrategy",
+      "label": "Parabolic SAR flip",
+      "group": "newset",
+      "stoploss": -0.02,
+      "tp": 0.014,
+      "winner_exp": "exp14_lgbm_gate045",
+      "score_ml_test_pnl": 87.0566,
+      "min_profit_proba": 0.45,
+      "sim_module": "SimNewSetStrategies",
+      "minimal_roi": {
+        "0": 0.014,
+        "50": 0.007,
+        "150": 0.0
+      },
+      "num": 1,
+      "ui_order": 1
+    },
+    {
+      "rank": 2,
+      "scenario_id": "chart3_atrch",
+      "class_name": "AtrChannelBreakoutStrategy",
+      "label": "ATR channel breakout",
+      "group": "chart3",
+      "stoploss": -0.02,
+      "tp": 0.014,
+      "winner_exp": "exp14_lgbm_gate045",
+      "score_ml_test_pnl": 80.999,
+      "min_profit_proba": 0.45,
+      "sim_module": "SimChartTaWave3Strategies",
+      "minimal_roi": {
+        "0": 0.014,
+        "60": 0.007,
+        "180": 0.0
+      },
+      "num": 2,
+      "ui_order": 2
+    },
+    {
+      "rank": 3,
+      "scenario_id": "chart2_cmf",
+      "class_name": "CmfZeroCrossStrategy",
+      "label": "CMF zero cross",
+      "group": "chart2",
+      "stoploss": -0.017,
+      "tp": 0.011,
+      "winner_exp": "exp10_xgb_pos_weight",
+      "score_ml_test_pnl": 79.8693,
+      "min_profit_proba": 0.55,
+      "sim_module": "SimChartTaWave2Strategies",
+      "minimal_roi": {
+        "0": 0.011,
+        "45": 0.0055,
+        "130": 0.0
+      },
+      "num": 3,
+      "ui_order": 3
+    },
+    {
+      "rank": 4,
+      "scenario_id": "scalp_ema",
+      "class_name": "ScalpEmaCrossStrategy",
+      "label": "Scalp EMA 8/21",
+      "group": "scalp",
+      "stoploss": -0.01,
+      "tp": 0.008,
+      "winner_exp": "exp08_lgbm_regularized",
+      "score_ml_test_pnl": 76.7465,
+      "min_profit_proba": 0.55,
+      "sim_module": "SimScalpingStrategies",
+      "minimal_roi": {
+        "0": 0.008,
+        "20": 0.004,
+        "60": 0.0
+      },
+      "num": 4,
+      "ui_order": 4
+    },
+    {
+      "rank": 5,
+      "scenario_id": "chart3_adosc",
+      "class_name": "ChaikinOscStrategy",
+      "label": "Chaikin Oscillator",
+      "group": "chart3",
+      "stoploss": -0.017,
+      "tp": 0.011,
+      "winner_exp": "exp14_lgbm_gate045",
+      "score_ml_test_pnl": 68.223,
+      "min_profit_proba": 0.45,
+      "sim_module": "SimChartTaWave3Strategies",
+      "minimal_roi": {
+        "0": 0.011,
+        "45": 0.0055,
+        "130": 0.0
+      },
+      "num": 5,
+      "ui_order": 5
+    },
+    {
+      "rank": 6,
+      "scenario_id": "new_donchian",
+      "class_name": "DonchianBreakoutStrategy",
+      "label": "Donchian / Turtle",
+      "group": "newset",
+      "stoploss": -0.025,
+      "tp": 0.018,
+      "winner_exp": "exp14_lgbm_gate045",
+      "score_ml_test_pnl": 66.8377,
+      "min_profit_proba": 0.45,
+      "sim_module": "SimNewSetStrategies",
+      "minimal_roi": {
+        "0": 0.018,
+        "90": 0.009,
+        "240": 0.0
+      },
+      "num": 6,
+      "ui_order": 6
+    },
+    {
+      "rank": 7,
+      "scenario_id": "chart3_ppo",
+      "class_name": "PpoSignalStrategy",
+      "label": "PPO signal cross",
+      "group": "chart3",
+      "stoploss": -0.016,
+      "tp": 0.01,
+      "winner_exp": "exp22_xgb_shallow",
+      "score_ml_test_pnl": 66.3845,
+      "min_profit_proba": 0.55,
+      "sim_module": "SimChartTaWave3Strategies",
+      "minimal_roi": {
+        "0": 0.01,
+        "40": 0.005,
+        "120": 0.0
+      },
+      "num": 7,
+      "ui_order": 7
+    },
+    {
+      "rank": 8,
+      "scenario_id": "combo_don_adx_vol",
+      "class_name": "DonchianAdxVolComboStrategy",
+      "label": "Donchian+ADX+Vol",
+      "group": "combo",
+      "stoploss": -0.022,
+      "tp": 0.018,
+      "winner_exp": "exp15_lgbm_gate065_nocal",
+      "score_ml_test_pnl": 66.1253,
+      "min_profit_proba": 0.65,
+      "sim_module": "SimComboStrategies",
+      "minimal_roi": {
+        "0": 0.018,
+        "70": 0.009,
+        "200": 0.0
+      },
+      "num": 8,
+      "ui_order": 8
+    },
+    {
+      "rank": 9,
+      "scenario_id": "chart2_obv",
+      "class_name": "ObvEmaCrossStrategy",
+      "label": "OBV EMA cross",
+      "group": "chart2",
+      "stoploss": -0.018,
+      "tp": 0.012,
+      "winner_exp": "exp14_lgbm_gate045",
+      "score_ml_test_pnl": 62.3009,
+      "min_profit_proba": 0.45,
+      "sim_module": "SimChartTaWave2Strategies",
+      "minimal_roi": {
+        "0": 0.012,
+        "55": 0.006,
+        "160": 0.0
+      },
+      "num": 9,
+      "ui_order": 9
+    },
+    {
+      "rank": 10,
+      "scenario_id": "chart3_elder",
+      "class_name": "ElderRayStrategy",
+      "label": "Elder Ray Bull/Bear",
+      "group": "chart3",
+      "stoploss": -0.017,
+      "tp": 0.011,
+      "winner_exp": "exp14_lgbm_gate045",
+      "score_ml_test_pnl": 62.2427,
+      "min_profit_proba": 0.45,
+      "sim_module": "SimChartTaWave3Strategies",
+      "minimal_roi": {
+        "0": 0.011,
+        "45": 0.0055,
+        "130": 0.0
+      },
+      "num": 10,
+      "ui_order": 10
+    },
+    {
+      "rank": 11,
+      "scenario_id": "scalp_macd",
+      "class_name": "ScalpMacdHistStrategy",
+      "label": "Scalp MACD hist",
+      "group": "scalp",
+      "stoploss": -0.012,
+      "tp": 0.009,
+      "winner_exp": "exp09_xgb_baseline",
+      "score_ml_test_pnl": 60.5426,
+      "min_profit_proba": 0.55,
+      "sim_module": "SimScalpingStrategies",
+      "minimal_roi": {
+        "0": 0.009,
+        "30": 0.0045,
+        "90": 0.0
+      },
+      "num": 11,
+      "ui_order": 11
+    },
+    {
+      "rank": 12,
+      "scenario_id": "new_keltner",
+      "class_name": "KeltnerBreakoutStrategy",
+      "label": "Keltner breakout",
+      "group": "newset",
+      "stoploss": -0.02,
+      "tp": 0.015,
+      "winner_exp": "exp15_lgbm_gate065_nocal",
+      "score_ml_test_pnl": 57.4219,
+      "min_profit_proba": 0.65,
+      "sim_module": "SimNewSetStrategies",
+      "minimal_roi": {
+        "0": 0.015,
+        "60": 0.008,
+        "180": 0.0
+      },
+      "num": 12,
+      "ui_order": 12
+    },
+    {
+      "rank": 13,
+      "scenario_id": "chart_ha",
+      "class_name": "HeikinAshiFlipStrategy",
+      "label": "Heikin Ashi flip",
+      "group": "chart",
+      "stoploss": -0.016,
+      "tp": 0.011,
+      "winner_exp": "exp14_lgbm_gate045",
+      "score_ml_test_pnl": 57.2357,
+      "min_profit_proba": 0.45,
+      "sim_module": "SimChartTaStrategies",
+      "minimal_roi": {
+        "0": 0.011,
+        "45": 0.0055,
+        "120": 0.0
+      },
+      "num": 13,
+      "ui_order": 13
+    },
+    {
+      "rank": 14,
+      "scenario_id": "chart2_vortex",
+      "class_name": "VortexCrossStrategy",
+      "label": "Vortex VI+/VI−",
+      "group": "chart2",
+      "stoploss": -0.019,
+      "tp": 0.013,
+      "winner_exp": "exp14_lgbm_gate045",
+      "score_ml_test_pnl": 57.0615,
+      "min_profit_proba": 0.45,
+      "sim_module": "SimChartTaWave2Strategies",
+      "minimal_roi": {
+        "0": 0.013,
+        "55": 0.0065,
+        "160": 0.0
+      },
+      "num": 14,
+      "ui_order": 14
+    },
+    {
+      "rank": 15,
+      "scenario_id": "chart3_ao",
+      "class_name": "AwesomeOscStrategy",
+      "label": "Awesome Oscillator",
+      "group": "chart3",
+      "stoploss": -0.017,
+      "tp": 0.011,
+      "winner_exp": "exp22_xgb_shallow",
+      "score_ml_test_pnl": 56.6888,
+      "min_profit_proba": 0.55,
+      "sim_module": "SimChartTaWave3Strategies",
+      "minimal_roi": {
+        "0": 0.011,
+        "45": 0.0055,
+        "130": 0.0
+      },
+      "num": 15,
+      "ui_order": 15
+    },
+    {
+      "rank": 16,
+      "scenario_id": "combo_kc_stoch_vol",
+      "class_name": "KeltnerStochVolComboStrategy",
+      "label": "Keltner+Stoch+Vol",
+      "group": "combo",
+      "stoploss": -0.02,
+      "tp": 0.015,
+      "winner_exp": "exp14_lgbm_gate045",
+      "score_ml_test_pnl": 52.8855,
+      "min_profit_proba": 0.45,
+      "sim_module": "SimComboStrategies",
+      "minimal_roi": {
+        "0": 0.015,
+        "55": 0.0075,
+        "160": 0.0
+      },
+      "num": 16,
+      "ui_order": 16
+    },
+    {
+      "rank": 17,
+      "scenario_id": "chart3_tema",
+      "class_name": "TemaCrossStrategy",
+      "label": "TEMA fast/slow",
+      "group": "chart3",
+      "stoploss": -0.018,
+      "tp": 0.012,
+      "winner_exp": "exp29_lgbm_gate050",
+      "score_ml_test_pnl": 50.6699,
+      "min_profit_proba": 0.5,
+      "sim_module": "SimChartTaWave3Strategies",
+      "minimal_roi": {
+        "0": 0.012,
+        "50": 0.006,
+        "150": 0.0
+      },
+      "num": 17,
+      "ui_order": 17
+    },
+    {
+      "rank": 18,
+      "scenario_id": "chart2_trix",
+      "class_name": "TrixSignalStrategy",
+      "label": "TRIX signal cross",
+      "group": "chart2",
+      "stoploss": -0.017,
+      "tp": 0.011,
+      "winner_exp": "exp23_xgb_deep",
+      "score_ml_test_pnl": 49.1469,
+      "min_profit_proba": 0.55,
+      "sim_module": "SimChartTaWave2Strategies",
+      "minimal_roi": {
+        "0": 0.011,
+        "45": 0.0055,
+        "130": 0.0
+      },
+      "num": 18,
+      "ui_order": 18
+    },
+    {
+      "rank": 19,
+      "scenario_id": "chart3_roc",
+      "class_name": "RocMomentumStrategy",
+      "label": "ROC momentum",
+      "group": "chart3",
+      "stoploss": -0.016,
+      "tp": 0.01,
+      "winner_exp": "exp14_lgbm_gate045",
+      "score_ml_test_pnl": 46.2448,
+      "min_profit_proba": 0.45,
+      "sim_module": "SimChartTaWave3Strategies",
+      "minimal_roi": {
+        "0": 0.01,
+        "40": 0.005,
+        "120": 0.0
+      },
+      "num": 19,
+      "ui_order": 19
+    },
+    {
+      "rank": 20,
+      "scenario_id": "combo_hma_ppo_atr",
+      "class_name": "HmaPpoAtrComboStrategy",
+      "label": "HMA+PPO+ATR",
+      "group": "combo",
+      "stoploss": -0.018,
+      "tp": 0.014,
+      "winner_exp": "exp14_lgbm_gate045",
+      "score_ml_test_pnl": 45.4832,
+      "min_profit_proba": 0.45,
+      "sim_module": "SimComboStrategies",
+      "minimal_roi": {
+        "0": 0.014,
+        "50": 0.007,
+        "150": 0.0
+      },
+      "num": 20,
+      "ui_order": 20
+    },
+    {
+      "rank": 21,
+      "scenario_id": "chart_willr",
+      "class_name": "WilliamsRReclaimStrategy",
+      "label": "Williams %R reclaim",
+      "group": "chart",
+      "stoploss": -0.015,
+      "tp": 0.01,
+      "winner_exp": "exp30_lgbm_gate070",
+      "score_ml_test_pnl": 41.4753,
+      "min_profit_proba": 0.7,
+      "sim_module": "SimChartTaStrategies",
+      "minimal_roi": {
+        "0": 0.01,
+        "40": 0.005,
+        "100": 0.0
+      },
+      "num": 21,
+      "ui_order": 21
+    },
+    {
+      "rank": 22,
+      "scenario_id": "chart_squeeze",
+      "class_name": "BbSqueezeBreakoutStrategy",
+      "label": "BB squeeze breakout",
+      "group": "chart",
+      "stoploss": -0.018,
+      "tp": 0.013,
+      "winner_exp": "exp03_lgbm_shallow",
+      "score_ml_test_pnl": 41.3388,
+      "min_profit_proba": 0.55,
+      "sim_module": "SimChartTaStrategies",
+      "minimal_roi": {
+        "0": 0.013,
+        "50": 0.006,
+        "150": 0.0
+      },
+      "num": 22,
+      "ui_order": 22
+    },
+    {
+      "rank": 23,
+      "scenario_id": "combo_ema_rsi_atr",
+      "class_name": "EmaRsiAtrComboStrategy",
+      "label": "EMA+RSI+ATR triad",
+      "group": "combo",
+      "stoploss": -0.018,
+      "tp": 0.014,
+      "winner_exp": "exp24_xgb_slow",
+      "score_ml_test_pnl": 41.3273,
+      "min_profit_proba": 0.55,
+      "sim_module": "SimComboStrategies",
+      "minimal_roi": {
+        "0": 0.014,
+        "50": 0.007,
+        "150": 0.0
+      },
+      "num": 23,
+      "ui_order": 23
+    },
+    {
+      "rank": 24,
+      "scenario_id": "chart2_aroon",
+      "class_name": "AroonCrossStrategy",
+      "label": "Aroon Up/Down cross",
+      "group": "chart2",
+      "stoploss": -0.018,
+      "tp": 0.012,
+      "winner_exp": "exp22_xgb_shallow",
+      "score_ml_test_pnl": 39.0758,
+      "min_profit_proba": 0.55,
+      "sim_module": "SimChartTaWave2Strategies",
+      "minimal_roi": {
+        "0": 0.012,
+        "50": 0.006,
+        "150": 0.0
+      },
+      "num": 24,
+      "ui_order": 24
+    },
+    {
+      "rank": 25,
+      "scenario_id": "combo_adx_macd_vol",
+      "class_name": "AdxMacdVolComboStrategy",
+      "label": "ADX+MACD+Vol",
+      "group": "combo",
+      "stoploss": -0.02,
+      "tp": 0.016,
+      "winner_exp": "exp14_lgbm_gate045",
+      "score_ml_test_pnl": 38.0461,
+      "min_profit_proba": 0.45,
+      "sim_module": "SimComboStrategies",
+      "minimal_roi": {
+        "0": 0.016,
+        "60": 0.008,
+        "180": 0.0
+      },
+      "num": 25,
+      "ui_order": 25
+    },
+    {
+      "rank": 26,
+      "scenario_id": "chart2_engulf",
+      "class_name": "EngulfingTrendStrategy",
+      "label": "Engulfing + EMA",
+      "group": "chart2",
+      "stoploss": -0.016,
+      "tp": 0.011,
+      "winner_exp": "exp14_lgbm_gate045",
+      "score_ml_test_pnl": 36.029,
+      "min_profit_proba": 0.45,
+      "sim_module": "SimChartTaWave2Strategies",
+      "minimal_roi": {
+        "0": 0.011,
+        "40": 0.0055,
+        "110": 0.0
+      },
+      "num": 26,
+      "ui_order": 26
+    },
+    {
+      "rank": 27,
+      "scenario_id": "chart_adxdi",
+      "class_name": "AdxDiCrossStrategy",
+      "label": "ADX DI+/DI− cross",
+      "group": "chart",
+      "stoploss": -0.02,
+      "tp": 0.014,
+      "winner_exp": "exp15_lgbm_gate065_nocal",
+      "score_ml_test_pnl": 34.6169,
+      "min_profit_proba": 0.65,
+      "sim_module": "SimChartTaStrategies",
+      "minimal_roi": {
+        "0": 0.014,
+        "60": 0.007,
+        "180": 0.0
+      },
+      "num": 27,
+      "ui_order": 27
+    },
+    {
+      "rank": 28,
+      "scenario_id": "chart2_mfi",
+      "class_name": "MfiReclaimStrategy",
+      "label": "MFI reclaim",
+      "group": "chart2",
+      "stoploss": -0.015,
+      "tp": 0.01,
+      "winner_exp": "exp03_lgbm_shallow",
+      "score_ml_test_pnl": 31.8318,
+      "min_profit_proba": 0.55,
+      "sim_module": "SimChartTaWave2Strategies",
+      "minimal_roi": {
+        "0": 0.01,
+        "40": 0.005,
+        "110": 0.0
+      },
+      "num": 28,
+      "ui_order": 28
+    },
+    {
+      "rank": 29,
+      "scenario_id": "new_ichimoku",
+      "class_name": "IchimokuTkCrossStrategy",
+      "label": "Ichimoku TK cross",
+      "group": "newset",
+      "stoploss": -0.022,
+      "tp": 0.016,
+      "winner_exp": "exp10_xgb_pos_weight",
+      "score_ml_test_pnl": 31.8274,
+      "min_profit_proba": 0.55,
+      "sim_module": "SimNewSetStrategies",
+      "minimal_roi": {
+        "0": 0.016,
+        "80": 0.008,
+        "200": 0.0
+      },
+      "num": 29,
+      "ui_order": 29
+    },
+    {
+      "rank": 30,
+      "scenario_id": "combo_st_rsi_obv",
+      "class_name": "SupertrendRsiObvComboStrategy",
+      "label": "Supertrend+RSI+OBV",
+      "group": "combo",
+      "stoploss": -0.019,
+      "tp": 0.015,
+      "winner_exp": "exp14_lgbm_gate045",
+      "score_ml_test_pnl": 31.0007,
+      "min_profit_proba": 0.45,
+      "sim_module": "SimComboStrategies",
+      "minimal_roi": {
+        "0": 0.015,
+        "55": 0.0075,
+        "160": 0.0
+      },
+      "num": 30,
+      "ui_order": 30
+    }
+  ],
+  "legacy_disabled": [
+    "CriptoPairsStrategy",
+    "SupertrendStrategy",
+    "MacdEmaStrategy",
+    "FibPullbackStrategy",
+    "TripleEmaStrategy",
+    "BollingerRsiStrategy",
+    "AdxMomentumStrategy",
+    "LiteIntradayStrategy",
+    "LiteRangeStrategy"
+  ],
+  "note": "num = stable catalog number (never renumber on add/remove). ui_order = UI sort (0 = top). rank kept for pack legacy."
+}

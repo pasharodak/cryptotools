@@ -1,0 +1,1897 @@
+{
+  "seeded_version": 7,
+  "entries": [
+    {
+      "at": "2026-08-08T12:39:05.116086+00:00",
+      "category": "strategy",
+      "field": "stake_amount",
+      "old": 5.0,
+      "new": 10.0,
+      "text": "Stake USDT (Стратегии) изменён: 5.0 → 10.0",
+      "source": "auto"
+    },
+    {
+      "at": "2026-08-08T12:38:05.197305+00:00",
+      "category": "strategy",
+      "field": "max_open_trades",
+      "old": 9,
+      "new": 10,
+      "text": "Макс. сделок (Стратегии) изменён: 9 → 10",
+      "source": "auto"
+    },
+    {
+      "at": "2026-08-08T12:37:11.681564+00:00",
+      "category": "grid_ft",
+      "field": "max_open_trades",
+      "old": 0,
+      "new": 1,
+      "text": "Макс. сделок (Grid) изменён: 0 → 1",
+      "source": "auto"
+    },
+    {
+      "at": "2026-08-08T10:14:17.367711+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия WilliamsRReclaimStrategy: включена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-08T10:14:12.921986+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия TrixSignalStrategy: включена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-08T10:14:04.684557+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия KeltnerBreakoutStrategy: включена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-08T10:13:59.608071+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия PpoSignalStrategy: включена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-08T10:13:33.457007+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия AtrChannelBreakoutStrategy: включена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-08T10:13:30.146640+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия PsaraFlipStrategy: включена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-08T10:13:19.867094+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия PsaraFlipStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-08T10:13:18.313744+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия AtrChannelBreakoutStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-08T10:13:11.145848+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия ChaikinOscStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-08T10:13:08.160643+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия DonchianBreakoutStrategy: включена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-08T10:13:04.525134+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия ChaikinOscStrategy: включена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-08T06:13:16.539826+00:00",
+      "category": "grid_ft",
+      "field": "max_open_trades",
+      "old": 0,
+      "new": 1,
+      "text": "Макс. сделок (Grid) изменён: 0 → 1",
+      "source": "auto"
+    },
+    {
+      "at": "2026-08-07T21:52:02.403279+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия RocMomentumStrategy: включена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-07T21:51:55.376208+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия HmaPpoAtrComboStrategy: включена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-07T21:51:43.955197+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия WilliamsRReclaimStrategy: включена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-07T21:51:42.557121+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия BbSqueezeBreakoutStrategy: включена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-07T21:51:37.549514+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия EmaRsiAtrComboStrategy: включена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-07T21:51:30.978494+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия AroonCrossStrategy: включена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-07T21:51:26.328857+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия AdxMacdVolComboStrategy: включена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-07T21:51:21.637849+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия EngulfingTrendStrategy: включена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-07T21:51:17.266674+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия AdxDiCrossStrategy: включена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-07T21:51:10.450994+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия MfiReclaimStrategy: включена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-07T21:51:04.150825+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия IchimokuTkCrossStrategy: включена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-07T21:50:57.511065+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия SupertrendRsiObvComboStrategy: включена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-07T21:15:26.641689+00:00",
+      "category": "strategy",
+      "field": "stake_amount",
+      "old": 7.0,
+      "new": 5.0,
+      "text": "Stake USDT (Стратегии) изменён: 7.0 → 5.0",
+      "source": "auto"
+    },
+    {
+      "at": "2026-08-07T16:37:19.459190+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия AltVolumeBreakoutStrategy: включена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-07T16:37:13.318582+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия AltVolumeBreakoutStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-07T16:37:12.266356+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия SupertrendRsiObvComboStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-07T16:37:11.119810+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия IchimokuTkCrossStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-07T16:37:09.932378+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия MfiReclaimStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-07T16:37:08.799472+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия AdxDiCrossStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-07T16:37:07.131522+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия EngulfingTrendStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-07T16:37:05.964183+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия AdxMacdVolComboStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-07T16:37:04.685984+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия AroonCrossStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-07T16:37:03.597489+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия EmaRsiAtrComboStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-07T16:37:02.398262+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия BbSqueezeBreakoutStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-07T16:37:01.276646+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия WilliamsRReclaimStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-07T16:37:00.365227+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия HmaPpoAtrComboStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-07T16:36:59.373119+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия RocMomentumStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-07T16:20:58.277923+00:00",
+      "category": "grid_ft",
+      "field": "max_open_trades",
+      "old": 1,
+      "new": 0,
+      "text": "Макс. сделок (Grid) изменён: 1 → 0",
+      "source": "auto"
+    },
+    {
+      "at": "2026-08-07T10:22:52.530907+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия PsaraFlipStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-07T06:23:25.659502+00:00",
+      "category": "strategy",
+      "field": "max_open_trades",
+      "old": 15,
+      "new": 19,
+      "text": "Макс. сделок (Стратегии) изменён: 15 → 19",
+      "source": "auto"
+    },
+    {
+      "at": "2026-08-07T04:35:58.506194+00:00",
+      "category": "strategy",
+      "field": "max_open_trades",
+      "old": 10,
+      "new": 15,
+      "text": "Макс. сделок (Стратегии) изменён: 10 → 15",
+      "source": "auto"
+    },
+    {
+      "at": "2026-08-07T02:23:25.785490+00:00",
+      "category": "strategy",
+      "field": "max_open_trades",
+      "old": 7,
+      "new": 9,
+      "text": "Макс. сделок (Стратегии) изменён: 7 → 9",
+      "source": "auto"
+    },
+    {
+      "at": "2026-08-06T21:30:27.369515+00:00",
+      "category": "bybit_grid",
+      "field": "total_investment",
+      "old": "9.0",
+      "new": "8.0",
+      "text": "Инвестиция на бота изменён: 9.0 USDT → 8.0 USDT",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-06T21:26:54.128244+00:00",
+      "category": "bybit_grid",
+      "field": "total_investment",
+      "old": "10",
+      "new": "9.0",
+      "text": "Инвестиция на бота изменён: 10 USDT → 9.0 USDT",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-06T21:26:54.127118+00:00",
+      "category": "bybit_grid",
+      "field": "take_profit_usdt",
+      "old": null,
+      "new": 0.4,
+      "text": "Тейк-профит установлен: 0.4 USDT",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-06T21:26:54.125374+00:00",
+      "category": "bybit_grid",
+      "field": "stop_loss_usdt",
+      "old": null,
+      "new": 0.4,
+      "text": "Стоп-лосс установлен: 0.4 USDT",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-06T21:24:37.491614+00:00",
+      "category": "strategy_scanner",
+      "field": "_note",
+      "text": "Скан пар стратегий: 12 пар в whitelist. Примеры: AAOI/USDT:USDT, ZBT/USDT:USDT, SNXX/USDT:USDT, CYS/USDT:USDT, NBIS/USDT:USDT",
+      "source": "auto"
+    },
+    {
+      "at": "2026-08-06T21:23:52.775346+00:00",
+      "category": "strategy",
+      "field": "stake_amount",
+      "old": 4.0,
+      "new": 7.0,
+      "text": "Stake USDT (Стратегии) изменён: 4.0 → 7.0",
+      "source": "auto"
+    },
+    {
+      "at": "2026-08-06T21:23:42.577045+00:00",
+      "category": "strategy",
+      "field": "stake_amount",
+      "old": 7.0,
+      "new": 4.0,
+      "text": "Stake USDT (Стратегии) изменён: 7.0 → 4.0",
+      "source": "auto"
+    },
+    {
+      "at": "2026-08-06T21:19:39.558637+00:00",
+      "category": "strategy",
+      "field": "max_open_trades",
+      "old": 8,
+      "new": 7,
+      "text": "Макс. сделок (Стратегии) изменён: 8 → 7",
+      "source": "auto"
+    },
+    {
+      "at": "2026-08-06T21:18:49.268072+00:00",
+      "category": "strategy",
+      "field": "stake_amount",
+      "old": 8.0,
+      "new": 7.0,
+      "text": "Stake USDT (Стратегии) изменён: 8.0 → 7.0",
+      "source": "auto"
+    },
+    {
+      "at": "2026-08-06T20:59:39.794951+00:00",
+      "category": "strategy",
+      "field": "max_open_trades",
+      "old": 4,
+      "new": 8,
+      "text": "Макс. сделок (Стратегии) изменён: 4 → 8",
+      "source": "auto"
+    },
+    {
+      "at": "2026-08-06T20:56:26.995646+00:00",
+      "category": "strategy",
+      "field": "max_open_trades",
+      "old": 8,
+      "new": 4,
+      "text": "Макс. сделок (Стратегии) изменён: 8 → 4",
+      "source": "auto"
+    },
+    {
+      "at": "2026-08-06T20:56:09.983608+00:00",
+      "category": "strategy",
+      "field": "max_open_trades",
+      "old": 4,
+      "new": 8,
+      "text": "Макс. сделок (Стратегии) изменён: 4 → 8",
+      "source": "auto"
+    },
+    {
+      "at": "2026-08-06T20:55:21.588578+00:00",
+      "category": "strategy",
+      "field": "max_open_trades",
+      "old": 8,
+      "new": 4,
+      "text": "Макс. сделок (Стратегии) изменён: 8 → 4",
+      "source": "auto"
+    },
+    {
+      "at": "2026-08-06T20:55:11.527289+00:00",
+      "category": "strategy",
+      "field": "max_open_trades",
+      "old": 4,
+      "new": 8,
+      "text": "Макс. сделок (Стратегии) изменён: 4 → 8",
+      "source": "auto"
+    },
+    {
+      "at": "2026-08-06T20:54:37.455556+00:00",
+      "category": "strategy",
+      "field": "stake_amount",
+      "old": 2.0,
+      "new": 8.0,
+      "text": "Stake USDT (Стратегии) изменён: 2.0 → 8.0",
+      "source": "auto"
+    },
+    {
+      "at": "2026-08-06T20:35:05.813596+00:00",
+      "category": "grid_ft",
+      "field": "stake_amount",
+      "old": 6.0,
+      "new": 1.0,
+      "text": "Stake USDT (Grid) изменён: 6.0 → 1.0",
+      "source": "auto"
+    },
+    {
+      "at": "2026-08-06T20:32:32.124585+00:00",
+      "category": "grid_ft",
+      "field": "max_open_trades",
+      "old": 1,
+      "new": 0,
+      "text": "Макс. сделок (Grid) изменён: 1 → 0",
+      "source": "auto"
+    },
+    {
+      "at": "2026-08-06T19:39:34.825240+00:00",
+      "category": "strategy",
+      "field": "max_open_trades",
+      "old": 50,
+      "new": 10,
+      "text": "Макс. сделок (Стратегии) изменён: 50 → 10",
+      "source": "auto"
+    },
+    {
+      "at": "2026-08-06T17:28:53.412489+00:00",
+      "category": "grid_ft",
+      "field": "stake_amount",
+      "old": 10.0,
+      "new": 1.0,
+      "text": "Stake USDT (Grid) изменён: 10.0 → 1.0",
+      "source": "auto"
+    },
+    {
+      "at": "2026-08-05T20:44:35.374078+00:00",
+      "category": "strategy",
+      "field": "stake_amount",
+      "old": 5.0,
+      "new": 2.0,
+      "text": "Stake USDT (Стратегии) изменён: 5.0 → 2.0",
+      "source": "auto"
+    },
+    {
+      "at": "2026-08-05T20:44:25.424927+00:00",
+      "category": "strategy",
+      "field": "max_open_trades",
+      "old": 1,
+      "new": 4,
+      "text": "Макс. сделок (Стратегии) изменён: 1 → 4",
+      "source": "auto"
+    },
+    {
+      "at": "2026-08-05T20:42:18.614086+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия ScalpEmaCrossStrategy: включена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-05T20:42:17.715258+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия CmfZeroCrossStrategy: включена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-05T20:42:16.016749+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия AtrChannelBreakoutStrategy: включена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-05T20:41:55.810315+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия SupertrendRsiObvComboStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-05T20:41:55.233048+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия IchimokuTkCrossStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-05T20:41:53.818389+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия MfiReclaimStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-05T20:41:53.041068+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия AdxDiCrossStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-05T20:41:52.493038+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия EngulfingTrendStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-05T20:41:51.383055+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия AdxMacdVolComboStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-05T20:41:50.634984+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия AroonCrossStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-05T20:41:49.571398+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия EmaRsiAtrComboStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-05T20:41:48.951149+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия BbSqueezeBreakoutStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-05T20:41:48.367217+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия WilliamsRReclaimStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-05T20:41:43.102928+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия HmaPpoAtrComboStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-05T20:41:42.301654+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия RocMomentumStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-05T20:41:40.772786+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия TrixSignalStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-05T20:41:39.930227+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия TemaCrossStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-05T20:41:38.773215+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия AwesomeOscStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-05T20:41:38.144089+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия KeltnerStochVolComboStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-05T20:41:36.883732+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия VortexCrossStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-05T20:41:35.733041+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия HeikinAshiFlipStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-05T20:41:35.050931+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия KeltnerBreakoutStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-05T20:41:33.986199+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия ScalpMacdHistStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-05T20:41:33.375255+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия ElderRayStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-05T20:41:32.354462+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия ObvEmaCrossStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-05T20:41:31.673509+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия DonchianAdxVolComboStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-05T20:41:30.511551+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия PpoSignalStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-05T20:41:29.346439+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия DonchianBreakoutStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-05T20:41:28.590939+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия ChaikinOscStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-05T20:41:27.384795+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия ScalpEmaCrossStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-05T20:41:26.277061+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия CmfZeroCrossStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-05T20:41:25.141745+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия AtrChannelBreakoutStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-05T20:37:06.687886+00:00",
+      "category": "strategy",
+      "field": "stake_amount",
+      "old": 1.0,
+      "new": 5.0,
+      "text": "Stake USDT (Стратегии) изменён: 1.0 → 5.0",
+      "source": "auto"
+    },
+    {
+      "at": "2026-08-05T20:36:24.768243+00:00",
+      "category": "strategy_scanner",
+      "field": "_note",
+      "text": "Скан пар стратегий: 12 пар в whitelist. Примеры: FIDA/USDT:USDT, SOXS/USDT:USDT, CYS/USDT:USDT, NBIS/USDT:USDT, KORU/USDT:USDT",
+      "source": "auto"
+    },
+    {
+      "at": "2026-08-05T20:35:15.286638+00:00",
+      "category": "finder",
+      "field": "max_open_trades",
+      "old": 1,
+      "new": 2,
+      "text": "Макс. сделок (ML Finder) изменён: 1 → 2",
+      "source": "auto"
+    },
+    {
+      "at": "2026-08-05T20:31:40.099451+00:00",
+      "category": "strategy",
+      "field": "stake_amount",
+      "old": 5.0,
+      "new": 1.0,
+      "text": "Stake USDT (Стратегии) изменён: 5.0 → 1.0",
+      "source": "auto"
+    },
+    {
+      "at": "2026-08-05T15:45:21.366114+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия KeltnerStochVolComboStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-05T15:45:20.698559+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия TemaCrossStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-05T15:45:19.375677+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия TrixSignalStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-05T15:45:18.454426+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия RocMomentumStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-05T15:45:14.177581+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия SupertrendRsiObvComboStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-05T15:45:12.603646+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия IchimokuTkCrossStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-05T15:45:11.782452+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия MfiReclaimStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-05T15:45:10.508164+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия AdxDiCrossStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-05T15:45:09.805561+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия EngulfingTrendStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-05T15:45:08.503262+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия AdxMacdVolComboStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-05T15:45:07.683998+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия AroonCrossStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-05T15:45:06.150191+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия EmaRsiAtrComboStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-05T15:45:05.002565+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия BbSqueezeBreakoutStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-05T15:45:04.165855+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия WilliamsRReclaimStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-05T15:45:03.122931+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия HmaPpoAtrComboStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-08-03T16:19:43.316234+00:00",
+      "category": "strategy",
+      "field": "max_open_trades",
+      "old": 5,
+      "new": 20,
+      "text": "Макс. сделок (Стратегии) изменён: 5 → 20",
+      "source": "auto"
+    },
+    {
+      "at": "2026-08-03T16:05:49.838774+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Per-tag SL/TP: полный minimal_roi из player_scenarios (как в ML-тесте), custom_roi ступенчатый по минутам.",
+      "source": "deploy"
+    },
+    {
+      "at": "2026-07-26T11:44:36.173996+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия FibPullbackStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-07-26T11:44:35.402642+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия MacdEmaStrategy: выключена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-07-14T18:58:37.687184+00:00",
+      "category": "strategy",
+      "field": "max_open_trades",
+      "old": 20,
+      "new": 5,
+      "text": "Макс. сделок (Стратегии) изменён: 20 → 5",
+      "source": "auto"
+    },
+    {
+      "at": "2026-07-13T20:27:38.137001+00:00",
+      "category": "strategy",
+      "field": "max_open_trades",
+      "old": 5,
+      "new": 10,
+      "text": "Макс. сделок (Стратегии) изменён: 5 → 10",
+      "source": "auto"
+    },
+    {
+      "at": "2026-07-13T20:27:27.679449+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия LiteIntradayStrategy: включена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-07-13T20:27:19.297937+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия CriptoPairsStrategy: включена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-07-13T20:27:13.770659+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия TripleEmaStrategy: включена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-07-13T19:41:43.094140+00:00",
+      "category": "strategy",
+      "field": "max_open_trades",
+      "old": 10,
+      "new": 5,
+      "text": "Макс. сделок (Стратегии) изменён: 10 → 5",
+      "source": "auto"
+    },
+    {
+      "at": "2026-07-13T19:06:23.843982+00:00",
+      "category": "strategy",
+      "field": "max_open_trades",
+      "old": 5,
+      "new": 10,
+      "text": "Макс. сделок (Стратегии) изменён: 5 → 10",
+      "source": "auto"
+    },
+    {
+      "at": "2026-07-13T18:56:42.131874+00:00",
+      "category": "strategy",
+      "field": "max_open_trades",
+      "old": 10,
+      "new": 5,
+      "text": "Макс. сделок (Стратегии) изменён: 10 → 5",
+      "source": "auto"
+    },
+    {
+      "at": "2026-07-13T18:02:48.690125+00:00",
+      "category": "strategy",
+      "field": "max_open_trades",
+      "old": 2,
+      "new": 10,
+      "text": "Макс. сделок (Стратегии) изменён: 2 → 10",
+      "source": "auto"
+    },
+    {
+      "at": "2026-07-13T17:14:06.993057+00:00",
+      "category": "strategy",
+      "field": "max_open_trades",
+      "old": 8,
+      "new": 10,
+      "text": "Макс. сделок (Стратегии) изменён: 8 → 10",
+      "source": "auto"
+    },
+    {
+      "at": "2026-07-13T16:09:32.310250+00:00",
+      "category": "strategy",
+      "field": "max_open_trades",
+      "old": 3,
+      "new": 8,
+      "text": "Макс. сделок (Стратегии) изменён: 3 → 8",
+      "source": "auto"
+    },
+    {
+      "at": "2026-07-13T15:39:39.165285+00:00",
+      "category": "strategy",
+      "field": "max_open_trades",
+      "old": 6,
+      "new": 3,
+      "text": "Макс. сделок (Стратегии) изменён: 6 → 3",
+      "source": "auto"
+    },
+    {
+      "at": "2026-07-09T20:54:53.540279+00:00",
+      "category": "grid_ft",
+      "field": "stake_amount",
+      "old": 7.0,
+      "new": 6.0,
+      "text": "Stake USDT (Grid Freqtrade) изменён: 7.0 → 6.0",
+      "source": "auto"
+    },
+    {
+      "at": "2026-07-09T20:54:41.602291+00:00",
+      "category": "grid_ft",
+      "field": "stake_amount",
+      "old": 8.0,
+      "new": 7.0,
+      "text": "Stake USDT (Grid Freqtrade) изменён: 8.0 → 7.0",
+      "source": "auto"
+    },
+    {
+      "at": "2026-07-09T20:54:15.578879+00:00",
+      "category": "grid_ft",
+      "field": "stake_amount",
+      "old": 9.0,
+      "new": 8.0,
+      "text": "Stake USDT (Grid Freqtrade) изменён: 9.0 → 8.0",
+      "source": "auto"
+    },
+    {
+      "at": "2026-07-09T20:54:01.065726+00:00",
+      "category": "grid_ft",
+      "field": "max_open_trades",
+      "old": 2,
+      "new": 1,
+      "text": "Макс. сделок (Grid Freqtrade) изменён: 2 → 1",
+      "source": "auto"
+    },
+    {
+      "at": "2026-07-09T20:53:39.331359+00:00",
+      "category": "grid_ft",
+      "field": "max_open_trades",
+      "old": 3,
+      "new": 2,
+      "text": "Макс. сделок (Grid Freqtrade) изменён: 3 → 2",
+      "source": "auto"
+    },
+    {
+      "at": "2026-07-09T20:53:27.943698+00:00",
+      "category": "grid_ft",
+      "field": "stake_amount",
+      "old": 10.0,
+      "new": 9.0,
+      "text": "Stake USDT (Grid Freqtrade) изменён: 10.0 → 9.0",
+      "source": "auto"
+    },
+    {
+      "at": "2026-07-09T20:53:18.002063+00:00",
+      "category": "grid_ft",
+      "field": "max_open_trades",
+      "old": 4,
+      "new": 3,
+      "text": "Макс. сделок (Grid Freqtrade) изменён: 4 → 3",
+      "source": "auto"
+    },
+    {
+      "at": "2026-07-07T21:50:53.943184+00:00",
+      "category": "strategy",
+      "field": "max_open_trades",
+      "old": 5,
+      "new": 6,
+      "text": "Макс. сделок (Стратегии) изменён: 5 → 6",
+      "source": "auto"
+    },
+    {
+      "at": "2026-07-07T15:36:07.077467+00:00",
+      "category": "strategy",
+      "field": "max_open_trades",
+      "old": 4,
+      "new": 5,
+      "text": "Макс. сделок (Стратегии) изменён: 4 → 5",
+      "source": "auto"
+    },
+    {
+      "at": "2026-07-07T15:25:57.573503+00:00",
+      "category": "strategy",
+      "field": "max_open_trades",
+      "old": 3,
+      "new": 4,
+      "text": "Макс. сделок (Стратегии) изменён: 3 → 4",
+      "source": "auto"
+    },
+    {
+      "at": "2026-07-07T15:25:42.201257+00:00",
+      "category": "strategy",
+      "field": "max_open_trades",
+      "old": 2,
+      "new": 3,
+      "text": "Макс. сделок (Стратегии) изменён: 2 → 3",
+      "source": "auto"
+    },
+    {
+      "at": "2026-07-06T20:49:09.285426+00:00",
+      "category": "strategy",
+      "field": "max_open_trades",
+      "old": 3,
+      "new": 4,
+      "text": "Макс. сделок (Стратегии) изменён: 3 → 4",
+      "source": "auto"
+    },
+    {
+      "at": "2026-07-06T20:48:57.851351+00:00",
+      "category": "strategy",
+      "field": "max_open_trades",
+      "old": 2,
+      "new": 3,
+      "text": "Макс. сделок (Стратегии) изменён: 2 → 3",
+      "source": "auto"
+    },
+    {
+      "at": "2026-07-05T12:00:00+00:00",
+      "category": "freqai",
+      "field": "ml_gate_min_confidence",
+      "old": "80%",
+      "new": "60%",
+      "text": "Порог ML (profit) изменён: 80% → 60% (profit_only — все входы ML Finder)",
+      "source": "seed",
+      "note": "profit_only — все входы ML Finder"
+    },
+    {
+      "at": "2026-07-05T12:00:00+00:00",
+      "category": "strategy",
+      "field": "ml_gate_min_confidence",
+      "old": "80%",
+      "new": "60%",
+      "text": "Порог ML (profit) изменён: 80% → 60% (profit_only — MultiStrategyRouter)",
+      "source": "seed",
+      "note": "profit_only — MultiStrategyRouter"
+    },
+    {
+      "at": "2026-07-05T12:00:00+00:00",
+      "category": "grid_ft",
+      "field": "ml_gate_min_confidence",
+      "old": "80%",
+      "new": "60%",
+      "text": "Порог ML (profit) изменён: 80% → 60% (profit_only — VolatilityGridStrategy)",
+      "source": "seed",
+      "note": "profit_only — VolatilityGridStrategy"
+    },
+    {
+      "at": "2026-07-05T12:00:00+00:00",
+      "category": "ui_infra",
+      "field": "_note",
+      "old": null,
+      "new": null,
+      "text": "Панель: подписи ML gate 80% → 60%; симуляция all-pairs: +1544 USDT global ML @60%",
+      "source": "seed"
+    },
+    {
+      "at": "2026-07-05T09:29:53.967341+00:00",
+      "category": "grid_ft",
+      "field": "max_open_trades",
+      "old": 3,
+      "new": 4,
+      "text": "Макс. сделок (Grid Freqtrade) изменён: 3 → 4",
+      "source": "auto"
+    },
+    {
+      "at": "2026-07-04T23:39:03.549570+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия CriptoPairsStrategy: включена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-07-04T23:39:02.099169+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия SupertrendStrategy: включена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-07-04T23:39:01.595812+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия MacdEmaStrategy: включена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-07-04T22:23:12.610656+00:00",
+      "category": "strategy",
+      "field": "max_open_trades",
+      "old": 4,
+      "new": 5,
+      "text": "Макс. сделок (Стратегии) изменён: 4 → 5",
+      "source": "auto"
+    },
+    {
+      "at": "2026-07-04T21:51:51.061883+00:00",
+      "category": "strategy",
+      "field": "max_open_trades",
+      "old": 3,
+      "new": 4,
+      "text": "Макс. сделок (Стратегии) изменён: 3 → 4",
+      "source": "auto"
+    },
+    {
+      "at": "2026-07-04T21:47:35.186276+00:00",
+      "category": "strategy",
+      "field": "max_open_trades",
+      "old": 2,
+      "new": 3,
+      "text": "Макс. сделок (Стратегии) изменён: 2 → 3",
+      "source": "auto"
+    },
+    {
+      "at": "2026-07-04T21:47:26.377451+00:00",
+      "category": "freqai",
+      "field": "max_open_trades",
+      "old": 1,
+      "new": 2,
+      "text": "Макс. сделок (ML Finder) изменён: 1 → 2",
+      "source": "auto"
+    },
+    {
+      "at": "2026-07-04T21:47:18.082964+00:00",
+      "category": "grid_ft",
+      "field": "max_open_trades",
+      "old": 2,
+      "new": 3,
+      "text": "Макс. сделок (Grid Freqtrade) изменён: 2 → 3",
+      "source": "auto"
+    },
+    {
+      "at": "2026-07-04T21:47:01.311140+00:00",
+      "category": "grid_ft",
+      "field": "max_open_trades",
+      "old": 1,
+      "new": 2,
+      "text": "Макс. сделок (Grid Freqtrade) изменён: 1 → 2",
+      "source": "auto"
+    },
+    {
+      "at": "2026-07-04T21:32:21.148910+00:00",
+      "category": "freqai",
+      "field": "max_open_trades",
+      "old": 1,
+      "new": 2,
+      "text": "Макс. сделок (ML Finder) изменён: 1 → 2",
+      "source": "auto"
+    },
+    {
+      "at": "2026-07-04T21:15:00+00:00",
+      "category": "freqai",
+      "field": "_note",
+      "old": null,
+      "new": null,
+      "text": "ML Finder (TradeFinderStrategy + XGBoost scanner) включён на VPS вместо FreqAI · pnl gate block_loss",
+      "source": "seed"
+    },
+    {
+      "at": "2026-07-04T21:15:00+00:00",
+      "category": "ui_infra",
+      "field": "_note",
+      "old": null,
+      "new": null,
+      "text": "Панель CriptoTools: FreqAI → ML Finder, сервис freqtrade снова активен",
+      "source": "seed"
+    },
+    {
+      "at": "2026-07-04T20:53:34.004185+00:00",
+      "category": "strategy_scanner",
+      "field": "_note",
+      "text": "Скан пар стратегий: 9 пар в whitelist. Примеры: CAP/USDT:USDT, ETHFI/USDT:USDT, TAIKO/USDT:USDT, ARPA/USDT:USDT, 10000NEX/USDT:USDT",
+      "source": "auto"
+    },
+    {
+      "at": "2026-07-04T20:50:21.308903+00:00",
+      "category": "bybit_grid",
+      "field": "total_investment",
+      "old": "8.0",
+      "new": "10.0",
+      "text": "Инвестиция на бота изменён: 8.0 USDT → 10.0 USDT",
+      "source": "ui"
+    },
+    {
+      "at": "2026-07-04T20:50:11.414541+00:00",
+      "category": "grid_ft",
+      "field": "max_open_trades",
+      "old": 3,
+      "new": 4,
+      "text": "Макс. сделок (Grid Freqtrade) изменён: 3 → 4",
+      "source": "auto"
+    },
+    {
+      "at": "2026-07-04T20:50:01.864269+00:00",
+      "category": "strategy",
+      "field": "max_open_trades",
+      "old": 2,
+      "new": 3,
+      "text": "Макс. сделок (Стратегии) изменён: 2 → 3",
+      "source": "auto"
+    },
+    {
+      "at": "2026-07-04T20:49:28.038182+00:00",
+      "category": "strategy",
+      "field": "max_open_trades",
+      "old": 1,
+      "new": 2,
+      "text": "Макс. сделок (Стратегии) изменён: 1 → 2",
+      "source": "auto"
+    },
+    {
+      "at": "2026-07-04T20:30:00+00:00",
+      "category": "freqai",
+      "field": "_note",
+      "old": null,
+      "new": null,
+      "text": "FreqAI остановлен на VPS — заменён ML gate (sim +426 USDT vs −472 без gate, Jan 2025+)",
+      "source": "seed"
+    },
+    {
+      "at": "2026-07-04T20:30:00+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "old": null,
+      "new": null,
+      "text": "Prod ML gate: XGBoost pnl_classifier в confirm_trade_entry · TripleEMA + BB+RSI + ADX · block_loss",
+      "source": "seed"
+    },
+    {
+      "at": "2026-07-04T20:30:00+00:00",
+      "category": "grid_ft",
+      "field": "_note",
+      "old": null,
+      "new": null,
+      "text": "Prod ML gate на VolatilityGridStrategy (сценарий live_grid) · block_loss",
+      "source": "seed"
+    },
+    {
+      "at": "2026-07-04T20:30:00+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "old": null,
+      "new": null,
+      "text": "Sim: отключены слабые боты (ликвидность −10, свинг −2, HFT/скальп ≤+5 USDT) — 6 прибыльных с ML",
+      "source": "seed"
+    },
+    {
+      "at": "2026-07-04T20:30:00+00:00",
+      "category": "ui_infra",
+      "field": "_note",
+      "old": null,
+      "new": null,
+      "text": "Панель CriptoTools: подписи ML gate на Grid и Стратегиях; FreqAI помечен OFF",
+      "source": "seed"
+    },
+    {
+      "at": "2026-06-28T11:41:22.806025+00:00",
+      "category": "bybit_grid",
+      "field": "total_investment",
+      "old": "10",
+      "new": "8.0",
+      "text": "Инвестиция на бота изменён: 10 USDT → 8.0 USDT",
+      "source": "ui"
+    },
+    {
+      "at": "2026-06-26T12:00:00+00:00",
+      "category": "grid_ft",
+      "field": "_note",
+      "old": null,
+      "new": null,
+      "text": "Blacklist v2: GRASS, OPG, BEL, BILL, SLX, AERO, LUMIA, JUP, SPK, BLEND, AAVE (+ сканер/Bybit Grid)",
+      "source": "seed"
+    },
+    {
+      "at": "2026-06-25T19:10:53.887396+00:00",
+      "category": "ranging_scanner",
+      "field": "_note",
+      "text": "Скан боковика: найдено ? пар, whitelist обновлён. Топ: —",
+      "source": "auto"
+    },
+    {
+      "at": "2026-06-25T18:24:01.177789+00:00",
+      "category": "ranging_scanner",
+      "field": "_note",
+      "text": "Скан боковика: найдено ? пар, whitelist обновлён. Топ: —",
+      "source": "auto"
+    },
+    {
+      "at": "2026-06-25T18:18:55.793448+00:00",
+      "category": "grid_ft",
+      "field": "max_open_trades",
+      "old": 2,
+      "new": 3,
+      "text": "Макс. сделок (Grid Freqtrade) изменён: 2 → 3",
+      "source": "auto"
+    },
+    {
+      "at": "2026-06-25T18:01:13.015419+00:00",
+      "category": "grid_ft",
+      "field": "max_open_trades",
+      "old": 1,
+      "new": 2,
+      "text": "Макс. сделок (Grid Freqtrade) изменён: 1 → 2",
+      "source": "auto"
+    },
+    {
+      "at": "2026-06-25T18:00:00+00:00",
+      "category": "grid_ft",
+      "field": "stoploss",
+      "old": "-5%",
+      "new": "-3%",
+      "text": "stoploss изменён: -5% → -3% (G3: меньше ущерб от SL)",
+      "source": "seed",
+      "note": "G3: меньше ущерб от SL"
+    },
+    {
+      "at": "2026-06-25T18:00:00+00:00",
+      "category": "grid_ft",
+      "field": "stake_amount",
+      "old": "5",
+      "new": "3",
+      "text": "stake_amount изменён: 5 → 3 (G6: USDT на сделку)",
+      "source": "seed",
+      "note": "G6: USDT на сделку"
+    },
+    {
+      "at": "2026-06-25T18:00:00+00:00",
+      "category": "grid_ft",
+      "field": "max_open_trades",
+      "old": "2",
+      "new": "1",
+      "text": "Макс. открытых сделок изменён: 2 → 1 (G6: одна позиция)",
+      "source": "seed",
+      "note": "G6: одна позиция"
+    },
+    {
+      "at": "2026-06-25T18:00:00+00:00",
+      "category": "grid_ft",
+      "field": "_note",
+      "old": null,
+      "new": null,
+      "text": "G1: ADX<22, BB width≥2.2%; G2: blacklist H/FOLKS/UB/BLESS/ESPORTS/FARTCOIN",
+      "source": "seed"
+    },
+    {
+      "at": "2026-06-25T18:00:00+00:00",
+      "category": "grid_ft",
+      "field": "_note",
+      "old": null,
+      "new": null,
+      "text": "G3: DCA отключён; G4: cooldown после SL 240 мин; G5: whitelist ≤5 пар из сканера",
+      "source": "seed"
+    },
+    {
+      "at": "2026-06-25T18:00:00+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "old": null,
+      "new": null,
+      "text": "S1: только CriptoPairs + BollingerRsi; S2: вход при ADX<25",
+      "source": "seed"
+    },
+    {
+      "at": "2026-06-25T18:00:00+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "old": null,
+      "new": null,
+      "text": "S4: use_exit_signal=false; S5: ROI 2% на 0 мин",
+      "source": "seed"
+    },
+    {
+      "at": "2026-06-25T18:00:00+00:00",
+      "category": "strategy_scanner",
+      "field": "_note",
+      "old": null,
+      "new": null,
+      "text": "S3: min turnover $8M, exclude мемы/HEI/SAHARA/SOXL",
+      "source": "seed"
+    },
+    {
+      "at": "2026-06-25T18:00:00+00:00",
+      "category": "freqai",
+      "field": "max_open_trades",
+      "old": "3",
+      "new": "1",
+      "text": "Макс. открытых сделок изменён: 3 → 1 (F3: лимит позиций)",
+      "source": "seed",
+      "note": "F3: лимит позиций"
+    },
+    {
+      "at": "2026-06-25T18:00:00+00:00",
+      "category": "freqai",
+      "field": "_note",
+      "old": null,
+      "new": null,
+      "text": "F2: PROB_THRESHOLD 0.55→0.62; F4: retrain каждые 4ч, train 15 дней",
+      "source": "seed"
+    },
+    {
+      "at": "2026-06-25T18:00:00+00:00",
+      "category": "freqai",
+      "field": "_note",
+      "old": null,
+      "new": null,
+      "text": "F1: закрыты зависшие позиции DOGE/SOL/XRP с 21.06",
+      "source": "seed"
+    },
+    {
+      "at": "2026-06-25T14:00:00+00:00",
+      "category": "ui_infra",
+      "field": "_note",
+      "old": null,
+      "new": null,
+      "text": "Кнопка «Изменения» — журнал настроек для сравнения с PnL",
+      "source": "seed"
+    },
+    {
+      "at": "2026-06-25T12:00:00+00:00",
+      "category": "bybit_grid",
+      "field": "stop_loss_usdt",
+      "old": "0.4",
+      "new": "0.55",
+      "text": "Стоп-лосс изменён: 0.4 USDT → 0.55 USDT (Пакет оптимизации)",
+      "source": "seed",
+      "note": "Пакет оптимизации"
+    },
+    {
+      "at": "2026-06-25T12:00:00+00:00",
+      "category": "bybit_grid",
+      "field": "take_profit_usdt",
+      "old": "0.4",
+      "new": "0.3",
+      "text": "Тейк-профит изменён: 0.4 USDT → 0.3 USDT",
+      "source": "seed"
+    },
+    {
+      "at": "2026-06-25T12:00:00+00:00",
+      "category": "bybit_grid",
+      "field": "cell_number",
+      "old": "10",
+      "new": "15",
+      "text": "Количество сеток изменён: 10 → 15",
+      "source": "seed"
+    },
+    {
+      "at": "2026-06-25T12:00:00+00:00",
+      "category": "bybit_grid",
+      "field": "price_range_pct",
+      "old": "0.06",
+      "new": "0.09",
+      "text": "Ширина диапазона изменён: 6.0% → 9.0% (±6% → ±9%)",
+      "source": "seed",
+      "note": "±6% → ±9%"
+    },
+    {
+      "at": "2026-06-25T12:00:00+00:00",
+      "category": "deploy_guards",
+      "field": "neutral_max_1h_move_pct",
+      "old": null,
+      "new": "1.5",
+      "text": "Лимит 1ч для Neutral установлен: 1.5 % (A1: Neutral запрещён при |движение 1ч| > 1.5%)",
+      "source": "seed",
+      "note": "A1: Neutral запрещён при |движение 1ч| > 1.5%"
+    },
+    {
+      "at": "2026-06-25T12:00:00+00:00",
+      "category": "deploy_guards",
+      "field": "sl_cooldown_hours",
+      "old": null,
+      "new": "3",
+      "text": "Cooldown после SL установлен: 3 ч (A3: пауза 3 ч на пару после SL)",
+      "source": "seed",
+      "note": "A3: пауза 3 ч на пару после SL"
+    },
+    {
+      "at": "2026-06-25T08:00:00+00:00",
+      "category": "system",
+      "field": "_note",
+      "old": null,
+      "new": null,
+      "text": "API rate limit: fgridbot 10/с, кэш detail 25 с, UI poll Bybit Grid 30 с",
+      "source": "seed"
+    },
+    {
+      "at": "2026-06-24T20:00:00+00:00",
+      "category": "system",
+      "field": "_note",
+      "old": null,
+      "new": null,
+      "text": "Fix: SL precision ≤2 знака; ошибка 400001 Funding; импорт bot_id; sync UI↔Bybit",
+      "source": "seed"
+    },
+    {
+      "at": "2026-06-24T14:00:00+00:00",
+      "category": "bybit_grid",
+      "field": "_note",
+      "old": null,
+      "new": null,
+      "text": "Четвёртый бот: нативный Bybit Futures Grid (Funding Account)",
+      "source": "seed"
+    },
+    {
+      "at": "2026-06-24T12:00:00+00:00",
+      "category": "ranging_scanner",
+      "field": "_note",
+      "old": null,
+      "new": null,
+      "text": "Сканер на timer (systemd), whitelist → config_grid.json",
+      "source": "seed"
+    },
+    {
+      "at": "2026-06-24T12:00:00+00:00",
+      "category": "bybit_grid",
+      "field": "stop_loss_usdt",
+      "old": null,
+      "new": "0.4",
+      "text": "Стоп-лосс установлен: 0.4 USDT (Стартовые параметры)",
+      "source": "seed",
+      "note": "Стартовые параметры"
+    },
+    {
+      "at": "2026-06-24T12:00:00+00:00",
+      "category": "bybit_grid",
+      "field": "take_profit_usdt",
+      "old": null,
+      "new": "0.4",
+      "text": "Тейк-профит установлен: 0.4 USDT",
+      "source": "seed"
+    },
+    {
+      "at": "2026-06-24T12:00:00+00:00",
+      "category": "bybit_grid",
+      "field": "cell_number",
+      "old": null,
+      "new": "10",
+      "text": "Количество сеток установлен: 10",
+      "source": "seed"
+    },
+    {
+      "at": "2026-06-24T12:00:00+00:00",
+      "category": "bybit_grid",
+      "field": "price_range_pct",
+      "old": null,
+      "new": "0.06",
+      "text": "Ширина диапазона установлен: 6.0% (±6%)",
+      "source": "seed",
+      "note": "±6%"
+    },
+    {
+      "at": "2026-06-24T12:00:00+00:00",
+      "category": "bybit_grid",
+      "field": "total_investment",
+      "old": null,
+      "new": "10",
+      "text": "Инвестиция на бота установлен: 10 USDT (USDT на бота)",
+      "source": "seed",
+      "note": "USDT на бота"
+    },
+    {
+      "at": "2026-06-24T12:00:00+00:00",
+      "category": "bybit_grid",
+      "field": "max_active_bots",
+      "old": null,
+      "new": "3",
+      "text": "Макс. активных Bybit Grid установлен: 3",
+      "source": "seed"
+    },
+    {
+      "at": "2026-06-24T10:00:00+00:00",
+      "category": "ranging_scanner",
+      "field": "adx_max",
+      "old": "22",
+      "new": "26",
+      "text": "ADX макс. (сканер) изменён: 22 → 26 (Ослаблен фильтр тренда — больше кандидатов в трендовом рынке)",
+      "source": "seed",
+      "note": "Ослаблен фильтр тренда — больше кандидатов в трендовом рынке"
+    },
+    {
+      "at": "2026-06-24T10:00:00+00:00",
+      "category": "ranging_scanner",
+      "field": "max_ema50_slope",
+      "old": "0.0012",
+      "new": "0.004",
+      "text": "Наклон EMA50 макс. изменён: 0.0012 → 0.0040 (Главный блокер «0 пар» был ema_slope)",
+      "source": "seed",
+      "note": "Главный блокер «0 пар» был ema_slope"
+    },
+    {
+      "at": "2026-06-24T10:00:00+00:00",
+      "category": "ranging_scanner",
+      "field": "min_ranging_ratio",
+      "old": "0.65",
+      "new": "0.55",
+      "text": "Ranging ratio мин. изменён: 0.65 → 0.55 (Soft-rank при 0 strict passes)",
+      "source": "seed",
+      "note": "Soft-rank при 0 strict passes"
+    },
+    {
+      "at": "2026-06-24T08:00:00+00:00",
+      "category": "ranging_scanner",
+      "field": "_note",
+      "old": null,
+      "new": null,
+      "text": "Сканер боковика v3: ADX, BB width, EMA slope, ATR ratio, MTF 15m",
+      "source": "seed"
+    },
+    {
+      "at": "2026-06-23T16:00:00+00:00",
+      "category": "strategy_scanner",
+      "field": "_note",
+      "old": null,
+      "new": null,
+      "text": "Сканер пар под включённые стратегии (150 ликвидных, timer на VPS)",
+      "source": "seed"
+    },
+    {
+      "at": "2026-06-23T14:00:00+00:00",
+      "category": "grid_ft",
+      "field": "max_open_trades",
+      "old": null,
+      "new": "2",
+      "text": "Макс. открытых сделок установлен: 2 (Третий бот: VolatilityGridStrategy (Freqtrade Grid))",
+      "source": "seed",
+      "note": "Третий бот: VolatilityGridStrategy (Freqtrade Grid)"
+    },
+    {
+      "at": "2026-06-23T11:00:00+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "old": null,
+      "new": null,
+      "text": "Добавлены стратегии: Supertrend, MACD, TripleEMA, BB+RSI, ADX; мульти-включение",
+      "source": "seed"
+    },
+    {
+      "at": "2026-06-23T10:00:00+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "old": null,
+      "new": null,
+      "text": "CriptoPairsStrategy: таймфрейм 1h → 5m",
+      "source": "seed"
+    },
+    {
+      "at": "2026-06-23T08:00:00+00:00",
+      "category": "ui_infra",
+      "field": "_note",
+      "old": null,
+      "new": null,
+      "text": "Панель CriptoTools: свой UI вместо FreqUI (2 колонки → 4 бота)",
+      "source": "seed"
+    },
+    {
+      "at": "2026-06-22T14:00:00+00:00",
+      "category": "ui_infra",
+      "field": "_note",
+      "old": null,
+      "new": null,
+      "text": "FreqUI + nginx HTTPS на порту 8443, самоподписанный сертификат",
+      "source": "seed"
+    },
+    {
+      "at": "2026-06-22T12:00:00+00:00",
+      "category": "freqai",
+      "field": "max_open_trades",
+      "old": null,
+      "new": "3",
+      "text": "Макс. открытых сделок установлен: 3 (Бот FreqAI (LightGBM / FreqaiExampleStrategy))",
+      "source": "seed",
+      "note": "Бот FreqAI (LightGBM / FreqaiExampleStrategy)"
+    },
+    {
+      "at": "2026-06-22T12:00:00+00:00",
+      "category": "strategy",
+      "field": "max_open_trades",
+      "old": null,
+      "new": "2",
+      "text": "Макс. открытых сделок установлен: 2 (Бот стратегий (MultiStrategyRouter))",
+      "source": "seed",
+      "note": "Бот стратегий (MultiStrategyRouter)"
+    },
+    {
+      "at": "2026-06-22T10:00:00+00:00",
+      "category": "freqai",
+      "field": "_note",
+      "old": null,
+      "new": null,
+      "text": "Развёрнут Freqtrade на VPS 77.222.35.209, Bybit futures dry-run/live",
+      "source": "seed"
+    },
+    {
+      "at": "2026-06-21T15:00:00+00:00",
+      "category": "telegram_bot",
+      "field": "_note",
+      "old": null,
+      "new": null,
+      "text": "Исправлен минимум ордера futures (110094), расчёт qty с minNotional",
+      "source": "seed"
+    },
+    {
+      "at": "2026-06-21T14:00:00+00:00",
+      "category": "telegram_bot",
+      "field": "_note",
+      "old": null,
+      "new": null,
+      "text": "Исправлена синхронизация времени с Bybit (ошибка 10002)",
+      "source": "seed"
+    },
+    {
+      "at": "2026-06-21T10:00:00+00:00",
+      "category": "telegram_bot",
+      "field": "_note",
+      "old": null,
+      "new": null,
+      "text": "Торговля Bybit из Telegram: spot long + perp short по сигналам скана",
+      "source": "seed"
+    },
+    {
+      "at": "2026-06-20T18:00:00+00:00",
+      "category": "telegram_bot",
+      "field": "_note",
+      "old": null,
+      "new": null,
+      "text": "История сканов в БД (scan_runs), кнопка «Сканы» в боте",
+      "source": "seed"
+    },
+    {
+      "at": "2026-06-20T16:00:00+00:00",
+      "category": "telegram_bot",
+      "field": "_note",
+      "old": null,
+      "new": null,
+      "text": "Скан: облегчённый режим (lookback 128, 2 сэмпла), пагинация 1m для 10m/20m",
+      "source": "seed"
+    },
+    {
+      "at": "2026-06-20T08:00:00+00:00",
+      "category": "telegram_bot",
+      "field": "_note",
+      "old": null,
+      "new": null,
+      "text": "Таймфреймы 5m, 10m, 20m; скан 60 комбинаций (10 пар × 6 TF)",
+      "source": "seed"
+    },
+    {
+      "at": "2026-06-19T14:00:00+00:00",
+      "category": "telegram_bot",
+      "field": "_note",
+      "old": null,
+      "new": null,
+      "text": "Стабильный прогноз: только закрытые свечи, seed на период, кэш до закрытия TF",
+      "source": "seed"
+    },
+    {
+      "at": "2026-06-18T10:00:00+00:00",
+      "category": "telegram_bot",
+      "field": "_note",
+      "old": null,
+      "new": null,
+      "text": "Создан Telegram-бот: Chronos + Binance API, прогноз ALGO/BTC/ETH и др.",
+      "source": "seed"
+    }
+  ]
+}

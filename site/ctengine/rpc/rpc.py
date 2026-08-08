@@ -1074,7 +1074,7 @@ class RPC:
                     raise RPCException(f"Remaining amount of {remaining} would be too small.")
                 sub_amount = amount
 
-            self._ctbot.execute_trade_exit(
+            self._ctengine.execute_trade_exit(
                 trade,
                 current_rate,
                 exit_check,
@@ -1201,7 +1201,7 @@ class RPC:
                 "force_entry", self._ctengine.strategy.order_types["entry"]
             )
         with self._ctengine._exit_lock:
-            if self._ctbot.execute_entry(
+            if self._ctengine.execute_entry(
                 pair,
                 stake_amount,
                 price,

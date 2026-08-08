@@ -28,7 +28,7 @@ SCENARIOS_PATH = "simulation/config/player_scenarios.json"
 def load_bot_scenarios(root: Path) -> list[dict]:
     path = root / SCENARIOS_PATH
     if path.is_file():
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8-sig"))
     return []
 
 
@@ -44,7 +44,7 @@ def ms_to_timerange(start_ms: int, end_ms: int) -> str:
 def load_player_profile(root: Path) -> dict[str, Any]:
     path = root / "simulation" / "config" / "player_profile.json"
     if path.is_file():
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8-sig"))
     return {}
 
 
@@ -77,6 +77,16 @@ def patch_whitelist(root: Path, config_rel: str, pairs: list[str], out: Path, sc
         mot = int((scenario or {}).get("max_open_trades") or profile.get("max_open_trades", cfg.get("max_open_trades", 1)))
         cfg["dry_run_wallet"] = max(wallet, stake * mot * 1.15)
         cfg["max_open_trades"] = mot
+    # Per-scenario SL/TP: config overrides strategy, so pin from scenario when set;
+    # otherwise drop shared keys so the strategy class stoploss/minimal_roi apply.
+    if scenario and scenario.get("stoploss") is not None:
+        cfg["stoploss"] = float(scenario["stoploss"])
+    else:
+        cfg.pop("stoploss", None)
+    if scenario and scenario.get("minimal_roi") is not None:
+        cfg["minimal_roi"] = scenario["minimal_roi"]
+    else:
+        cfg.pop("minimal_roi", None)
     out.parent.mkdir(parents=True, exist_ok=True)
     # Isolate ctengine sqlite per runtime config (parallel bots must not share one DB).
     cfg["db_url"] = f"sqlite:///{out.with_suffix('.sqlite').as_posix()}"
@@ -636,8 +646,11 @@ class BotSessionManager:
         datadir: Path,
         *,
         prefix: str | None = None,
+        isolate_key: str | None = None,
     ) -> tuple[list[dict], dict, float, dict, dict[str, Any]]:
         sid = sc["id"]
+        # Parallel workers / SL-TP grid: unique runtime + export dirs per isolate_key.
+        run_tag = f"{sid}__{isolate_key}" if isolate_key else sid
         try:
             from simulation.paths import VENV_CTBOT, VENV_PYTHON
 
@@ -652,15 +665,15 @@ class BotSessionManager:
         if ft_cmd[0] == "ctengine" or (len(ft_cmd) == 1 and not Path(ft_cmd[0]).is_file()):
             ft_cmd = ["ctengine"]
         # Isolated dir per bot — parallel прогон не должен писать в один zip/.last_result
-        bt_dir = self.root / "simulation" / "results" / "player_backtests" / sid
+        bt_dir = self.root / "simulation" / "results" / "player_backtests" / run_tag
         bt_dir.mkdir(parents=True, exist_ok=True)
         safe_pair = bt_pairs[0].replace("/", "_").replace(":", "_") if len(bt_pairs) == 1 else ""
         runtime_cfg = self.root / "simulation" / "data" / "runtime" / (
-            f"player_{sid}_{safe_pair}.json" if safe_pair else f"player_{sid}.json"
+            f"player_{run_tag}_{safe_pair}.json" if safe_pair else f"player_{run_tag}.json"
         )
         cfg = patch_whitelist(self.root, sc["config"], bt_pairs, runtime_cfg, scenario=sc)
         export_prefix = prefix or (
-            f"player_{sid}_{safe_pair}_{timerange}" if safe_pair else f"player_{sid}_{timerange}"
+            f"player_{run_tag}_{safe_pair}_{timerange}" if safe_pair else f"player_{run_tag}_{timerange}"
         )
         cmd = [
             *ft_cmd,
@@ -941,7 +954,14 @@ class BotSessionManager:
         return filter_pairs_for_scenario(pool, cfg)
 
     def load_scenario_instances(
-        self, sid: str, pool: list[str], start_ms: int, end_ms: int, datadir: Path
+        self,
+        sid: str,
+        pool: list[str],
+        start_ms: int,
+        end_ms: int,
+        datadir: Path,
+        *,
+        isolate_key: str | None = None,
     ) -> list[dict[str, Any]]:
         """One backtest for all eligible pairs of a scenario (on bot turn)."""
         sc = next((s for s in self.scenarios if s["id"] == sid), None)
@@ -969,7 +989,7 @@ class BotSessionManager:
                 break
             try:
                 raw_trades, minimal_roi, stoploss, cfg, parsed = self._ctengine_backtest(
-                    sc, remaining, timerange, datadir
+                    sc, remaining, timerange, datadir, isolate_key=isolate_key
                 )
                 last_err = None
                 eligible = remaining
@@ -979,7 +999,7 @@ class BotSessionManager:
                 msg = str(exc)
                 # Drop pairs ctengine rejects for missing leverage tiers, then retry.
                 m = re.search(
-                    r"Pairs\s+(.+?)\s+got no leverage tiers",
+                    r"Pairs\s+(.+?)\s+got no leverage\s*tiers",
                     msg,
                     flags=re.S,
                 )

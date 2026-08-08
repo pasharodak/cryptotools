@@ -1,0 +1,19 @@
+{
+    "enabled": true,
+    "gate_mode": "block_loss",
+    "block_predicted": "loss",
+    "min_confidence": 0.0,
+    "grid_bots": {
+        "gate_mode": "profit_only",
+        "min_confidence": 0.7
+    },
+    "finder_bots": {
+        "gate_mode": "profit_only",
+        "min_confidence": 0.6
+    },
+    "strategy_bots": {
+        "gate_mode": "profit_only",
+        "min_confidence": 0.45,
+        "note": "Floor; per-scenario min_profit_proba from model meta overrides"
+    }
+}

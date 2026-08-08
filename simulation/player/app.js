@@ -366,6 +366,9 @@
       const rng = await api(`/sim/range?pair=${encodeURIComponent(pair)}&timeframe=1s`);
       if (rng.start_ms) $("dateFrom").value = msToLocalInput(rng.start_ms);
       if (rng.end_ms) $("dateTo").value = msToLocalInput(rng.end_ms);
+      if (!rng.start_ms || !rng.end_ms) {
+        log(`Нет диапазона дат для ${pair}`);
+      }
     } catch (e) {
       log(`Нет данных 1s для ${pair}`);
     }

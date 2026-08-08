@@ -2,6 +2,8 @@
 """Bybit Futures Grid Bot API — create, monitor, close native grid bots."""
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import copy
 import hashlib
 import hmac
@@ -16,6 +18,25 @@ from datetime import UTC, datetime, timedelta
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from pathlib import Path
 from typing import Any
+
+_tenant_user_data: contextvars.ContextVar[Path | None] = contextvars.ContextVar(
+    "bybit_tenant_user_data", default=None
+)
+_tenant_env_file: contextvars.ContextVar[Path | None] = contextvars.ContextVar(
+    "bybit_tenant_env_file", default=None
+)
+
+
+@contextlib.contextmanager
+def tenant_bybit_context(user_data: Path | None, env_file: Path | None = None):
+    t1 = _tenant_user_data.set(user_data)
+    t2 = _tenant_env_file.set(env_file)
+    try:
+        yield
+    finally:
+        _tenant_user_data.reset(t1)
+        _tenant_env_file.reset(t2)
+
 
 BYBIT_API = "https://api.bybit.com"
 GRID_MODE_LABELS = {1: "neutral", 2: "long", 3: "short"}
@@ -47,10 +68,16 @@ def ft_base() -> Path:
 
 
 def config_path() -> Path:
+    override = _tenant_user_data.get()
+    if override is not None:
+        return override / "bybit_grid_config.json"
     return ft_base() / "user_data" / "bybit_grid_config.json"
 
 
 def state_path() -> Path:
+    override = _tenant_user_data.get()
+    if override is not None:
+        return override / "bybit_grid_state.json"
     return ft_base() / "user_data" / "bybit_grid_state.json"
 
 
@@ -82,6 +109,13 @@ def load_env_file(path: Path) -> dict[str, str]:
 
 
 def get_credentials() -> tuple[str, str]:
+    tenant_env = _tenant_env_file.get()
+    if tenant_env is not None:
+        env = load_env_file(tenant_env)
+        key = env.get("BYBIT_API_KEY", "").strip()
+        secret = env.get("BYBIT_API_SECRET", "").strip()
+        if key and secret:
+            return key, secret
     env_file = Path(os.environ.get("CT_ENV", ft_base().parent / ".cryptotools.env"))
     env = load_env_file(env_file)
     key = (
@@ -581,7 +615,7 @@ def update_config(updates: dict[str, Any]) -> dict[str, Any]:
     cfg = load_config()
     old_cfg = copy.deepcopy(cfg)
     if "max_active_bots" in updates:
-        cfg["max_active_bots"] = max(1, min(5, int(updates["max_active_bots"])))
+        cfg["max_active_bots"] = max(0, min(5, int(updates["max_active_bots"])))
     defaults = cfg.setdefault("defaults", {})
     if "total_investment" in updates:
         inv = float(updates["total_investment"])
@@ -599,7 +633,7 @@ def update_config(updates: dict[str, Any]) -> dict[str, Any]:
     return cfg
 
 
-MAX_HISTORY = 50
+MAX_HISTORY = 500
 
 
 def load_state() -> dict[str, Any]:
@@ -1267,7 +1301,10 @@ def create_grid(params: dict[str, Any]) -> dict[str, Any]:
     status = get_status_payload()
     active = [b for b in status.get("bots", []) if b.get("is_active")]
     if len(active) >= int(cfg.get("max_active_bots", 1)):
-        raise ValueError(f"Max active Bybit grids: {cfg['max_active_bots']}")
+        raise ValueError(
+            f"Max active Bybit grids: {cfg['max_active_bots']}"
+            + (" (0 = создание отключено)" if int(cfg.get("max_active_bots", 1)) <= 0 else "")
+        )
 
     symbol = params.get("symbol") or ft_pair_to_symbol(params.get("pair", ""))
     base = symbol.replace("USDT", "")

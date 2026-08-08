@@ -6,7 +6,7 @@ import logging
 import traceback
 from copy import deepcopy
 from datetime import UTC, datetime, time, timedelta
-from math import isclose
+from math import isclose, isinf, isnan
 from threading import Lock
 from time import sleep
 from typing import Any
@@ -1483,6 +1483,12 @@ class CtengineBot(LoggingMixin):
                     logger.warning(
                         f"Unable to handle stoploss on exchange for {trade.pair}: {exception}"
                     )
+                # Keep exchange TP in sync with custom_roi / trained risk (and re-place if canceled).
+                try:
+                    if trade.is_open and trade.has_open_position:
+                        self.ensure_takeprofit_on_exchange(trade)
+                except Exception:
+                    logger.exception("Unable to ensure take-profit on exchange for %s", trade.pair)
                 # Check if we can exit our current position for this trade
                 if trade.has_open_position and trade.is_open and self.handle_trade(trade):
                     trades_closed += 1
@@ -1547,9 +1553,12 @@ class CtengineBot(LoggingMixin):
         )
         for should_exit in exits:
             if should_exit.exit_flag:
+                # Only defer to exchange TP when a live TP order is actually open.
+                # Otherwise software ROI (incl. custom_roi / trained risk) must still exit.
                 if (
                     should_exit.exit_type == ExitType.ROI
                     and self.strategy.order_types.get("take_profit_on_exchange")
+                    and self._has_takeprofit_order(trade)
                 ):
                     continue
                 exit_tag1 = exit_tag if should_exit.exit_type == ExitType.EXIT_SIGNAL else None
@@ -1571,14 +1580,48 @@ class CtengineBot(LoggingMixin):
                     return True
         return False
 
-    def _get_initial_roi_target(self) -> float | None:
+    def _get_initial_roi_target(self, trade: Trade | None = None) -> float | None:
+        """ROI used for exchange TP. Prefers strategy custom_roi (trained TAG_RISK) over config."""
         table = self.strategy.minimal_roi or {}
-        if not table:
-            return None
-        if "0" in table:
-            return float(table["0"])
-        first_key = sorted(table.keys(), key=lambda x: int(x))[0]
-        return float(table[first_key])
+        global_roi: float | None = None
+        if table:
+            if "0" in table:
+                global_roi = float(table["0"])
+            else:
+                first_key = sorted(table.keys(), key=lambda x: int(x))[0]
+                global_roi = float(table[first_key])
+
+        custom_roi: float | None = None
+        if trade is not None and getattr(self.strategy, "use_custom_roi", False):
+            try:
+                trade_dur = 0
+                if trade.open_date_utc is not None:
+                    trade_dur = int(
+                        (datetime.now(UTC).timestamp() - trade.open_date_utc.timestamp()) // 60
+                    )
+                raw = strategy_safe_wrapper(
+                    self.strategy.custom_roi, default_retval=None, supress_error=True
+                )(
+                    pair=trade.pair,
+                    trade=trade,
+                    current_time=datetime.now(UTC),
+                    trade_duration=trade_dur,
+                    entry_tag=trade.enter_tag,
+                    side=trade.trade_direction,
+                )
+                if raw is not None:
+                    custom_roi_f = float(raw)
+                    if not (isnan(custom_roi_f) or isinf(custom_roi_f)):
+                        custom_roi = custom_roi_f
+            except Exception:
+                logger.exception("custom_roi failed for %s — falling back to minimal_roi", getattr(trade, "pair", "?"))
+
+        if custom_roi is not None and custom_roi > 0:
+            if global_roi is None:
+                return custom_roi
+            # Lowest threshold wins (matches min_roi_reached_entry).
+            return min(custom_roi, global_roi)
+        return global_roi
 
     def _has_takeprofit_order(self, trade: Trade) -> bool:
         for order in trade.open_orders:
@@ -1589,6 +1632,34 @@ class CtengineBot(LoggingMixin):
             ):
                 return True
         return False
+
+    def _iter_takeprofit_orders(self, trade: Trade):
+        for order in trade.open_orders:
+            if (
+                order.ft_order_side == trade.exit_side
+                and order.order_type == "limit"
+                and order.ft_order_tag == "take_profit_on_exchange"
+            ):
+                yield order
+
+    def cancel_takeprofit_on_exchange(self, trade: Trade) -> None:
+        """Cancel open reduce-only take-profit limit orders for this trade."""
+        for order_obj in list(self._iter_takeprofit_orders(trade)):
+            if not order_obj.order_id:
+                continue
+            try:
+                logger.info(
+                    f"Cancelling take-profit on exchange for {trade.pair} "
+                    f"order: {order_obj.order_id}"
+                )
+                corder = self.exchange.cancel_order_with_result(
+                    order_obj.order_id, trade.pair, trade.amount
+                )
+                self.update_trade_state(trade, order_obj.order_id, corder)
+            except InvalidOrderException:
+                logger.exception(
+                    f"Could not cancel take-profit order {order_obj.order_id} for {trade.pair}"
+                )
 
     def create_takeprofit_order(self, trade: Trade, tp_price: float) -> bool:
         """Place reduce-only limit TP on exchange at ROI target price."""
@@ -1614,7 +1685,7 @@ class CtengineBot(LoggingMixin):
             trade.orders.append(order_obj)
             logger.info(
                 f"take profit limit order added for {trade.pair} at {tp_price_norm} "
-                f"(ROI target from minimal_roi)."
+                f"(ROI target from custom_roi/minimal_roi)."
             )
             return True
         except InsufficientFundsError as e:
@@ -1635,17 +1706,47 @@ class CtengineBot(LoggingMixin):
             stop_price = trade.stoploss_or_liquidation
             if stop_price and stop_price > 0:
                 self.create_stoploss_order(trade=trade, stop_price=stop_price)
-        if order_types.get("take_profit_on_exchange") and not self._has_takeprofit_order(trade):
-            roi_target = self._get_initial_roi_target()
-            if roi_target is None or roi_target <= 0:
-                return
+        self.ensure_takeprofit_on_exchange(trade)
+
+    def ensure_takeprofit_on_exchange(self, trade: Trade) -> None:
+        """Place or refresh exchange TP so it matches custom_roi / trained risk."""
+        if not trade.is_open or not trade.has_open_position:
+            return
+        if not self.strategy.order_types.get("take_profit_on_exchange"):
+            return
+        roi_target = self._get_initial_roi_target(trade)
+        if roi_target is None or roi_target <= 0:
+            return
+        try:
+            tp_price = trade.calc_close_rate_for_roi(roi_target)
+        except Exception:
+            logger.exception("Failed to compute take-profit price for %s", trade.pair)
+            return
+        if not tp_price or tp_price <= 0:
+            return
+
+        round_mode = ROUND_UP if trade.is_short else ROUND_DOWN
+        tp_price_norm = self.exchange.price_to_precision(
+            trade.pair, tp_price, rounding_mode=round_mode
+        )
+
+        existing = list(self._iter_takeprofit_orders(trade))
+        if existing:
+            # Refresh if price drifted from trained/custom target (e.g. was placed at global 5%).
+            cur = existing[-1].safe_price or existing[-1].ft_price or existing[-1].price
             try:
-                tp_price = trade.calc_close_rate_for_roi(roi_target)
-            except Exception:
-                logger.exception("Failed to compute take-profit price for %s", trade.pair)
-                return
-            if tp_price and tp_price > 0:
-                self.create_takeprofit_order(trade, tp_price)
+                cur_f = float(cur) if cur is not None else None
+            except (TypeError, ValueError):
+                cur_f = None
+            if cur_f is not None and tp_price_norm:
+                # Tolerate 1 tick of rounding noise.
+                rel = abs(cur_f - float(tp_price_norm)) / max(float(tp_price_norm), 1e-12)
+                if rel < 0.0005:
+                    return
+            self.cancel_takeprofit_on_exchange(trade)
+
+        if not self._has_takeprofit_order(trade):
+            self.create_takeprofit_order(trade, float(tp_price_norm))
 
     def create_stoploss_order(self, trade: Trade, stop_price: float) -> bool:
         """

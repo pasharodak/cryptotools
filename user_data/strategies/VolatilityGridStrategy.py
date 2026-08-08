@@ -15,7 +15,7 @@ from technical import qtpylib
 _USER_DATA = Path(__file__).resolve().parent.parent
 if str(_USER_DATA) not in sys.path:
     sys.path.insert(0, str(_USER_DATA))
-from ml.gate import allow_trade_entry, pop_entry_ml, save_ml_to_trade  # noqa: E402
+from ml.gate import allow_trade_entry, persist_entry_ml  # noqa: E402
 from _sim_live import PROD_MINIMAL_ROI, PROD_STOPLOSS  # noqa: E402
 
 GRID_SCENARIO = {
@@ -105,9 +105,18 @@ class VolatilityGridStrategy(IStrategy):
     ) -> None:
         if order.ft_order_side != trade.entry_side:
             return
-        side = "short" if trade.is_short else "long"
-        ml = pop_entry_ml(pair, side, GRID_SCENARIO["scenario_id"])
-        save_ml_to_trade(trade, ml)
+        df, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+        stake = float(self.config.get("stake_amount") or 0)
+        persist_entry_ml(
+            trade,
+            scenario=GRID_SCENARIO,
+            ohlcv_df=df,
+            current_time=current_time,
+            stake_usdt=stake,
+            stoploss=float(self.stoploss),
+            minimal_roi=dict(self.minimal_roi),
+            timeframe=self.timeframe,
+        )
 
     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         bollinger = qtpylib.bollinger_bands(dataframe["close"], window=20, stds=2)
