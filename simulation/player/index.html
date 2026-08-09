@@ -4,79 +4,121 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Sim Player — CriptoTools</title>
-  <link rel="stylesheet" href="/static/styles.css?v=14" />
+  <link rel="stylesheet" href="/static/styles.css?v=23" />
   <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
 </head>
-<body>
+<body class="mode-sim">
   <header class="topbar">
     <h1>Sim Player</h1>
-    <span class="badge">7 ботов вкл. · переключатели у стратегий</span>
+    <nav class="mode-tabs" role="tablist" aria-label="Режим">
+      <button type="button" class="mode-tab active" data-mode="sim" role="tab" aria-selected="true">Симуляция</button>
+      <button type="button" class="mode-tab" data-mode="chart" role="tab" aria-selected="false">График</button>
+      <button type="button" class="mode-tab" data-mode="live" role="tab" aria-selected="false">Отображение сделок</button>
+      <button type="button" class="mode-tab" data-mode="grid" role="tab" aria-selected="false">Bybit Grid</button>
+    </nav>
+    <span id="modeHint" class="badge">Мультистратегия · Play / Прогон</span>
     <span id="connStatus" class="conn off">offline</span>
   </header>
 
   <section class="controls">
-    <label>
+    <label class="mode-hist-only">
       Пара
       <select id="pairSelect"></select>
     </label>
-    <label>
+    <label class="mode-hist-only">
       От
       <input type="datetime-local" id="dateFrom" step="1" />
     </label>
-    <label>
+    <label class="mode-hist-only">
       До
       <input type="datetime-local" id="dateTo" step="1" />
     </label>
-    <label>
-      Стейк
-      <select id="stakeModeSelect" title="По стратегии — из конфига каждого бота; Единый — один размер для всех">
-        <option value="scenario">По стратегии</option>
-        <option value="uniform">Единый</option>
-      </select>
-    </label>
-    <label id="stakeAmountWrap">
-      USDT
-      <input type="number" id="stakeAmountInput" min="1" max="500" step="1" value="50" title="Размер одной сделки" />
-    </label>
-    <button id="btnStakeApply" class="btn sm" type="button" title="Сохранить стейк">Стейк ✓</button>
-    <button id="btnLoad" class="btn primary">Загрузить график</button>
-    <div class="player-btns">
-      <button id="btnPlay" class="btn success">▶ Play</button>
-      <button id="btnPrgon" class="btn success" title="Быстрый прогон всех ботов без часов">⚡ Прогон</button>
-      <button id="btnPause" class="btn">⏸ Pause</button>
-      <button id="btnStop" class="btn danger">⏹ Stop</button>
-      <button id="btnPairs" class="btn" type="button" title="Пары для симуляции">Пары (…)</button>
-      <label class="ml-gate-toggle" title="XGBoost: не входить, если модель предсказывает loss">
-        <input type="checkbox" id="mlGateToggle" checked />
-        ML gate
+
+    <!-- Симуляция -->
+    <div class="mode-panel mode-sim-only">
+      <label>
+        Стейк
+        <select id="stakeModeSelect" title="По стратегии — из конфига каждого бота; Единый — один размер для всех">
+          <option value="scenario">По стратегии</option>
+          <option value="uniform">Единый</option>
+        </select>
       </label>
-      <div class="menu-wrap">
-        <button id="btnMenu" class="btn" type="button" aria-haspopup="true">Сброс ▾</button>
-        <div id="resetMenu" class="dropdown-menu hidden" role="menu">
-          <button type="button" data-reset="replay">↺ К началу периода</button>
-          <button type="button" data-reset="bots">🗑 Сбросить ботов</button>
-          <button type="button" data-reset="reprepare">↻ Пересчитать симуляцию</button>
-          <button type="button" data-reset="all">⟲ Полный сброс</button>
-          <button type="button" data-reset="probe">⌁ Сброс probe-кэша</button>
+      <label id="stakeAmountWrap">
+        USDT
+        <input type="number" id="stakeAmountInput" min="1" max="500" step="1" value="50" title="Размер одной сделки" />
+      </label>
+      <button id="btnStakeApply" class="btn sm" type="button" title="Сохранить стейк">Стейк ✓</button>
+      <button id="btnLoad" class="btn primary">Загрузить график</button>
+      <div class="player-btns">
+        <button id="btnPlay" class="btn success">▶ Play</button>
+        <button id="btnPrgon" class="btn success" title="Быстрый прогон всех ботов без часов">⚡ Прогон</button>
+        <button id="btnPause" class="btn">⏸ Pause</button>
+        <button id="btnStop" class="btn danger">⏹ Stop</button>
+        <button id="btnPairs" class="btn" type="button" title="Пары для симуляции">Пары (…)</button>
+        <label class="ml-gate-toggle" title="XGBoost: не входить, если модель предсказывает loss">
+          <input type="checkbox" id="mlGateToggle" checked />
+          ML gate
+        </label>
+        <div class="menu-wrap">
+          <button id="btnMenu" class="btn" type="button" aria-haspopup="true">Сброс ▾</button>
+          <div id="resetMenu" class="dropdown-menu hidden" role="menu">
+            <button type="button" data-reset="replay">↺ К началу периода</button>
+            <button type="button" data-reset="bots">🗑 Сбросить ботов</button>
+            <button type="button" data-reset="reprepare">↻ Пересчитать симуляцию</button>
+            <button type="button" data-reset="all">⟲ Полный сброс</button>
+            <button type="button" data-reset="probe">⌁ Сброс probe-кэша</button>
+          </div>
         </div>
       </div>
+      <div class="speed-group">
+        <span>Скорость:</span>
+        <button class="btn speed" data-speed="2">×2</button>
+        <button class="btn speed" data-speed="5">×5</button>
+        <button class="btn speed" data-speed="100">×100</button>
+        <button class="btn speed" data-speed="3600">×3600</button>
+        <span id="speedLabel" class="speed-label">1 sim-с/с</span>
+      </div>
     </div>
-    <div class="speed-group">
-      <span>Скорость:</span>
-      <button class="btn speed" data-speed="2">×2</button>
-      <button class="btn speed" data-speed="5">×5</button>
-      <button class="btn speed" data-speed="100">×100</button>
-      <button class="btn speed" data-speed="3600">×3600</button>
-      <span id="speedLabel" class="speed-label">1 sim-с/с</span>
+
+    <!-- График -->
+    <div class="mode-panel mode-chart-only">
+      <button id="btnChartOpen" class="btn primary">Открыть график</button>
+      <span class="ctrl-hint muted">Любая пара за выбранный период (1s свечи)</span>
+    </div>
+
+    <!-- Отображение сделок -->
+    <div class="mode-panel mode-live-only">
+      <label class="live-period-note">
+        Период
+        <span class="ctrl-hint muted" id="livePeriodLabel">укажите От / До слева</span>
+      </label>
+      <label>
+        Стратегия
+        <select id="liveStrategySelect"></select>
+      </label>
+      <label class="ml-gate-toggle" title="Не показывать сделки, которые ML считает убыточными">
+        <input type="checkbox" id="mlGateToggleLive" checked />
+        ML gate
+      </label>
+      <button id="btnLiveLoad" class="btn primary">Загрузить график</button>
+      <button id="btnLivePlay" class="btn success">▶ Найти сделки</button>
+      <span class="ctrl-hint muted">Кэш на сервере · без сканера · клик по сделке на график</span>
+    </div>
+
+    <!-- Bybit Grid -->
+    <div class="mode-panel mode-grid-only">
+      <button id="btnGridScan" class="btn success">▶ Запуск скана</button>
+      <span id="gridScanStatus" class="ctrl-hint muted">Ranging-пары · без создания бота на Bybit</span>
+      <span id="gridPairBadge" class="grid-pair-badge muted">пара: —</span>
     </div>
   </section>
 
   <section class="status-bar">
-    <div><b>Время:</b> <span id="clockLabel">—</span></div>
+    <div class="mode-hist-only"><b>Время:</b> <span id="clockLabel">—</span></div>
     <div><b>Close:</b> <span id="priceLabel">—</span></div>
-    <div><b>Equity:</b> <span id="equityLabel">—</span></div>
-    <div><b>Депозит:</b> <span id="portfolioLabel" class="muted">—</span></div>
-    <div><b>Стейки:</b> <span id="stakeLabel" class="muted">50 USDT · 5x · max 2 поз.</span></div>
+    <div class="mode-hist-only"><b>Equity:</b> <span id="equityLabel">—</span></div>
+    <div class="mode-sim-only"><b>Депозит:</b> <span id="portfolioLabel" class="muted">—</span></div>
+    <div class="mode-sim-only"><b>Стейки:</b> <span id="stakeLabel" class="muted">50 USDT · 5x · max 2 поз.</span></div>
     <div><b>Статус:</b> <span id="statusLabel">stopped</span></div>
     <div id="slTpLabel" class="sltp hidden"><b>SL/TP:</b> <span>—</span></div>
   </section>
@@ -86,21 +128,55 @@
       <div class="chart-wrap">
         <div id="chart" class="chart"></div>
         <div id="tradeHighlights" class="trade-highlights"></div>
+        <div id="chartHover" class="chart-hover hidden" aria-live="polite"></div>
       </div>
 
-      <section class="strategies-section">
+      <section class="strategies-section mode-sim-only">
         <h2 class="section-title">Стратегии и боты</h2>
         <p class="section-hint muted"><b>Play</b> — replay с часами по парам. <b>Прогон</b> — все боты параллельно, сделки сразу в карточки (без realtime).</p>
         <div id="strategyPanels" class="strategy-panels"></div>
       </section>
+
+      <section class="live-trades-section mode-live-only">
+        <h2 class="section-title">Отображение сделок</h2>
+        <p class="section-hint muted">Клик по сделке — переход на графике. Подсветка входа → выхода.</p>
+        <div id="liveTradesPanel" class="live-trades-panel muted">Загрузите график и нажмите «Найти сделки»</div>
+      </section>
+
+      <section class="grid-section mode-grid-only">
+        <h2 class="section-title">Почему эта пара</h2>
+        <p id="gridReason" class="grid-reason muted">Запустите скан ranging-пар (1–2 мин). Бот на бирже не создаётся.</p>
+        <div id="gridMetrics" class="grid-metrics"></div>
+        <h3 class="section-subtitle">Top 5</h3>
+        <div id="gridTop5" class="grid-top5 muted">—</div>
+      </section>
     </div>
 
-    <aside class="sidebar">
+    <aside class="sidebar mode-sim-only">
       <h3>Боты <span id="botsCount" class="muted"></span></h3>
       <div id="botsPanel" class="bots-panel">Нажмите ▶ Play</div>
       <div id="botDetail" class="bot-detail hidden"></div>
       <h3>Лог</h3>
       <pre id="logBox" class="log-box"></pre>
+    </aside>
+
+    <aside class="sidebar mode-chart-only chart-side">
+      <h3>График</h3>
+      <p class="muted side-hint">Выберите пару и период, затем «Открыть график». Без симуляции ботов.</p>
+      <div id="chartMeta" class="chart-meta muted">—</div>
+    </aside>
+
+    <aside class="sidebar mode-live-only">
+      <h3>Лог</h3>
+      <pre id="liveLogBox" class="log-box"></pre>
+    </aside>
+
+    <aside class="sidebar mode-grid-only">
+      <h3>Bybit Grid</h3>
+      <p class="muted side-hint">Live-скан как run_scan_only. Клик по top5 меняет график 5m и объяснение.</p>
+      <div id="gridMeta" class="chart-meta muted">—</div>
+      <h3>Лог</h3>
+      <pre id="gridLogBox" class="log-box"></pre>
     </aside>
   </main>
 
@@ -125,6 +201,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=42"></script>
+  <script src="/static/app.js?v=56"></script>
 </body>
 </html>

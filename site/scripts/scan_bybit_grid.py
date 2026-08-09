@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import sys
 import time
 from datetime import UTC, datetime
@@ -42,7 +41,20 @@ def _merged_exclude_bases(ranging_cfg: dict[str, Any], bybit_cfg: dict[str, Any]
     return set(ranging_cfg.get("exclude_bases", [])) | set(bybit_cfg.get("exclude_bases", []))
 
 
-def scan_best_pair(*, verbose: bool = False, exclude_active_pairs: bool = False) -> dict[str, Any]:
+def _safe_save_scan(base: Path, report: dict[str, Any]) -> None:
+    try:
+        save_json(base / SCAN_RESULT_FILE, report)
+    except OSError:
+        pass
+
+
+def scan_best_pair(
+    *,
+    verbose: bool = False,
+    exclude_active_pairs: bool = False,
+    allow_empty: bool = False,
+    include_near: bool = False,
+) -> dict[str, Any]:
     """Return highest-scoring ranging pair suitable for neutral Bybit grid."""
     base = ft_base()
     ranging_cfg = load_scan_config(base)
@@ -73,16 +85,19 @@ def scan_best_pair(*, verbose: bool = False, exclude_active_pairs: bool = False)
     candidates = candidates[:scan_top]
 
     results: list[dict[str, Any]] = []
+    near: list[dict[str, Any]] = []
     errors: list[str] = []
     for i, (vol, sym) in enumerate(candidates):
         try:
             df = fetch_klines(sym, interval, lookback + 15)
             df_htf = fetch_htf_klines(sym, ranging_cfg)
-            metrics = analyze_ranging(df, ranging_cfg, df_htf=df_htf)
-            if metrics is None or metrics["ranging_ratio"] < min_ratio:
+            metrics = analyze_ranging(
+                df, ranging_cfg, df_htf=df_htf, strict=not include_near
+            )
+            if metrics is None:
                 continue
             base_coin = sym[: -len("USDT")]
-            score = metrics["score"]
+            score = float(metrics["score"])
             if base_coin in priority_bases:
                 score *= priority_boost
                 metrics["priority"] = True
@@ -90,15 +105,46 @@ def scan_best_pair(*, verbose: bool = False, exclude_active_pairs: bool = False)
                 metrics["priority"] = False
             metrics["score"] = round(score, 6)
             pair = bybit_symbol_to_ft(sym)
-            results.append({"pair": pair, "symbol": sym, "turnover24h": vol, **metrics})
-            if verbose:
-                print(f"  OK {pair} score={metrics['score']}")
+            row = {"pair": pair, "symbol": sym, "turnover24h": vol, **metrics}
+            qualified = bool(metrics.get("qualified", True)) and metrics["ranging_ratio"] >= min_ratio
+            if qualified:
+                results.append(row)
+                if verbose:
+                    print(f"  OK {pair} score={metrics['score']}")
+            elif include_near:
+                if metrics["ranging_ratio"] < min_ratio and not metrics.get("fail_reasons"):
+                    metrics["fail_reasons"] = [f"ranging_ratio {metrics['ranging_ratio']:.2f}<{min_ratio:g}"]
+                    row["fail_reasons"] = metrics["fail_reasons"]
+                near.append(row)
+                if verbose:
+                    why = ", ".join(metrics.get("fail_reasons") or []) or "filters"
+                    print(f"  near {pair} score={metrics['score']} ({why})")
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{sym}: {exc}")
         if i % 10 == 9:
             time.sleep(0.35)
 
+    near.sort(key=lambda x: x["score"], reverse=True)
+
     if not results:
+        report = {
+            "scanned_at": datetime.now(UTC).isoformat(),
+            "candidates_checked": len(candidates),
+            "ranging_found": 0,
+            "available_count": 0,
+            "active_pairs": sorted(get_active_grid_pair_keys(refresh=True)) if exclude_active_pairs else [],
+            "best": None,
+            "best_overall": None,
+            "top5": (near[:5] if include_near else []),
+            "top5_available": [],
+            "near_top5": near[:5],
+            "qualified": False,
+            "message": "No ranging pair found for Bybit grid",
+            "errors": errors[:15],
+        }
+        _safe_save_scan(base, report)
+        if allow_empty or include_near:
+            return report
         raise RuntimeError("No ranging pair found for Bybit grid")
 
     results.sort(key=lambda x: x["score"], reverse=True)
@@ -113,10 +159,29 @@ def scan_best_pair(*, verbose: bool = False, exclude_active_pairs: bool = False)
     if exclude_active_pairs:
         if not available:
             active_labels = ", ".join(sorted(active_keys)) or "—"
-            raise RuntimeError(
+            msg = (
                 "Нет доступных пар для нового grid — все кандидаты уже в активных ботах: "
                 f"{active_labels}"
             )
+            report = {
+                "scanned_at": datetime.now(UTC).isoformat(),
+                "candidates_checked": len(candidates),
+                "ranging_found": len(results),
+                "available_count": 0,
+                "active_pairs": sorted(active_keys),
+                "best": None,
+                "best_overall": best_overall,
+                "top5": results[:5],
+                "top5_available": [],
+                "near_top5": near[:5],
+                "qualified": False,
+                "message": msg,
+                "errors": errors[:15],
+            }
+            _safe_save_scan(base, report)
+            if allow_empty:
+                return report
+            raise RuntimeError(msg)
         best = available[0]
     else:
         best = best_overall
@@ -139,9 +204,11 @@ def scan_best_pair(*, verbose: bool = False, exclude_active_pairs: bool = False)
         "best_overall": best_overall,
         "top5": results[:5],
         "top5_available": available[:5],
+        "near_top5": near[:5],
+        "qualified": True,
         "errors": errors[:15],
     }
-    save_json(base / SCAN_RESULT_FILE, report)
+    _safe_save_scan(base, report)
     return report
 
 
@@ -182,8 +249,15 @@ def deploy_best(*, dry_run: bool = False, force: bool = False, verbose: bool = F
     }
 
     candidates = list(scan.get("top5_available") or [])
-    if not candidates:
+    if not candidates and scan.get("best"):
         candidates = [scan["best"]]
+    if not candidates:
+        return {
+            "deployed": False,
+            "error": scan.get("message") or "No ranging pair found for Bybit grid",
+            "scan": scan,
+            "hint": "Сейчас нет ranging-пар по фильтрам сканера",
+        }
     seen_pairs: set[str] = set()
     try_list: list[dict[str, Any]] = []
     for cand in candidates:
@@ -234,7 +308,7 @@ def deploy_best(*, dry_run: bool = False, force: bool = False, verbose: bool = F
             "create": created,
             "skipped_candidates": skipped,
         }
-        save_json(ft_base() / SCAN_RESULT_FILE, {**scan, "last_deploy": result})
+        _safe_save_scan(ft_base(), {**scan, "last_deploy": result})
         return result
 
     return {
@@ -247,10 +321,16 @@ def deploy_best(*, dry_run: bool = False, force: bool = False, verbose: bool = F
     }
 
 
-def run_scan_only(*, verbose: bool = False) -> dict[str, Any]:
+def run_scan_only(*, verbose: bool = False, for_player: bool = False) -> dict[str, Any]:
     """Scan ranging pairs and save report without deploying a grid bot."""
-    scan = scan_best_pair(verbose=verbose, exclude_active_pairs=True)
-    return {"ok": True, "scan": scan}
+    scan = scan_best_pair(
+        verbose=verbose,
+        exclude_active_pairs=not for_player,
+        allow_empty=for_player,
+        include_near=for_player,
+    )
+    ok = bool(scan.get("best"))
+    return {"ok": ok, "scan": scan, "message": scan.get("message")}
 
 
 def get_scan_status() -> dict[str, Any]:

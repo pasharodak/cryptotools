@@ -74,7 +74,17 @@ ENABLED_FILE = Path(
         str(Path(__file__).resolve().parent.parent / "enabled_strategies.json"),
     )
 )
-DUAL_HEDGE_FILE = Path(__file__).resolve().parent.parent / "dual_hedge.json"
+# Same user_data dir as enabled_strategies (tenant-aware when CT_ENABLED_STRATEGIES is set).
+_USER_DATA_DIR = ENABLED_FILE.parent
+DUAL_HEDGE_FILE = Path(
+    os.environ.get("CT_DUAL_HEDGE", str(_USER_DATA_DIR / "dual_hedge.json"))
+)
+MAX_PER_STRATEGY_FILE = Path(
+    os.environ.get(
+        "CT_MAX_OPEN_TRADES_PER_STRATEGY",
+        str(_USER_DATA_DIR / "max_open_trades_per_strategy.json"),
+    )
+)
 HEDGE_TAG_SUFFIX = ":hedge"
 INV_TAG_SUFFIX = ":inv"
 
@@ -158,6 +168,47 @@ TAG_RISK: dict[str, dict] = {
     "MfiReclaimStrategy": {"stoploss": -0.015, "tp": 0.01, "minimal_roi": {"0": 0.01, "40": 0.005, "110": 0.0}},
     "IchimokuTkCrossStrategy": {"stoploss": -0.022, "tp": 0.016, "minimal_roi": {"0": 0.016, "80": 0.008, "200": 0.0}},
     "SupertrendRsiObvComboStrategy": {"stoploss": -0.019, "tp": 0.015, "minimal_roi": {"0": 0.015, "55": 0.0075, "160": 0.0}},
+    # Legacy Jul set — april-cut retrain (appended to pack as #32–39)
+    "AdxMomentumStrategy": {
+        "stoploss": -0.022,
+        "tp": 0.03,
+        "minimal_roi": {"0": 0.03, "180": 0.015, "480": 0.008, "960": 0},
+    },
+    "BollingerRsiStrategy": {
+        "stoploss": -0.02,
+        "tp": 0.025,
+        "minimal_roi": {"0": 0.025, "60": 0.015, "180": 0.008, "720": 0},
+    },
+    "MacdEmaStrategy": {
+        "stoploss": -0.025,
+        "tp": 0.03,
+        "minimal_roi": {"0": 0.03, "180": 0.015, "480": 0.008, "960": 0},
+    },
+    "SupertrendStrategy": {
+        "stoploss": -0.025,
+        "tp": 0.03,
+        "minimal_roi": {"0": 0.03, "120": 0.015, "360": 0.008, "720": 0},
+    },
+    "TripleEmaStrategy": {
+        "stoploss": -0.025,
+        "tp": 0.04,
+        "minimal_roi": {"0": 0.04, "240": 0.02, "720": 0.01, "1440": 0},
+    },
+    "LiteRangeStrategy": {
+        "stoploss": -0.018,
+        "tp": 0.022,
+        "minimal_roi": {"0": 0.022, "40": 0.012, "100": 0},
+    },
+    "LiteIntradayStrategy": {
+        "stoploss": -0.022,
+        "tp": 0.022,
+        "minimal_roi": {"0": 0.022, "480": 0.012, "960": 0},
+    },
+    "FibPullbackStrategy": {
+        "stoploss": -0.03,
+        "tp": 0.035,
+        "minimal_roi": {"0": 0.035, "360": 0.02, "720": 0.01, "1440": 0},
+    },
 }
 
 MEAN_REV_ADX_TAGS = frozenset({"BollingerRsiStrategy", "LiteRangeStrategy", "CriptoPairsStrategy"})
@@ -494,6 +545,27 @@ def load_dual_hedge_enabled() -> bool:
         return False
 
 
+def load_max_open_trades_per_strategy() -> int:
+    """Max concurrent open trades sharing the same strategy enter_tag. 0 = unlimited."""
+    if not MAX_PER_STRATEGY_FILE.is_file():
+        return 0
+    try:
+        data = json.loads(MAX_PER_STRATEGY_FILE.read_text(encoding="utf-8"))
+        return max(0, int(data.get("value", 0)))
+    except (json.JSONDecodeError, OSError, TypeError, ValueError):
+        return 0
+
+
+def count_open_trades_for_tag(tag: str) -> int:
+    if not tag:
+        return 0
+    n = 0
+    for trade in Trade.get_open_trades():
+        if base_enter_tag(trade.enter_tag) == tag:
+            n += 1
+    return n
+
+
 def base_enter_tag(tag: str | None) -> str:
     """Strip :inv / :hedge suffixes to get the strategy id."""
     if not tag:
@@ -681,9 +753,12 @@ class MultiStrategyRouter(IStrategy):
         **kwargs,
     ) -> bool:
         tag = base_enter_tag(entry_tag)
-        # Hedge leg always follows the primary — do not re-check ML / cooldown.
+        # Hedge leg always follows the primary — do not re-check ML / cooldown / per-tag cap.
         if entry_tag and HEDGE_TAG_SUFFIX in str(entry_tag):
             return True
+        per_strat_limit = load_max_open_trades_per_strategy()
+        if per_strat_limit > 0 and tag and count_open_trades_for_tag(tag) >= per_strat_limit:
+            return False
         if tag in STRATEGY_REGISTRY:
             inst = self._get_instance(tag)
             cooldown = getattr(inst, "pair_in_cooldown", None)

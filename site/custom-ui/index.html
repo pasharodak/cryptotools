@@ -8,7 +8,7 @@
   <title>CriptoTools — панель управления</title>
   <link rel="icon" type="image/png" href="bitcoin-icon.png?v=20260801" />
   <link rel="apple-touch-icon" href="bitcoin-icon.png?v=20260801" />
-  <link rel="stylesheet" href="styles.css?v=20260807f" />
+  <link rel="stylesheet" href="styles.css?v=20260809f" />
 </head>
 <body>
   <div id="login-screen" class="screen">
@@ -63,6 +63,10 @@
             <button id="pnl-dashboard-btn" class="btn btn-icon-text" type="button">
               <span class="lbl-full">Дашборд</span>
               <span class="lbl-short">📈</span>
+            </button>
+            <button id="rating-btn" class="btn btn-icon-text" type="button">
+              <span class="lbl-full">Рейтинг</span>
+              <span class="lbl-short">🏆</span>
             </button>
             <button id="history-btn" class="btn btn-icon-text" type="button">
               <span class="lbl-full">История</span>
@@ -170,6 +174,7 @@
           </button>
           <div class="collapsible-body" id="strategy-panel-body">
             <p class="muted panel-note">Стратегии с ML gate. Включите нужные — вход по сигналу любой активной. Три новых — своя ML-модель (ML Gate).</p>
+            <div id="strategy-enable-bulk" class="strategy-enable-bulk"></div>
             <div id="strategy-ml-conf-bulk" class="strategy-ml-conf-bulk"></div>
             <ul id="strategy-panel-toggles" class="strategy-toggle-list"></ul>
           </div>
@@ -364,6 +369,69 @@
       <p class="muted logs-footnote" id="pnl-dashboard-status">Загрузка…</p>
     </div>
 
+    <div id="rating-view" class="logs-view rating-view hidden" aria-hidden="true">
+      <div class="logs-toolbar history-toolbar rating-toolbar">
+        <button type="button" class="btn ghost" id="rating-back-btn">← Панель</button>
+        <div class="rating-title-wrap">
+          <h2 class="logs-title" id="rating-title">Рейтинг</h2>
+          <p class="muted rating-subtitle" id="rating-subtitle">Все аккаунты · закрытые сделки</p>
+        </div>
+        <div class="logs-actions">
+          <button type="button" class="btn btn-sm ghost" id="rating-refresh-btn">Обновить</button>
+        </div>
+      </div>
+
+      <div class="rating-toolbar-row">
+        <div class="history-filters rating-filters">
+          <div class="history-filter-group">
+            <span class="history-filter-label">Вкладка</span>
+            <div class="logs-filters rating-scope-pills" role="tablist" aria-label="Тип рейтинга">
+              <button type="button" class="btn btn-sm rating-scope is-active" data-rating-scope="strategies" role="tab" aria-selected="true">Рейтинг стратегий</button>
+              <button type="button" class="btn btn-sm rating-scope" data-rating-scope="pairs" role="tab" aria-selected="false">Рейтинг пар</button>
+            </div>
+          </div>
+          <div class="history-filter-group rating-user-group hidden" id="rating-user-group">
+            <span class="history-filter-label">Аккаунт</span>
+            <select id="rating-user-filter" class="rating-user-select" aria-label="Аккаунт для рейтинга">
+              <option value="">Все аккаунты</option>
+            </select>
+          </div>
+          <div class="history-filter-group history-period-group">
+            <span class="history-filter-label">Период</span>
+            <div class="logs-filters rating-period-pills" role="group" aria-label="Период рейтинга">
+              <button type="button" class="btn btn-sm rating-period" data-rating-period="today">Сегодня</button>
+              <button type="button" class="btn btn-sm rating-period" data-rating-period="yesterday">Вчера</button>
+              <button type="button" class="btn btn-sm rating-period" data-rating-period="7d">Неделя</button>
+              <button type="button" class="btn btn-sm rating-period" data-rating-period="30d">Месяц</button>
+              <button type="button" class="btn btn-sm rating-period is-active" data-rating-period="all">Всё</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="rating-summary" id="rating-summary" aria-live="polite"></div>
+      </div>
+
+      <div class="rating-shell">
+        <div class="stats-table-wrap rating-table-wrap">
+          <table class="stats-table rating-table" id="rating-table">
+            <thead>
+              <tr>
+                <th class="rating-sort" data-rating-sort="rank" title="Сортировать">#</th>
+                <th class="rating-sort" data-rating-sort="label" id="rating-col-label" title="Сортировать">Стратегия</th>
+                <th class="rating-sort num" data-rating-sort="trades" title="Сортировать">Сделок</th>
+                <th class="rating-sort num" data-rating-sort="winrate" title="Сортировать">WR%</th>
+                <th class="rating-sort num" data-rating-sort="income" title="Сортировать">PnL</th>
+                <th class="rating-sort num" data-rating-sort="loss_abs" title="Сортировать">Убытки</th>
+                <th class="rating-sort num is-active" data-rating-sort="pnl" title="Сортировать">Чистый PnL</th>
+              </tr>
+            </thead>
+            <tbody id="rating-table-body"></tbody>
+          </table>
+        </div>
+        <p class="muted logs-footnote rating-footnote" id="rating-status">Загрузка…</p>
+      </div>
+    </div>
+
     <div id="history-view" class="logs-view hidden" aria-hidden="true">
       <div class="logs-toolbar history-toolbar">
         <button type="button" class="btn ghost" id="history-back-btn">← Панель</button>
@@ -488,6 +556,7 @@
           <p class="muted modal-note">Макс. сделок и stake сохраняются в config и применяются через reload. <strong>0</strong> активных = бот останавливается и не торгует. У новых пользователей старт — 1 на категорию.</p>
           <div id="finder-max-trades" class="max-trades-row"></div>
           <div id="strategy-max-trades" class="max-trades-row"></div>
+          <div id="strategy-max-per-strategy" class="max-trades-row"></div>
           <div id="strategy-stake" class="max-trades-row"></div>
           <div id="grid-max-trades" class="max-trades-row"></div>
           <div id="grid-stake" class="max-trades-row"></div>
@@ -541,6 +610,7 @@
             Стратегии с ML gate (profit ≥60%). Включите нужные — бот откроет сделку по сигналу
             <strong>любой</strong> активной. Supertrend / MACD / Fib — своя ML-модель (ML Gate).
           </p>
+          <div id="strategy-enable-bulk-settings" class="strategy-enable-bulk"></div>
           <div id="strategy-ml-conf-bulk-settings" class="strategy-ml-conf-bulk"></div>
           <ul id="strategy-toggle-list" class="strategy-toggle-list"></ul>
           <p id="strategy-enabled-hint" class="muted strategy-desc"></p>
@@ -681,7 +751,8 @@
             </li>
             <li>
               <strong>Лимиты ботов</strong>: «макс. сделок» — сколько позиций одновременно;
-              stake — размер одной сделки в USDT. Значение <strong>0</strong> останавливает бота —
+              «на одну стратегию» — потолок открытых сделок с одним enter_tag (0 = без лимита);
+              stake — размер одной сделки в USDT. Значение <strong>0</strong> у «макс. сделок» останавливает бота —
               он не торгует, пока не поставите 1 или больше.
             </li>
             <li>
@@ -845,6 +916,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=20260807f"></script>
+  <script src="app.js?v=20260809f"></script>
 </body>
 </html>

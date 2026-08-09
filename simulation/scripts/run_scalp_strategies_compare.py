@@ -82,6 +82,18 @@ COMBO_SCENARIOS = [
     "combo_hma_ppo_atr",
     "combo_kc_stoch_vol",
 ]
+CHART4_SCENARIOS = [
+    "chart4_stc",
+    "chart4_qqe",
+    "chart4_dem",
+    "chart4_kst",
+    "chart4_rvi",
+    "chart4_vwap",
+    "chart4_rsidiv",
+    "chart4_chandelier",
+    "chart4_zscore",
+    "chart4_ttm",
+]
 
 # Default cut = start of test window (overridden in main from --test-range).
 # Train uses ALL available history before cut (data from 2025-01-01).
@@ -317,6 +329,8 @@ def resolve_scenarios(arg: str) -> list[str]:
         return list(CHART3_SCENARIOS)
     if key in {"combo", "combos", "triad"}:
         return list(COMBO_SCENARIOS)
+    if key in {"chart4", "wave4", "ta4"}:
+        return list(CHART4_SCENARIOS)
     if key == "scalp":
         return list(SCALP_SCENARIOS)
     return [s.strip() for s in arg.split(",") if s.strip()]
@@ -337,7 +351,7 @@ def main() -> int:
     ap.add_argument(
         "--scenarios",
         default=",".join(SCALP_SCENARIOS),
-        help="Comma-separated ids, or alias: scalp|newset|chart|chart2|chart3|combo",
+        help="Comma-separated ids, or alias: scalp|newset|chart|chart2|chart3|chart4|combo",
     )
     ap.add_argument("--out-dir", default=str(DEFAULT_OUT_DIR))
     args = ap.parse_args()

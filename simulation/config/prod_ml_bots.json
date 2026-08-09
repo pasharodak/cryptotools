@@ -52,7 +52,15 @@
         "chart_adxdi",
         "chart2_mfi",
         "new_ichimoku",
-        "combo_st_rsi_obv"
+        "combo_st_rsi_obv",
+        "trend_breakout",
+        "lite_mean_rev",
+        "trend_macd_ema",
+        "trend_supertrend",
+        "trend_ema",
+        "lite_range",
+        "lite_intraday",
+        "trend_fib"
     ],
     "prod_strategy_bots": [
         "scalp_liq_breakout",
@@ -85,7 +93,15 @@
         "chart_adxdi",
         "chart2_mfi",
         "new_ichimoku",
-        "combo_st_rsi_obv"
+        "combo_st_rsi_obv",
+        "trend_breakout",
+        "lite_mean_rev",
+        "trend_macd_ema",
+        "trend_supertrend",
+        "trend_ema",
+        "lite_range",
+        "lite_intraday",
+        "trend_fib"
     ],
     "extended_training_scenarios": [
         "trend_supertrend",

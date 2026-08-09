@@ -14,6 +14,7 @@ const BOTS = {
     prefix: "/api/strategy",
     label: "Стратегии + ML",
     maxTrades: 2,
+    maxPerStrategy: 0,
     stakeAmount: 5,
     stakeEl: "strategy-stake",
     stateEl: "strategy-state",
@@ -22,6 +23,7 @@ const BOTS = {
     tradesEl: "strategy-trades",
     pairsEl: "strategy-pairs",
     maxTradesEl: "strategy-max-trades",
+    maxPerStrategyEl: "strategy-max-per-strategy",
   },
   grid: {
     prefix: "/api/grid",
@@ -337,6 +339,7 @@ function updateMultiUserUi(me) {
         ? "Ключи админа из серверного .env"
         : "Ключи Bybit не заданы — боты не запустятся";
   }
+  syncRatingUserFilterVisibility();
 }
 
 async function loginBot(_bot) {
@@ -1349,11 +1352,7 @@ async function loadHistory() {
 
 function openHistory() {
   closeMobileMenu();
-  $("changelog-view")?.classList.add("hidden");
-  $("logs-view")?.classList.add("hidden");
-  $("settings-view")?.classList.add("hidden");
-  $("pnl-dashboard-view")?.classList.add("hidden");
-  $("dashboard-view")?.classList.add("hidden");
+  hideMainViewsForOverlay();
   const view = $("history-view");
   view?.classList.remove("hidden");
   view?.setAttribute("aria-hidden", "false");
@@ -1733,11 +1732,7 @@ async function loadPnlDashboard(force = false) {
 
 function openPnlDashboard() {
   closeMobileMenu();
-  $("changelog-view")?.classList.add("hidden");
-  $("logs-view")?.classList.add("hidden");
-  $("settings-view")?.classList.add("hidden");
-  $("history-view")?.classList.add("hidden");
-  $("dashboard-view")?.classList.add("hidden");
+  hideMainViewsForOverlay();
   const view = $("pnl-dashboard-view");
   view?.classList.remove("hidden");
   view?.setAttribute("aria-hidden", "false");
@@ -1775,6 +1770,415 @@ function bindPnlDashboardControls() {
   });
   $("pnl-dashboard-back-btn")?.addEventListener("click", closePnlDashboard);
   $("pnl-dashboard-refresh-btn")?.addEventListener("click", () => loadPnlDashboard(true));
+}
+
+let ratingPeriod = "all";
+let ratingScope = "strategies"; // strategies | pairs
+let ratingUserFilter = ""; // "" = all accounts (admin only)
+let ratingDataCache = {}; // key: `${scope}:${user||"all"}`
+let ratingSortKey = "pnl";
+let ratingSortDesc = true;
+const ratingExpandedPairs = new Set();
+
+function ratingCacheKey(scope = ratingScope, user = ratingUserFilter) {
+  return `${scope}:${user || "all"}`;
+}
+
+function ratingAccountLabel() {
+  if (!ratingUserFilter) return "Все аккаунты";
+  const sel = $("rating-user-filter");
+  const opt = sel?.selectedOptions?.[0];
+  if (opt?.textContent) return opt.textContent.trim();
+  return ratingUserFilter;
+}
+
+async function ensureRatingUserOptions() {
+  const group = $("rating-user-group");
+  const sel = $("rating-user-filter");
+  if (!group || !sel) return;
+  if (!isAdminUser()) {
+    group.classList.add("hidden");
+    ratingUserFilter = "";
+    sel.value = "";
+    return;
+  }
+  group.classList.remove("hidden");
+  try {
+    const data = await pairConfigApi("/users");
+    const users = Array.isArray(data.users) ? data.users : [];
+    const prev = ratingUserFilter;
+    const options = [`<option value="">Все аккаунты</option>`];
+    for (const u of users) {
+      const id = String(u.id || "");
+      if (!id) continue;
+      const name = String(u.username || id);
+      const isAdm = u.role === "admin" || id === "admin";
+      const label = isAdm ? `Главный (${name})` : name;
+      options.push(`<option value="${escapeHtml(id)}">${escapeHtml(label)}</option>`);
+    }
+    sel.innerHTML = options.join("");
+    const ids = new Set(users.map((u) => String(u.id || "")));
+    ratingUserFilter = prev && ids.has(prev) ? prev : "";
+    sel.value = ratingUserFilter;
+  } catch {
+    // Keep current options if /users fails
+  }
+}
+
+function syncRatingUserFilterVisibility() {
+  const group = $("rating-user-group");
+  if (!group) return;
+  if (!isAdminUser()) {
+    group.classList.add("hidden");
+    if (ratingUserFilter) {
+      ratingUserFilter = "";
+      const sel = $("rating-user-filter");
+      if (sel) sel.value = "";
+    }
+  } else {
+    group.classList.remove("hidden");
+  }
+}
+
+function hideMainViewsForOverlay() {
+  $("changelog-view")?.classList.add("hidden");
+  $("logs-view")?.classList.add("hidden");
+  $("settings-view")?.classList.add("hidden");
+  $("history-view")?.classList.add("hidden");
+  $("pnl-dashboard-view")?.classList.add("hidden");
+  $("pnl-dashboard-view")?.setAttribute("aria-hidden", "true");
+  $("rating-view")?.classList.add("hidden");
+  $("rating-view")?.setAttribute("aria-hidden", "true");
+  $("dashboard-view")?.classList.add("hidden");
+}
+
+function openRating() {
+  closeMobileMenu();
+  hideMainViewsForOverlay();
+  const view = $("rating-view");
+  view?.classList.remove("hidden");
+  view?.setAttribute("aria-hidden", "false");
+  ensureRatingUserOptions()
+    .catch(() => {})
+    .finally(() => loadRating(false));
+}
+
+function closeRating() {
+  $("rating-view")?.classList.add("hidden");
+  $("rating-view")?.setAttribute("aria-hidden", "true");
+  $("dashboard-view")?.classList.remove("hidden");
+}
+
+function setRatingPeriod(period) {
+  ratingPeriod = normalizeStatsPeriod(period);
+  updateRatingFilterUi();
+  loadRating(true);
+}
+
+function setRatingScope(scope) {
+  const next = scope === "pairs" ? "pairs" : "strategies";
+  if (ratingScope === next) return;
+  ratingScope = next;
+  ratingExpandedPairs.clear();
+  updateRatingFilterUi();
+  loadRating(false);
+}
+
+function setRatingUserFilter(userId) {
+  const next = String(userId || "");
+  if (ratingUserFilter === next) return;
+  ratingUserFilter = next;
+  ratingExpandedPairs.clear();
+  updateRatingFilterUi();
+  loadRating(true);
+}
+
+function toggleRatingPairExpand(pairId) {
+  if (!pairId) return;
+  if (ratingExpandedPairs.has(pairId)) ratingExpandedPairs.delete(pairId);
+  else ratingExpandedPairs.add(pairId);
+  const cached = ratingDataCache[ratingCacheKey()];
+  if (cached) renderRating(cached);
+}
+
+function updateRatingFilterUi() {
+  const isPairs = ratingScope === "pairs";
+  syncRatingUserFilterVisibility();
+  document.querySelectorAll(".rating-scope").forEach((btn) => {
+    const active = btn.dataset.ratingScope === ratingScope;
+    btn.classList.toggle("is-active", active);
+    btn.setAttribute("aria-selected", active ? "true" : "false");
+  });
+  document.querySelectorAll(".rating-period").forEach((btn) => {
+    btn.classList.toggle("is-active", btn.dataset.ratingPeriod === ratingPeriod);
+  });
+  const sel = $("rating-user-filter");
+  if (sel && sel.value !== ratingUserFilter) sel.value = ratingUserFilter;
+
+  const title = $("rating-title");
+  const subtitle = $("rating-subtitle");
+  const account = ratingAccountLabel();
+  if (title) title.textContent = isPairs ? "Рейтинг пар" : "Рейтинг стратегий";
+  if (subtitle) {
+    subtitle.textContent = isPairs
+      ? `${account} · strategy / finder / grid · клик по паре — детализация`
+      : `${account} · закрытые сделки strategy-бота`;
+  }
+
+  const labelTh = $("rating-col-label");
+  if (labelTh) {
+    labelTh.dataset.labelBase = isPairs ? "Пара" : "Стратегия";
+  }
+
+  document.querySelectorAll("#rating-table .rating-sort").forEach((th) => {
+    const key = th.dataset.ratingSort;
+    const active = key === ratingSortKey;
+    th.classList.toggle("is-active", active);
+    th.classList.toggle("is-asc", active && !ratingSortDesc);
+    th.classList.toggle("is-desc", active && ratingSortDesc);
+    const base = th.dataset.labelBase || th.textContent.replace(/\s*[▲▼]\s*$/, "").trim();
+    th.dataset.labelBase = base;
+    th.textContent = active ? `${base} ${ratingSortDesc ? "▼" : "▲"}` : base;
+  });
+}
+
+function ratingSortValue(row, key) {
+  if (key === "label") return String(row.label || row.pair || row.strategy_id || "").toLowerCase();
+  if (key === "rank") return Number(row.rank || 0);
+  return Number(row[key] ?? 0);
+}
+
+function sortedRatingRows(data) {
+  const rows = Array.isArray(data?.rows)
+    ? [...data.rows]
+    : Array.isArray(data?.pnl)
+      ? [...data.pnl]
+      : [];
+  const desc = ratingSortDesc;
+  const key = ratingSortKey;
+  rows.sort((a, b) => {
+    const av = ratingSortValue(a, key);
+    const bv = ratingSortValue(b, key);
+    if (typeof av === "string" || typeof bv === "string") {
+      const cmp = String(av).localeCompare(String(bv), "ru");
+      return desc ? -cmp : cmp;
+    }
+    if (av === bv) return 0;
+    return desc ? (bv > av ? 1 : -1) : av > bv ? 1 : -1;
+  });
+  return rows;
+}
+
+function setRatingSort(key) {
+  if (!key) return;
+  if (ratingSortKey === key) ratingSortDesc = !ratingSortDesc;
+  else {
+    ratingSortKey = key;
+    // strings asc first; numbers (pnl/trades/...) desc first
+    ratingSortDesc = key !== "label";
+  }
+  const cached = ratingDataCache[ratingCacheKey()];
+  if (cached) renderRating(cached);
+  else loadRating(false);
+}
+
+function ratingMetricCells(r) {
+  const income = Number(r.income ?? 0);
+  const lossAbs = Number(r.loss_abs ?? Math.abs(r.loss_sum ?? 0));
+  const pnl = Number(r.pnl ?? 0);
+  const wr = r.winrate != null ? Number(r.winrate) : null;
+  const incomeCls = income > 0 ? "pos" : "";
+  const lossCls = lossAbs > 0 ? "neg" : "";
+  const pnlCls = pnl > 0 ? "pos" : pnl < 0 ? "neg" : "";
+  const wrBar =
+    wr == null
+      ? "—"
+      : `<span class="rating-wr">
+          <span class="rating-wr-val">${wr.toFixed(1)}</span>
+          <span class="rating-wr-track" aria-hidden="true"><span class="rating-wr-fill" style="width:${Math.max(0, Math.min(100, wr))}%"></span></span>
+        </span>`;
+  return {
+    income,
+    lossAbs,
+    pnl,
+    incomeCls,
+    lossCls,
+    pnlCls,
+    wrBar,
+    cells: `
+      <td class="num">${r.trades ?? 0}</td>
+      <td class="num rating-wr-cell">${wrBar}</td>
+      <td class="num ${incomeCls}">${fmtUsd(income)}</td>
+      <td class="num ${lossCls}">${lossAbs > 0 ? fmtUsd(-lossAbs) : fmtUsd(0)}</td>
+      <td class="num rating-net ${pnlCls}"><strong>${fmtUsd(pnl)}</strong></td>`,
+  };
+}
+
+function renderRatingDetailRows(pairId, details) {
+  if (!Array.isArray(details) || !details.length) {
+    return `<tr class="rating-detail-row" data-pair="${escapeHtml(pairId)}">
+      <td></td>
+      <td colspan="6" class="muted rating-detail-empty">Нет детализации</td>
+    </tr>`;
+  }
+  return details
+    .map((d) => {
+      const m = ratingMetricCells(d);
+      const strat = escapeHtml(d.strategy_label || d.label || d.strategy_id || "—");
+      const bot = escapeHtml(d.bot_label || d.bot || "");
+      return `<tr class="rating-detail-row" data-pair="${escapeHtml(pairId)}">
+        <td class="rating-detail-pad"></td>
+        <td class="rating-detail-label">
+          <span class="rating-detail-strategy">${strat}</span>
+          ${bot ? `<span class="rating-detail-bot">${bot}</span>` : ""}
+        </td>
+        ${m.cells}
+      </tr>`;
+    })
+    .join("");
+}
+
+function renderRating(data) {
+  updateRatingFilterUi();
+  const rows = sortedRatingRows(data);
+  const body = $("rating-table-body");
+  const status = $("rating-status");
+  const summary = $("rating-summary");
+  if (!body) return;
+  const isPairs = ratingScope === "pairs";
+
+  if (!rows.length) {
+    body.innerHTML = `<tr><td colspan="7" class="stats-history-empty">Нет закрытых сделок за период</td></tr>`;
+  } else if (!isPairs) {
+    body.innerHTML = rows
+      .map((r, idx) => {
+        const m = ratingMetricCells(r);
+        const place = idx + 1;
+        const placeCls =
+          place === 1 ? "is-gold" : place === 2 ? "is-silver" : place === 3 ? "is-bronze" : "";
+        return `<tr class="rating-row ${placeCls}">
+          <td class="rating-place"><span class="rating-place-badge">${place}</span></td>
+          <td class="rating-strategy">${escapeHtml(r.label || r.strategy_id || "—")}</td>
+          ${m.cells}
+        </tr>`;
+      })
+      .join("");
+  } else {
+    body.innerHTML = rows
+      .map((r, idx) => {
+        const m = ratingMetricCells(r);
+        const place = idx + 1;
+        const placeCls =
+          place === 1 ? "is-gold" : place === 2 ? "is-silver" : place === 3 ? "is-bronze" : "";
+        const pairId = String(r.pair || r.label || "");
+        const expanded = ratingExpandedPairs.has(pairId);
+        const details = Array.isArray(r.details) ? r.details : [];
+        const chevron = expanded ? "▾" : "▸";
+        const main = `<tr class="rating-row rating-pair-row ${placeCls} ${expanded ? "is-expanded" : ""}" data-pair="${escapeHtml(pairId)}" tabindex="0" role="button" aria-expanded="${expanded ? "true" : "false"}">
+          <td class="rating-place"><span class="rating-place-badge">${place}</span></td>
+          <td class="rating-strategy rating-pair-label">
+            <span class="rating-expand-icon" aria-hidden="true">${chevron}</span>
+            <span>${escapeHtml(pairId || "—")}</span>
+            <span class="rating-pair-meta muted">${details.length} ист.</span>
+          </td>
+          ${m.cells}
+        </tr>`;
+        return expanded ? main + renderRatingDetailRows(pairId, details) : main;
+      })
+      .join("");
+
+    body.querySelectorAll(".rating-pair-row").forEach((tr) => {
+      const pairId = tr.dataset.pair || "";
+      const toggle = () => toggleRatingPairExpand(pairId);
+      tr.addEventListener("click", toggle);
+      tr.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter" || ev.key === " ") {
+          ev.preventDefault();
+          toggle();
+        }
+      });
+    });
+  }
+
+  const periodLabel = STATS_PERIOD_LABELS[ratingPeriod] || STATS_PERIOD_LABELS.all;
+  const users = data?.users ?? 0;
+  const trades = data?.trades_total ?? 0;
+  const entityLabel = isPairs ? "Пар" : "Стратегий";
+  const entityCount = isPairs
+    ? data?.pairs_total ?? rows.length
+    : data?.strategies_total ?? rows.length;
+  if (summary) {
+    const accountChip = data?.user_label
+      ? `<div class="rating-chip"><span>Аккаунт</span><strong>${escapeHtml(data.user_label)}</strong></div>`
+      : `<div class="rating-chip"><span>Аккаунтов</span><strong>${users}</strong></div>`;
+    summary.innerHTML = `
+      <div class="rating-chip"><span>Период</span><strong>${escapeHtml(periodLabel)}</strong></div>
+      <div class="rating-chip"><span>${entityLabel}</span><strong>${entityCount}</strong></div>
+      <div class="rating-chip"><span>Сделок</span><strong>${trades}</strong></div>
+      ${accountChip}
+    `;
+  }
+  if (status) {
+    status.textContent = isPairs
+      ? "Клик по паре — стратегии и боты · PnL = сумма плюсов · Убытки = сумма минусов · Чистый PnL = итог"
+      : "Клик по заголовку — сортировка · PnL = сумма плюсов · Убытки = сумма минусов · Чистый PnL = итог";
+  }
+}
+
+async function loadRating(force) {
+  const status = $("rating-status");
+  if (status) status.textContent = "Загрузка…";
+  updateRatingFilterUi();
+  const scope = ratingScope;
+  const user = isAdminUser() ? ratingUserFilter : "";
+  const cacheKey = ratingCacheKey(scope, user);
+  try {
+    const cached = ratingDataCache[cacheKey];
+    if (!force && cached && cached.period === ratingPeriod && (cached.user_filter || "") === (user || "")) {
+      renderRating(cached);
+      return;
+    }
+    const params = new URLSearchParams({
+      period: ratingPeriod,
+      limit: "100",
+    });
+    if (user) params.set("user", user);
+    const endpoint =
+      scope === "pairs" ? `/pair-rating?${params}` : `/strategy-rating?${params}`;
+    const data = await pairConfigApi(endpoint);
+    ratingDataCache[cacheKey] = data;
+    if (ratingScope === scope && (isAdminUser() ? ratingUserFilter : "") === user) {
+      renderRating(data);
+    }
+  } catch (e) {
+    if (e.message === "auth") logout();
+    else if (status) status.textContent = formatApiError(e.message);
+  }
+}
+
+function bindRatingControls() {
+  document.querySelectorAll(".rating-period").forEach((btn) => {
+    if (btn.dataset.bound) return;
+    btn.dataset.bound = "1";
+    btn.addEventListener("click", () => setRatingPeriod(btn.dataset.ratingPeriod || "all"));
+  });
+  document.querySelectorAll(".rating-scope").forEach((btn) => {
+    if (btn.dataset.bound) return;
+    btn.dataset.bound = "1";
+    btn.addEventListener("click", () => setRatingScope(btn.dataset.ratingScope || "strategies"));
+  });
+  document.querySelectorAll("#rating-table .rating-sort").forEach((th) => {
+    if (th.dataset.bound) return;
+    th.dataset.bound = "1";
+    th.addEventListener("click", () => setRatingSort(th.dataset.ratingSort || "pnl"));
+  });
+  const userSel = $("rating-user-filter");
+  if (userSel && !userSel.dataset.bound) {
+    userSel.dataset.bound = "1";
+    userSel.addEventListener("change", () => setRatingUserFilter(userSel.value || ""));
+  }
+  $("rating-back-btn")?.addEventListener("click", closeRating);
+  $("rating-refresh-btn")?.addEventListener("click", () => loadRating(true));
 }
 
 function addClosedTradeToRow(row, trade) {
@@ -2106,6 +2510,10 @@ function syncEnabledFromPayload(data) {
   }
   syncStrategyRiskFromPayload(data);
   if (data?.dual_hedge != null) dualHedgeEnabled = !!data.dual_hedge;
+  if (data?.max_open_trades_per_strategy != null) {
+    BOTS.strategy.maxPerStrategy = Number(data.max_open_trades_per_strategy);
+    updateMaxTradesHint();
+  }
 }
 
 function syncStrategyRiskFromPayload(data) {
@@ -2289,6 +2697,79 @@ async function setAllStrategiesMlConfidence(value, { reset = false } = {}) {
   renderStrategyToggles();
   renderBulkMlConfidenceControls();
   return data;
+}
+
+async function setAllStrategiesEnabled(enabled) {
+  const data = await pairConfigApi("/pairs", "POST", {
+    action: "set_all_strategies_enabled",
+    enabled: !!enabled,
+  });
+  syncEnabledFromPayload(data);
+  updateStrategyDisplay();
+  renderStrategyToggles();
+  return data;
+}
+
+function renderBulkEnableControls() {
+  const ids = ["strategy-enable-bulk", "strategy-enable-bulk-settings"];
+  const activeCount = strategyCatalog.filter((s) => enabledStrategies[s.id]).length;
+  const total = strategyCatalog.length;
+  const html = `
+    <div class="strategy-enable-bulk-inner">
+      <span class="strategy-enable-bulk-label">Стратегии</span>
+      <span class="muted strategy-enable-bulk-count">${activeCount} / ${total} вкл</span>
+      <div class="strategy-enable-bulk-actions">
+        <button type="button" class="btn btn-sm primary" data-strategy-enable-all>Включить все</button>
+        <button type="button" class="btn btn-sm ghost" data-strategy-disable-all>Выключить все</button>
+      </div>
+    </div>
+    <p class="muted strategy-enable-bulk-hint">Выключить все = пауза входов · Включить все = все из pack (сейчас top-39; CriptoPairs остаётся выкл) · без рестарта · деплой больше не затирает ваши включения</p>
+  `;
+  for (const id of ids) {
+    const el = $(id);
+    if (!el) continue;
+    el.innerHTML = html;
+    const onBtn = el.querySelector("[data-strategy-enable-all]");
+    const offBtn = el.querySelector("[data-strategy-disable-all]");
+    if (onBtn && !onBtn.dataset.bound) {
+      onBtn.dataset.bound = "1";
+      onBtn.addEventListener("click", async () => {
+        if (!confirm("Включить все стратегии?")) return;
+        onBtn.disabled = true;
+        if (offBtn) offBtn.disabled = true;
+        try {
+          await setAllStrategiesEnabled(true);
+          const msg = "Все стратегии включены";
+          if (isSettingsOpen()) showPairMsg(msg);
+        } catch (e) {
+          if (e.message === "auth") logout();
+          else alert(formatApiError(e.message));
+        } finally {
+          onBtn.disabled = false;
+          if (offBtn) offBtn.disabled = false;
+        }
+      });
+    }
+    if (offBtn && !offBtn.dataset.bound) {
+      offBtn.dataset.bound = "1";
+      offBtn.addEventListener("click", async () => {
+        if (!confirm("Выключить все стратегии? Новые входы остановятся.")) return;
+        onBtn.disabled = true;
+        offBtn.disabled = true;
+        try {
+          await setAllStrategiesEnabled(false);
+          const msg = "Все стратегии выключены";
+          if (isSettingsOpen()) showPairMsg(msg);
+        } catch (e) {
+          if (e.message === "auth") logout();
+          else alert(formatApiError(e.message));
+        } finally {
+          onBtn.disabled = false;
+          offBtn.disabled = false;
+        }
+      });
+    }
+  }
 }
 
 function renderBulkMlConfidenceControls() {
@@ -2616,6 +3097,7 @@ function renderStrategyTogglesInto(container) {
 }
 
 function renderStrategyToggles() {
+  renderBulkEnableControls();
   renderBulkMlConfidenceControls();
   renderStrategyTogglesInto($("strategy-panel-toggles"));
   renderStrategyTogglesInto($("strategy-toggle-list"));
@@ -2735,7 +3217,11 @@ function updateMaxTradesHint() {
   if (!el) return;
   const activeMax =
     BOTS.strategy.maxTrades + BOTS.grid.maxTrades + bybitGridMaxBots;
-  el.textContent = `До ${activeMax} позиций: Finder — ${BOTS.finder.maxTrades}, стратегии — ${BOTS.strategy.maxTrades}, Grid — ${BOTS.grid.maxTrades}, Bybit Grid — ${bybitGridMaxBots} · ML gate`;
+  const per =
+    Number(BOTS.strategy.maxPerStrategy) > 0
+      ? ` · ≤${BOTS.strategy.maxPerStrategy}/стратегия`
+      : "";
+  el.textContent = `До ${activeMax} позиций: Finder — ${BOTS.finder.maxTrades}, стратегии — ${BOTS.strategy.maxTrades}${per}, Grid — ${BOTS.grid.maxTrades}, Bybit Grid — ${bybitGridMaxBots} · ML gate`;
 }
 
 async function setMaxTrades(bot, value) {
@@ -2751,6 +3237,32 @@ async function setMaxTrades(bot, value) {
   showReloadWarning(data);
   if (data?.trade_warning) {
     showReloadWarning({ reload_warning: data.trade_warning });
+  }
+  return data;
+}
+
+async function setMaxOpenTradesPerStrategy(value) {
+  const next = Number(value);
+  if (!Number.isFinite(next) || next < 0 || next > MAX_TRADES_LIMIT) return;
+  const data = await pairConfigApi("/pairs", "POST", {
+    action: "set_max_open_trades_per_strategy",
+    max_open_trades_per_strategy: next,
+  });
+  if (data?.max_open_trades_per_strategy != null) {
+    BOTS.strategy.maxPerStrategy = Number(data.max_open_trades_per_strategy);
+  } else {
+    BOTS.strategy.maxPerStrategy = next;
+  }
+  updateMaxTradesHint();
+  renderMaxPerStrategySettings();
+  // Refresh dashboard card so the new value appears under «Открыто сделок»
+  refreshBotSafe("strategy").catch(() => {});
+  if (isSettingsOpen()) {
+    showPairMsg(
+      next > 0
+        ? `Лимит на стратегию: ${next}`
+        : "Лимит на стратегию снят (без потолка)"
+    );
   }
   return data;
 }
@@ -2837,6 +3349,37 @@ function renderMaxTradesInput(bot) {
   `;
 }
 
+function renderMaxPerStrategyInput() {
+  const value = Number(BOTS.strategy.maxPerStrategy) || 0;
+  return `
+    <div class="numeric-setting" data-max-per-strategy-input>
+      <input type="number" class="numeric-setting-input" min="0" max="${MAX_TRADES_LIMIT}" step="1" value="${value}" inputmode="numeric" aria-label="Макс. сделок на одну стратегию" />
+      <button type="button" class="btn btn-sm primary numeric-setting-save">Сохранить</button>
+    </div>
+  `;
+}
+
+function bindMaxPerStrategyInput(container) {
+  bindNumericSetting(container, {
+    validate: (value) =>
+      value >= 0 && value <= MAX_TRADES_LIMIT
+        ? true
+        : `От 0 до ${MAX_TRADES_LIMIT} (0 = без лимита на стратегию)`,
+    onSave: (value) => setMaxOpenTradesPerStrategy(value),
+  });
+}
+
+function renderMaxPerStrategySettings() {
+  const el = $("strategy-max-per-strategy");
+  if (!el) return;
+  el.innerHTML = `
+    <span class="max-trades-label">На одну стратегию</span>
+    ${renderMaxPerStrategyInput()}
+    <span class="muted max-trades-hint">0 = без лимита · иначе потолок открытых по enter_tag</span>
+  `;
+  bindMaxPerStrategyInput(el.querySelector("[data-max-per-strategy-input]"));
+}
+
 function renderStakeInput(bot) {
   const stake = BOTS[bot].stakeAmount;
   return `
@@ -2862,11 +3405,20 @@ function renderStats(bot, profit, balance, openCount, stakeAmount) {
   const stakeCell = STAKE_EDITABLE_BOTS.has(bot)
     ? `<div class="stat stat-stake-limit"><span class="stat-inline-label">Stake</span>${renderStakeInput(bot)}</div>`
     : `<div class="stat">Stake<strong>${fmtUsd(stakeAmount ?? 5)}</strong></div>`;
+  const perStrategyBlock =
+    bot === "strategy"
+      ? `<div class="stat-per-strategy">
+          <span class="stat-inline-label">На одну стратегию</span>
+          ${renderMaxPerStrategyInput()}
+          <span class="muted stat-hint">0 = без лимита</span>
+        </div>`
+      : "";
   const el = $(cfg.statsEl);
   el.innerHTML = `
     <div class="stat stat-trades-limit">
       Открыто сделок<strong>${openCount} / ${cfg.maxTrades}</strong>
       ${renderMaxTradesInput(bot)}
+      ${perStrategyBlock}
     </div>
     <div class="stat">Прибыль (закрытые)<strong>${profit?.profit_closed_coin != null ? fmtUsd(profit.profit_closed_coin) : fmtPctRatio(profitClosed)}</strong></div>
     ${stakeCell}
@@ -2876,6 +3428,9 @@ function renderStats(bot, profit, balance, openCount, stakeAmount) {
     </div>
   `;
   bindMaxTradesInput(el.querySelector("[data-max-trades-input]"), bot);
+  if (bot === "strategy") {
+    bindMaxPerStrategyInput(el.querySelector("[data-max-per-strategy-input]"));
+  }
   if (STAKE_EDITABLE_BOTS.has(bot)) {
     bindStakeInput(el.querySelector("[data-stake-input]"), bot);
   }
@@ -3920,9 +4475,10 @@ function collectBybitGridForm() {
 async function refreshAll() {
   try {
     const now = Date.now();
+    // Strategies payload first — sync max_open_trades_per_strategy before dashboard stats render.
+    await refreshStrategyEnabled();
     const tasks = [
       refreshPairlistMode(),
-      refreshStrategyEnabled(),
       refreshBotSafe("finder"),
       refreshBotSafe("strategy"),
       refreshBotSafe("grid"),
@@ -3936,7 +4492,7 @@ async function refreshAll() {
       lastBybitGridRefresh = now;
     }
     const results = await Promise.all(tasks);
-    const allTrades = results.slice(2, 5).flat();
+    const allTrades = results.slice(1, 4).flat();
     renderTradesSummary(allTrades);
     $("last-update").textContent = `Обновлено: ${new Date().toLocaleTimeString("ru-RU")}`;
   } catch (e) {
@@ -3969,6 +4525,9 @@ async function loadPairSettings() {
 
   if (finder.max_open_trades != null) BOTS.finder.maxTrades = finder.max_open_trades;
   if (strategy.max_open_trades != null) BOTS.strategy.maxTrades = strategy.max_open_trades;
+  if (strategy.max_open_trades_per_strategy != null) {
+    BOTS.strategy.maxPerStrategy = Number(strategy.max_open_trades_per_strategy);
+  }
   if (grid.max_open_trades != null) BOTS.grid.maxTrades = grid.max_open_trades;
   if (grid.stake_amount != null) BOTS.grid.stakeAmount = Number(grid.stake_amount);
   if (strategy.stake_amount != null) BOTS.strategy.stakeAmount = Number(strategy.stake_amount);
@@ -3992,6 +4551,8 @@ async function loadPairSettings() {
     `;
     bindMaxTradesInput(el.querySelector("[data-max-trades-input]"), bot);
   });
+
+  renderMaxPerStrategySettings();
 
   STAKE_EDITABLE_BOTS.forEach((bot) => {
     const stakeEl = $(BOTS[bot].stakeEl);
@@ -4046,11 +4607,7 @@ function isSettingsOpen() {
 
 function openSettings() {
   closeMobileMenu();
-  $("changelog-view")?.classList.add("hidden");
-  $("logs-view")?.classList.add("hidden");
-  $("history-view")?.classList.add("hidden");
-  $("pnl-dashboard-view")?.classList.add("hidden");
-  $("dashboard-view")?.classList.add("hidden");
+  hideMainViewsForOverlay();
   const view = $("settings-view");
   view?.classList.remove("hidden");
   view?.setAttribute("aria-hidden", "false");
@@ -4355,11 +4912,7 @@ function setLogsFilter(bot) {
 
 function openLogs() {
   closeMobileMenu();
-  $("changelog-view")?.classList.add("hidden");
-  $("history-view")?.classList.add("hidden");
-  $("settings-view")?.classList.add("hidden");
-  $("pnl-dashboard-view")?.classList.add("hidden");
-  $("dashboard-view")?.classList.add("hidden");
+  hideMainViewsForOverlay();
   const view = $("logs-view");
   view?.classList.remove("hidden");
   view?.setAttribute("aria-hidden", "false");
@@ -4506,11 +5059,7 @@ async function loadChangelog() {
 function openChangelog() {
   closeMobileMenu();
   stopLogsPoll();
-  $("dashboard-view")?.classList.add("hidden");
-  $("logs-view")?.classList.add("hidden");
-  $("history-view")?.classList.add("hidden");
-  $("settings-view")?.classList.add("hidden");
-  $("pnl-dashboard-view")?.classList.add("hidden");
+  hideMainViewsForOverlay();
   const view = $("changelog-view");
   view?.classList.remove("hidden");
   view?.setAttribute("aria-hidden", "false");
@@ -4540,6 +5089,8 @@ function goHome() {
   $("settings-view")?.setAttribute("aria-hidden", "true");
   $("pnl-dashboard-view")?.classList.add("hidden");
   $("pnl-dashboard-view")?.setAttribute("aria-hidden", "true");
+  $("rating-view")?.classList.add("hidden");
+  $("rating-view")?.setAttribute("aria-hidden", "true");
   $("dashboard-view")?.classList.remove("hidden");
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
@@ -4560,6 +5111,10 @@ $("stats-btn").addEventListener("click", () => {
 $("pnl-dashboard-btn")?.addEventListener("click", () => {
   closeMobileMenu();
   openPnlDashboard();
+});
+$("rating-btn")?.addEventListener("click", () => {
+  closeMobileMenu();
+  openRating();
 });
 $("history-btn")?.addEventListener("click", () => {
   closeMobileMenu();
@@ -4625,6 +5180,10 @@ document.addEventListener("keydown", (e) => {
     }
     if ($("pnl-dashboard-view") && !$("pnl-dashboard-view").classList.contains("hidden")) {
       closePnlDashboard();
+      return;
+    }
+    if ($("rating-view") && !$("rating-view").classList.contains("hidden")) {
+      closeRating();
       return;
     }
     if ($("history-view") && !$("history-view").classList.contains("hidden")) {
@@ -4742,5 +5301,6 @@ bindPanelStatsButtons();
 bindStatsPeriodButtons();
 bindHistoryControls();
 bindPnlDashboardControls();
+bindRatingControls();
 renderStrategyRiskControls();
 renderDualHedgeControl();

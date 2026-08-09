@@ -125,7 +125,7 @@ cd D:\cryptotools\site\scripts
 
 ### Per-tag risk (`TAG_RISK` в MultiStrategyRouter)
 
-Для всех top-30 из `prod_top30_pack.json` — **SL + полный `minimal_roi`** из `player_scenarios.json` (как в симуляции). `custom_stoploss` / `custom_roi` (ступенчатый ROI). Legacy без записи → глобальные −15% / +5%.
+Для всех стратегий из `prod_top30_pack.json` (включая #32–39 legacy) — **SL + полный `minimal_roi`**. `custom_stoploss` / `custom_roi` (ступенчатый ROI). Без записи в `TAG_RISK` → глобальные −15% / +5%.
 
 ### Паттерн prod wrapper
 
@@ -151,28 +151,36 @@ class FooStrategy(SimLiveCooldownMixin, _Sim):
 7. `deploy_prod_ml.ps1` — добавить scp модели `by_scenario/{scenario_id}` в список.
 8. Залить `simulation/strategies` (деплой уже копирует папку).
 
-`apply_prod_ml_config.py` **перезаписывает** `enabled_strategies.json` — источник правды для деплоя держать синхронным.
+`apply_prod_ml_config.py` синхронизирует каталог/модели из pack, но **сохраняет** UI-флаги `enabled` / `ml_confidence` / `trained_risk` / `inverted`. Новые id из pack по умолчанию **OFF**. `legacy_disabled` всегда выкл.
+
+**Деплой (`deploy_prod_ml.ps1`):** `enabled_strategies.json` / `bot_strategies.json` **не заливаются** на VPS. Перед apply — pull с VPS; на сервере `merge_enabled_strategies_from_pack.py` только дописывает новые id (OFF) + бэкап `enabled_strategies.bak.*.json`.
 
 ---
 
 ## 6. Текущий prod enable set (ориентир)
 
-Включены **top-31** из pack (`prod_top30_pack.json`): Alt volume breakout + прежний top-30.
-Legacy Jul set (MacdEma/Fib/TripleEma/…) — **выключены**, wrappers/каталог оставлены для истории.
+Включены **top-39** из pack (`prod_top30_pack.json`): Alt volume breakout + top-30 + **8 Jul legacy** (april-cut retrain, sigmoid) в конце списка (#32–39).
+`CriptoPairsStrategy` — единственный в `legacy_disabled` (выкл).
 
 UI: `#num` стабильный; сверху по `ui_order=0` — **`AltVolumeBreakoutStrategy`** (`scalp_liq_breakout`, **num=31**, ML PnL ~135, exp `exp31_mlp`, gate 0.55).
 
-Далее по ML PnL (num 1…):
-- #1 `PsaraFlipStrategy` (`new_psar`) — ML PnL 87.1
-- #2 `AtrChannelBreakoutStrategy` (`chart3_atrch`) — 81.0
-- #3 `CmfZeroCrossStrategy` (`chart2_cmf`) — 79.9
-- … см. `simulation/config/prod_top30_pack.json`
+Далее по ML PnL (num 1…30), затем legacy хвост:
+- #32 `AdxMomentumStrategy` (`trend_breakout`) — ML PnL 928 · gate 70%
+- #33 `BollingerRsiStrategy` (`lite_mean_rev`) — 514 · 70%
+- #34 `MacdEmaStrategy` (`trend_macd_ema`) — 450 · 45%
+- #35 `SupertrendStrategy` (`trend_supertrend`) — 157 · 70%
+- #36 `TripleEmaStrategy` (`trend_ema`) — 152 · 55%
+- #37 `LiteRangeStrategy` (`lite_range`) — 88 · 65%
+- #38 `LiteIntradayStrategy` (`lite_intraday`) — 19 · 45%
+- #39 `FibPullbackStrategy` (`trend_fib`) — 15 · 45%
+- … полный top-31 см. `simulation/config/prod_top30_pack.json`
 
 ML gate (strategy bots): `profit_only`, floor `min_confidence` **0.45**; per-scenario порог из `pnl_classifier_meta.json` (`min_profit_proba`).
 PnL classifiers: **sigmoid** calibration (smooth confidence %); isotonic historically collapsed live scores to 0%/100%.
 Per-strategy UI toggle **«SL/TP из обучения»** (`trained_risk` в `enabled_strategies.json`): ON → `TAG_RISK` / sim schedule; OFF → глобальные SL/TP из настроек.
 Per-strategy UI **«Уверенность ML»** (`ml_confidence` в `enabled_strategies.json`): порог `profit_proba` 45–95%; default = `min_profit_proba` из pack/meta. Gate читает override без рестарта бота.
 Архив прежних моделей: `archives/prod_models_*.zip`.
+Legacy retrain отчёт: `simulation/results/legacy_april_cut_ml/report.json`.
 
 ## 7. Симуляции и ML
 
@@ -211,6 +219,7 @@ Per-strategy UI **«Уверенность ML»** (`ml_confidence` в `enabled_s
 |--------|------|
 | Включить/выключить стратегию на live | `enabled_strategies.json` (+ apply/deploy) |
 | Поменять SL/TP top-4 | `TAG_RISK` в `MultiStrategyRouter` + scenarios |
+| Лимит сделок на одну стратегию | UI «На одну стратегию» → `max_open_trades_per_strategy.json` (0 = без лимита); читает роутер без reload |
 | Новая идея стратегии | сначала `simulation/`, потом wrapper → prod |
 | Деплой на VPS | `site/scripts/deploy_prod_ml.ps1` |
 | Логи strategy | `journalctl -u cryptotools-strategy -n 100` |
@@ -259,4 +268,4 @@ journalctl -u cryptotools-strategy -n 80 --no-pager
 ## 12. Поддержка документа
 
 При смене архитектуры (новые боты, другой risk model, другой деплой) — **обнови этот файл в том же PR/сессии**.  
-Дата ориентира: **2026-08-07**.
+Дата ориентира: **2026-08-09**.

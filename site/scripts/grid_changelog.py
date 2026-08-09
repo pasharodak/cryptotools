@@ -29,6 +29,7 @@ FIELD_LABELS: dict[str, str] = {
     "total_investment": "Инвестиция на бота",
     "max_active_bots": "Макс. активных Bybit Grid",
     "max_open_trades": "Макс. открытых сделок",
+    "max_open_trades_per_strategy": "Макс. сделок на одну стратегию",
     "ml_gate_min_confidence": "Порог ML (profit)",
     "cell_number": "Количество сеток",
     "price_range_pct": "Ширина диапазона",
@@ -206,6 +207,16 @@ def record_max_open_trades(bot: str, old: int, new: int) -> None:
         new=new,
         category={"finder": "finder", "strategy": "strategy", "grid": "grid_ft"}.get(bot, "system"),
         label=label,
+    )
+
+
+def record_max_open_trades_per_strategy(old: int, new: int) -> None:
+    append_entry(
+        field="max_open_trades_per_strategy",
+        old=old,
+        new=new,
+        category="strategy",
+        label="Макс. сделок на одну стратегию",
     )
 
 

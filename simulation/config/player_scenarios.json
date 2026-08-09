@@ -28,7 +28,7 @@
     {
         "id": "lite_intraday",
         "label": "Внутридневная",
-        "enabled": false,
+        "enabled": true,
         "strategy": "LiteIntradayStrategy",
         "strategy_path": "simulation/strategies",
         "config": "simulation/config/backtest_lite_base.json",
@@ -40,7 +40,7 @@
     {
         "id": "lite_range",
         "label": "Диапазонная",
-        "enabled": false,
+        "enabled": true,
         "strategy": "LiteRangeStrategy",
         "strategy_path": "simulation/strategies",
         "config": "simulation/config/backtest_lite_base.json",
@@ -103,7 +103,7 @@
     {
         "id": "lite_mean_rev",
         "label": "Mean-reversion (BB)",
-        "enabled": false,
+        "enabled": true,
         "strategy": "SimMeanReversionRange",
         "strategy_path": "simulation/strategies",
         "config": "simulation/config/backtest_lite_base.json",
@@ -115,7 +115,7 @@
     {
         "id": "trend_ema",
         "label": "EMA 50/200 (4H)",
-        "enabled": false,
+        "enabled": true,
         "strategy": "SimEmaGoldenCross",
         "strategy_path": "simulation/strategies",
         "config": "simulation/config/backtest_lite_base.json",
@@ -127,7 +127,7 @@
     {
         "id": "trend_breakout",
         "label": "Breakout-Retest",
-        "enabled": false,
+        "enabled": true,
         "strategy": "SimBreakoutRetest",
         "strategy_path": "simulation/strategies",
         "config": "simulation/config/backtest_lite_base.json",
@@ -139,7 +139,7 @@
     {
         "id": "trend_fib",
         "label": "Fib pullback (DCA) (ML Gate)",
-        "enabled": false,
+        "enabled": true,
         "strategy": "SimFibPullback",
         "strategy_path": "simulation/strategies",
         "config": "simulation/config/backtest_trend_fib.json",
@@ -216,7 +216,7 @@
     {
         "id": "trend_supertrend",
         "label": "Supertrend (ATR) (ML Gate)",
-        "enabled": false,
+        "enabled": true,
         "strategy": "SimSupertrend",
         "strategy_path": "simulation/strategies",
         "config": "simulation/config/backtest_lite_base.json",
@@ -228,7 +228,7 @@
     {
         "id": "trend_macd_ema",
         "label": "MACD + EMA200 (ML Gate)",
-        "enabled": false,
+        "enabled": true,
         "strategy": "SimMacdEma",
         "strategy_path": "simulation/strategies",
         "config": "simulation/config/backtest_lite_base.json",
@@ -1058,5 +1058,185 @@
             "60": 0
         },
         "settings": "Swing wick+reclaim · SL −1.2% · TP 0.9% · прострел candle proxy"
+    },
+    {
+        "id": "chart4_stc",
+        "label": "Schaff Trend Cycle",
+        "enabled": false,
+        "strategy": "SchaffTrendCycleStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "chart4",
+        "stake_usdt": 15,
+        "stoploss": -0.016,
+        "minimal_roi": {
+            "0": 0.011,
+            "40": 0.0055,
+            "110": 0
+        },
+        "settings": "STC 12/26/10 · SL −1.6% · TP 1.1%"
+    },
+    {
+        "id": "chart4_qqe",
+        "label": "QQE cross",
+        "enabled": false,
+        "strategy": "QqeCrossStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "chart4",
+        "stake_usdt": 15,
+        "stoploss": -0.015,
+        "minimal_roi": {
+            "0": 0.01,
+            "40": 0.005,
+            "110": 0
+        },
+        "settings": "QQE RSI/ATR bands · SL −1.5% · TP 1.0%"
+    },
+    {
+        "id": "chart4_dem",
+        "label": "DeMarker reclaim",
+        "enabled": false,
+        "strategy": "DemarkerReclaimStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "chart4",
+        "stake_usdt": 15,
+        "stoploss": -0.015,
+        "minimal_roi": {
+            "0": 0.01,
+            "40": 0.005,
+            "110": 0
+        },
+        "settings": "DeM 14 reclaim 0.3/0.7 · SL −1.5% · TP 1.0%"
+    },
+    {
+        "id": "chart4_kst",
+        "label": "KST signal cross",
+        "enabled": false,
+        "strategy": "KstSignalStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "chart4",
+        "stake_usdt": 15,
+        "stoploss": -0.017,
+        "minimal_roi": {
+            "0": 0.012,
+            "50": 0.006,
+            "150": 0
+        },
+        "settings": "KST multi-ROC · SL −1.7% · TP 1.2%"
+    },
+    {
+        "id": "chart4_rvi",
+        "label": "RVI cross",
+        "enabled": false,
+        "strategy": "RviCrossStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "chart4",
+        "stake_usdt": 15,
+        "stoploss": -0.015,
+        "minimal_roi": {
+            "0": 0.01,
+            "40": 0.005,
+            "110": 0
+        },
+        "settings": "RVI/signal · SL −1.5% · TP 1.0%"
+    },
+    {
+        "id": "chart4_vwap",
+        "label": "VWAP reclaim",
+        "enabled": false,
+        "strategy": "VwapReclaimStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "chart4",
+        "stake_usdt": 15,
+        "stoploss": -0.014,
+        "minimal_roi": {
+            "0": 0.009,
+            "35": 0.0045,
+            "90": 0
+        },
+        "settings": "Rolling VWAP48 · SL −1.4% · TP 0.9%"
+    },
+    {
+        "id": "chart4_rsidiv",
+        "label": "RSI divergence",
+        "enabled": false,
+        "strategy": "RsiDivergenceStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "chart4",
+        "stake_usdt": 15,
+        "stoploss": -0.016,
+        "minimal_roi": {
+            "0": 0.011,
+            "45": 0.0055,
+            "120": 0
+        },
+        "settings": "Regular RSI div · SL −1.6% · TP 1.1%"
+    },
+    {
+        "id": "chart4_chandelier",
+        "label": "Chandelier flip",
+        "enabled": false,
+        "strategy": "ChandelierFlipStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "chart4",
+        "stake_usdt": 15,
+        "stoploss": -0.02,
+        "minimal_roi": {
+            "0": 0.014,
+            "60": 0.007,
+            "180": 0
+        },
+        "settings": "Chandelier ATR22×3 · SL −2% · TP 1.4%"
+    },
+    {
+        "id": "chart4_zscore",
+        "label": "Z-score mean rev",
+        "enabled": false,
+        "strategy": "ZscoreMeanRevStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "chart4",
+        "stake_usdt": 15,
+        "stoploss": -0.014,
+        "minimal_roi": {
+            "0": 0.009,
+            "35": 0.0045,
+            "90": 0
+        },
+        "settings": "Z±2 ADX/ATR gate · SL −1.4% · TP 0.9%"
+    },
+    {
+        "id": "chart4_ttm",
+        "label": "TTM Squeeze",
+        "enabled": false,
+        "strategy": "TtmSqueezeStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "chart4",
+        "stake_usdt": 15,
+        "stoploss": -0.018,
+        "minimal_roi": {
+            "0": 0.013,
+            "50": 0.006,
+            "150": 0
+        },
+        "settings": "BB inside KC release · SL −1.8% · TP 1.3%"
     }
 ]

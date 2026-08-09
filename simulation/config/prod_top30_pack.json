@@ -1,6 +1,6 @@
 {
-  "updated": "2026-08-07T15:12:47.596472+00:00",
-  "top_n": 31,
+  "updated": "2026-08-09T12:46:41.568449+00:00",
+  "top_n": 39,
   "train_range": "20250101-20260331",
   "test_range": "20260401-20260625",
   "strategies": [
@@ -623,18 +623,176 @@
       },
       "num": 30,
       "ui_order": 30
+    },
+    {
+      "rank": 31,
+      "num": 32,
+      "ui_order": 31,
+      "scenario_id": "trend_breakout",
+      "class_name": "AdxMomentumStrategy",
+      "label": "Breakout-Retest",
+      "group": "trend",
+      "stoploss": -0.022,
+      "tp": 0.03,
+      "winner_exp": "legacy_april_cut_lgbm_sigmoid",
+      "score_ml_test_pnl": 928.0193,
+      "min_profit_proba": 0.7,
+      "sim_module": "SimTrendStrategies",
+      "minimal_roi": {
+        "0": 0.03,
+        "180": 0.015,
+        "480": 0.008,
+        "960": 0
+      }
+    },
+    {
+      "rank": 32,
+      "num": 33,
+      "ui_order": 32,
+      "scenario_id": "lite_mean_rev",
+      "class_name": "BollingerRsiStrategy",
+      "label": "Mean-reversion (BB)",
+      "group": "lite",
+      "stoploss": -0.02,
+      "tp": 0.025,
+      "winner_exp": "legacy_april_cut_lgbm_sigmoid",
+      "score_ml_test_pnl": 513.7965,
+      "min_profit_proba": 0.7,
+      "sim_module": "SimLiteStrategies",
+      "minimal_roi": {
+        "0": 0.025,
+        "60": 0.015,
+        "180": 0.008,
+        "720": 0
+      }
+    },
+    {
+      "rank": 33,
+      "num": 34,
+      "ui_order": 33,
+      "scenario_id": "trend_macd_ema",
+      "class_name": "MacdEmaStrategy",
+      "label": "MACD + EMA200",
+      "group": "trend",
+      "stoploss": -0.025,
+      "tp": 0.03,
+      "winner_exp": "legacy_april_cut_lgbm_sigmoid",
+      "score_ml_test_pnl": 449.9908,
+      "min_profit_proba": 0.45,
+      "sim_module": "SimTrendStrategies",
+      "minimal_roi": {
+        "0": 0.03,
+        "180": 0.015,
+        "480": 0.008,
+        "960": 0
+      }
+    },
+    {
+      "rank": 34,
+      "num": 35,
+      "ui_order": 34,
+      "scenario_id": "trend_supertrend",
+      "class_name": "SupertrendStrategy",
+      "label": "Supertrend (ATR)",
+      "group": "trend",
+      "stoploss": -0.025,
+      "tp": 0.03,
+      "winner_exp": "legacy_april_cut_lgbm_sigmoid",
+      "score_ml_test_pnl": 157.4105,
+      "min_profit_proba": 0.7,
+      "sim_module": "SimTrendStrategies",
+      "minimal_roi": {
+        "0": 0.03,
+        "120": 0.015,
+        "360": 0.008,
+        "720": 0
+      }
+    },
+    {
+      "rank": 35,
+      "num": 36,
+      "ui_order": 35,
+      "scenario_id": "trend_ema",
+      "class_name": "TripleEmaStrategy",
+      "label": "EMA 50/200 (4H)",
+      "group": "trend",
+      "stoploss": -0.025,
+      "tp": 0.04,
+      "winner_exp": "legacy_april_cut_lgbm_sigmoid",
+      "score_ml_test_pnl": 152.2541,
+      "min_profit_proba": 0.55,
+      "sim_module": "SimTrendStrategies",
+      "minimal_roi": {
+        "0": 0.04,
+        "240": 0.02,
+        "720": 0.01,
+        "1440": 0
+      }
+    },
+    {
+      "rank": 36,
+      "num": 37,
+      "ui_order": 36,
+      "scenario_id": "lite_range",
+      "class_name": "LiteRangeStrategy",
+      "label": "Диапазонная",
+      "group": "lite",
+      "stoploss": -0.018,
+      "tp": 0.022,
+      "winner_exp": "legacy_april_cut_lgbm_sigmoid",
+      "score_ml_test_pnl": 88.0316,
+      "min_profit_proba": 0.65,
+      "sim_module": "SimLiteStrategies",
+      "minimal_roi": {
+        "0": 0.022,
+        "40": 0.012,
+        "100": 0
+      }
+    },
+    {
+      "rank": 37,
+      "num": 38,
+      "ui_order": 37,
+      "scenario_id": "lite_intraday",
+      "class_name": "LiteIntradayStrategy",
+      "label": "Внутридневная",
+      "group": "lite",
+      "stoploss": -0.022,
+      "tp": 0.022,
+      "winner_exp": "legacy_april_cut_lgbm_sigmoid",
+      "score_ml_test_pnl": 18.8732,
+      "min_profit_proba": 0.45,
+      "sim_module": "SimLiteStrategies",
+      "minimal_roi": {
+        "0": 0.022,
+        "480": 0.012,
+        "960": 0
+      }
+    },
+    {
+      "rank": 38,
+      "num": 39,
+      "ui_order": 38,
+      "scenario_id": "trend_fib",
+      "class_name": "FibPullbackStrategy",
+      "label": "Fib pullback (DCA)",
+      "group": "trend",
+      "stoploss": -0.03,
+      "tp": 0.035,
+      "winner_exp": "legacy_april_cut_lgbm_sigmoid",
+      "score_ml_test_pnl": 15.2887,
+      "min_profit_proba": 0.45,
+      "sim_module": "SimTrendStrategies",
+      "minimal_roi": {
+        "0": 0.035,
+        "360": 0.02,
+        "720": 0.01,
+        "1440": 0
+      }
     }
   ],
   "legacy_disabled": [
-    "CriptoPairsStrategy",
-    "SupertrendStrategy",
-    "MacdEmaStrategy",
-    "FibPullbackStrategy",
-    "TripleEmaStrategy",
-    "BollingerRsiStrategy",
-    "AdxMomentumStrategy",
-    "LiteIntradayStrategy",
-    "LiteRangeStrategy"
+    "CriptoPairsStrategy"
   ],
-  "note": "num = stable catalog number (never renumber on add/remove). ui_order = UI sort (0 = top). rank kept for pack legacy."
+  "note": "num = stable catalog number (never renumber on add/remove). ui_order = UI sort (0 = top). rank kept for pack legacy. Entries 32+ = Jul legacy set re-enabled after april-cut ML retrain."
 }

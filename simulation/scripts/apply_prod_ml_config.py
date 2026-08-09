@@ -30,25 +30,33 @@ FINDER_CFG_DST = SITE / "user_data/trade_finder.json"
 
 
 def _strategy_config() -> dict:
-    """Build enabled_strategies payload from prod_top30_pack (+ legacy off)."""
-    legacy = [
-        "CriptoPairsStrategy",
-        "SupertrendStrategy",
-        "MacdEmaStrategy",
-        "FibPullbackStrategy",
-        "TripleEmaStrategy",
-        "BollingerRsiStrategy",
-        "AdxMomentumStrategy",
-        "LiteIntradayStrategy",
-        "LiteRangeStrategy",
-    ]
+    """Build enabled_strategies from pack; preserve existing UI toggles.
+
+    Pack defines catalog + defaults for *new* ids only.
+    Existing enabled / inverted / trained_risk / ml_confidence are kept
+    so deploy does not wipe manual UI settings.
+    legacy_disabled ids are forced off.
+    """
+    legacy = ["CriptoPairsStrategy"]
     pack_path = ROOT / "simulation/config/prod_top30_pack.json"
     strategies = []
     if pack_path.is_file():
         pack = json.loads(pack_path.read_text(encoding="utf-8"))
         strategies = pack.get("strategies") or []
-        legacy = pack.get("legacy_disabled") or legacy
-    enabled = {c: False for c in legacy}
+        legacy = list(pack.get("legacy_disabled") or legacy)
+
+    prev: dict = {}
+    if ENABLED_STRAT.is_file():
+        try:
+            prev = json.loads(ENABLED_STRAT.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            prev = {}
+    prev_en = prev.get("enabled") or {}
+    prev_inv = prev.get("inverted") or {}
+    prev_tr = prev.get("trained_risk") or {}
+    prev_mlc = prev.get("ml_confidence") or {}
+
+    enabled: dict[str, bool] = {c: False for c in legacy}
     sim_map = {
         "TripleEmaStrategy": "trend_ema",
         "AdxMomentumStrategy": "trend_breakout",
@@ -60,28 +68,60 @@ def _strategy_config() -> dict:
         "FibPullbackStrategy": "trend_fib",
     }
     rank_order: list[str] = []
-    trained_risk = {c: False for c in legacy}
-    ml_confidence = {c: 0.55 for c in legacy}
+    trained_risk: dict[str, bool] = {c: False for c in legacy}
+    ml_confidence: dict[str, float] = {c: 0.55 for c in legacy}
+    inverted: dict[str, bool] = {c: False for c in legacy}
+
     for s in strategies:
         cls = s["class_name"]
-        enabled[cls] = True
-        trained_risk[cls] = True
+        # New strategy: default OFF (user enables in UI). Existing: keep.
+        if cls in prev_en:
+            enabled[cls] = bool(prev_en[cls])
+        else:
+            enabled[cls] = False
+        if cls in prev_tr:
+            trained_risk[cls] = bool(prev_tr[cls])
+        else:
+            trained_risk[cls] = True
         sim_map[cls] = s["scenario_id"]
         rank_order.append(cls)
         try:
-            ml_confidence[cls] = float(s.get("min_profit_proba") or 0.55)
+            pack_gate = float(s.get("min_profit_proba") or 0.55)
         except (TypeError, ValueError):
-            ml_confidence[cls] = 0.55
+            pack_gate = 0.55
+        if cls in prev_mlc:
+            try:
+                ml_confidence[cls] = float(prev_mlc[cls])
+            except (TypeError, ValueError):
+                ml_confidence[cls] = pack_gate
+        else:
+            ml_confidence[cls] = pack_gate
+        inverted[cls] = bool(prev_inv.get(cls, False))
+
+    # Keep any extra catalog ids from previous file (e.g. CriptoPairs).
+    for cls, val in prev_en.items():
+        if cls not in enabled:
+            enabled[cls] = bool(val)
+            trained_risk[cls] = bool(prev_tr.get(cls, False))
+            inverted[cls] = bool(prev_inv.get(cls, False))
+            try:
+                ml_confidence[cls] = float(prev_mlc.get(cls, 0.55))
+            except (TypeError, ValueError):
+                ml_confidence[cls] = 0.55
+
+    for cls in legacy:
+        enabled[cls] = False
+
     return {
         "enabled": enabled,
-        "inverted": {k: False for k in enabled},
-        "trained_risk": trained_risk,
-        "ml_confidence": ml_confidence,
+        "inverted": {k: bool(inverted.get(k, False)) for k in enabled},
+        "trained_risk": {k: bool(trained_risk.get(k, False)) for k in enabled},
+        "ml_confidence": {k: float(ml_confidence.get(k, 0.55)) for k in enabled},
         "_note": (
-            "Prod — top-30 by per-scenario ML param experiments (Apr cut). "
-            "Ordered by ML test PnL. Legacy Jul set disabled. "
-            "trained_risk=true → SL/TP from sim scenarios. "
-            "ml_confidence → per-strategy ML gate min profit confidence."
+            "Prod pack catalog from prod_top30_pack. "
+            "enabled/ml_confidence/trained_risk preserved across deploy. "
+            "New pack ids default OFF until toggled in UI. "
+            "legacy_disabled forced off."
         ),
         "_sim_map": sim_map,
         "_rank_order": rank_order,
@@ -201,7 +241,7 @@ def main() -> int:
         + "\n",
         encoding="utf-8",
     )
-    print("enabled_strategies.json — ML pack from prod_top30_pack (legacy off)")
+    print("enabled_strategies.json — pack catalog synced (UI enables preserved)")
 
     print("\nProd bots enabled:")
     for sid in prod["enabled_scenarios"]:

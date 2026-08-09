@@ -1,84 +1,59 @@
 {
   "scenario_id": "lite_range",
-  "model": "lightgbm + isotonic",
-  "model_key": "lightgbm",
-  "trained_at": "2026-07-09T20:14:17.009176+00:00",
-  "n_trades": 1865,
-  "n_train": 1492,
-  "n_test": 373,
-  "market_coverage": {
-    "total": 1865,
-    "with_market": 1865,
-    "pct": 1.0
-  },
-  "accuracy": 0.6166,
-  "roc_auc": 0.5956,
-  "loss_recall": 0.0694,
-  "loss_precision": 0.5263,
-  "profit_recall": 0.9607,
-  "profit_precision": 0.6215,
-  "macro_f1": 0.4387,
+  "model": "lightgbm + sigmoid",
+  "calibrate_method": "sigmoid",
+  "trained_at": "2026-08-09T12:40:08.516882+00:00",
+  "train_range": "20250101-20260331",
+  "test_range": "20260401-20260625",
+  "fit_mode": "all_cached",
+  "n_train": 2337,
+  "n_test": 2005,
+  "n_train_trades": 2337,
+  "n_test_trades": 2005,
+  "min_profit_proba": 0.65,
+  "source": "legacy_april_cut_retrain",
+  "accuracy": 0.6648,
+  "roc_auc": 0.6428,
+  "loss_recall": 0.0717,
+  "loss_precision": 0.6667,
+  "profit_recall": 0.9809,
+  "profit_precision": 0.6648,
+  "macro_f1": 0.461,
   "confusion_matrix": [
     [
-      10,
-      134
+      50,
+      647
     ],
     [
-      9,
-      220
+      25,
+      1283
     ]
   ],
   "classification_report": {
     "loss": {
-      "precision": 0.5263157894736842,
-      "recall": 0.06944444444444445,
-      "f1-score": 0.12269938650306748,
-      "support": 144.0
+      "precision": 0.6666666666666666,
+      "recall": 0.07173601147776183,
+      "f1-score": 0.12953367875647667,
+      "support": 697.0
     },
     "profit": {
-      "precision": 0.6214689265536724,
-      "recall": 0.9606986899563319,
-      "f1-score": 0.7547169811320755,
-      "support": 229.0
+      "precision": 0.6647668393782383,
+      "recall": 0.9808868501529052,
+      "f1-score": 0.7924644842495367,
+      "support": 1308.0
     },
-    "accuracy": 0.6166219839142091,
+    "accuracy": 0.6648379052369078,
     "macro avg": {
-      "precision": 0.5738923580136783,
-      "recall": 0.5150715672003882,
-      "f1-score": 0.4387081838175715,
-      "support": 373.0
+      "precision": 0.6657167530224525,
+      "recall": 0.5263114308153335,
+      "f1-score": 0.4609990815030067,
+      "support": 2005.0
     },
     "weighted avg": {
-      "precision": 0.5847342033914249,
-      "recall": 0.6166219839142091,
-      "f1-score": 0.5107209124281153,
-      "support": 373.0
+      "precision": 0.6654272780914725,
+      "recall": 0.6648379052369078,
+      "f1-score": 0.5620092366541938,
+      "support": 2005.0
     }
-  },
-  "features": [
-    "scenario_id",
-    "pair_base",
-    "scan_type",
-    "group",
-    "strategy",
-    "is_short",
-    "stake_usdt",
-    "stoploss",
-    "roi_at_entry",
-    "hour_utc",
-    "dow_utc",
-    "mins_since_armed",
-    "log_open_rate",
-    "rsi_14",
-    "atr_pct_14",
-    "adx_14",
-    "vol_ratio_20",
-    "ret_1",
-    "ret_4",
-    "ret_12",
-    "ema_spread_pct",
-    "range_pct",
-    "dist_high_20_pct",
-    "dist_low_20_pct"
-  ]
+  }
 }

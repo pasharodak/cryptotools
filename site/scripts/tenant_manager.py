@@ -753,8 +753,10 @@ def provision_tenant(user_id: str, ports: dict[str, int]) -> Path:
     bot_limits = {
         "max_open_trades": dict(DEFAULT_TENANT_LIMITS),
         "stake_amount": dict(DEFAULT_TENANT_STAKES),
+        "max_open_trades_per_strategy": 0,
     }
     _atomic_write_json(td / "bot_limits.json", bot_limits, mode=0o644)
+    _atomic_write_json(td / "max_open_trades_per_strategy.json", {"value": 0}, mode=0o644)
 
     enabled_src = global_ud / "enabled_strategies.json"
     if enabled_src.is_file():

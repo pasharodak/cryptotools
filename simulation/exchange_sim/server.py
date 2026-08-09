@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -274,7 +275,13 @@ def create_app() -> FastAPI:
             schedule_broadcast({"type": "phase", "phase": "sequential_done"})
 
     async def run_live_walkthrough(
-        start_ms: int, end_ms: int, tf: str, chart_pair: str, pairs: list[str]
+        start_ms: int,
+        end_ms: int,
+        tf: str,
+        chart_pair: str,
+        pairs: list[str],
+        *,
+        bypass_scanner: bool = False,
     ) -> None:
         """Each enabled bot walks every eligible pair; trades appear in card as sim time advances."""
         order = bot_session.enabled_scenario_ids()
@@ -283,8 +290,20 @@ def create_app() -> FastAPI:
             return
         player.state.sequential_replay = True
         total_bots = len(order)
+        cancelled = False
         try:
-            await asyncio.to_thread(bot_session.init_live_session, pairs, start_ms, end_ms, datadir)
+            await asyncio.to_thread(
+                bot_session.init_live_session,
+                pairs,
+                start_ms,
+                end_ms,
+                datadir,
+                pool_mode="direct" if bypass_scanner else "profile",
+                bypass_scanner=bypass_scanner,
+            )
+            if player.state.status == "stopped":
+                cancelled = True
+                return
             pool = bot_session.status.get("sim_pool") or pairs
             schedule_broadcast(
                 {
@@ -293,13 +312,20 @@ def create_app() -> FastAPI:
                     "strategies": total_bots,
                     "pairs": len(pool),
                     "sim_ms": start_ms,
+                    "bypass_scanner": bypass_scanner,
                 }
             )
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.05)
             for idx, sid in enumerate(order):
+                if player.state.status == "stopped":
+                    cancelled = True
+                    return
                 sc = next((s for s in bot_session.scenarios if s["id"] == sid), {})
                 player.state.active_scenario_id = sid
                 eligible = await asyncio.to_thread(bot_session.pairs_for_scenario, sid, pool)
+                if player.state.status == "stopped":
+                    cancelled = True
+                    return
                 if not eligible:
                     schedule_broadcast(
                         {
@@ -338,13 +364,22 @@ def create_app() -> FastAPI:
                 await asyncio.to_thread(
                     bot_session.load_scenario_instances, sid, pool, start_ms, end_ms, datadir
                 )
+                if player.state.status == "stopped":
+                    cancelled = True
+                    return
                 replay_pairs = [
                     i["pair"]
                     for i in bot_session.instances
                     if i["scenario_id"] == sid
                 ]
-                await asyncio.sleep(0.2)
+                # Live: keep chart on the user's pair when present.
+                if bypass_scanner and chart_pair in replay_pairs:
+                    replay_pairs = [chart_pair]
+                await asyncio.sleep(0.05)
                 for pidx, pair in enumerate(replay_pairs):
+                    if player.state.status == "stopped":
+                        cancelled = True
+                        return
                     bot_session.begin_pair_walkthrough(sid, pair)
                     player.configure(pair, start_ms, end_ms, tf, start_ms)
                     schedule_broadcast(
@@ -361,8 +396,11 @@ def create_app() -> FastAPI:
                             "sim_ms": start_ms,
                         }
                     )
-                    await asyncio.sleep(0.05)
+                    await asyncio.sleep(0.02)
                     await player.play_through()
+                    if player.state.status == "stopped":
+                        cancelled = True
+                        return
                     bot_session.finish_pair_walkthrough(sid, pair)
                     schedule_broadcast(
                         {
@@ -385,19 +423,23 @@ def create_app() -> FastAPI:
                     }
                 )
         except asyncio.CancelledError:
-            pass
+            cancelled = True
         except Exception as exc:
             bot_session.status["phase"] = "error"
             bot_session.status["error"] = str(exc)
             schedule_broadcast({"type": "phase", "phase": "error", "message": str(exc)})
         finally:
             archive_result = None
-            if bot_session.is_running():
+            persist = (not cancelled) and player.state.status != "stopped" and bot_session.is_running()
+            if persist:
                 archive_result = await asyncio.to_thread(
                     functools.partial(
                         bot_session.finish_live_session, persist_trades=True, source="play"
                     )
                 )
+            else:
+                bot_session.status["running"] = False
+                bot_session.status["phase"] = "stopped"
             player.state.active_scenario_id = None
             player.state.sequential_replay = False
             player._sequential_task = None
@@ -413,7 +455,171 @@ def create_app() -> FastAPI:
                         "report_path": archive_result.get("report_path"),
                     }
                 )
-            schedule_broadcast({"type": "phase", "phase": "sequential_done"})
+            schedule_broadcast(
+                {
+                    "type": "phase",
+                    "phase": "sequential_done",
+                    "cancelled": cancelled or player.state.status == "stopped",
+                }
+            )
+
+    async def run_find_trades(
+        start_ms: int,
+        end_ms: int,
+        tf: str,
+        pair: str,
+        pairs: list[str],
+    ) -> dict:
+        """Backtest enabled strategy on pair — cache first, compute only missing ranges."""
+        from simulation.exchange_sim import find_trades_cache as ftc
+
+        order = bot_session.enabled_scenario_ids()
+        if not order:
+            return {"ok": True, "trades": [], "scenarios": [], "count": 0, "cache": {}}
+        ml_enabled = bool(bot_session.ml_gate_status().get("enabled"))
+        player.stop_replay_only()
+        player.cancel_sequential()
+        player.state.sequential_replay = False
+        player.state.batch_run = False
+        player.state.active_scenario_id = order[0]
+        if pair and start_ms and end_ms:
+            player.configure(pair, start_ms, end_ms, tf, start_ms)
+
+        def _annotated_rows(sid: str) -> list[dict]:
+            rows: list[dict] = []
+            for inst in bot_session.instances:
+                if inst.get("scenario_id") != sid:
+                    continue
+                base = {
+                    "inst_id": inst["id"],
+                    "scenario_id": sid,
+                    "pair": inst["pair"],
+                    "label": inst["label"],
+                    "closed": True,
+                }
+                seen: set[tuple] = set()
+                for tr in list(inst.get("trades") or []) + list(inst.get("ml_skipped_trades") or []):
+                    key = (tr.get("open_ms"), tr.get("close_ms"), tr.get("open_rate"))
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    rows.append({**base, **tr})
+            rows.sort(key=lambda t: int(t.get("open_ms") or 0))
+            return rows
+
+        need_bt = False
+        cache_hits = 0
+        cache_computed = 0
+        for sid in order:
+            for p in pairs:
+                entry = ftc.load_entry(ROOT, sid, p)
+                covered = list((entry or {}).get("ranges") or [])
+                gaps = ftc.missing_ranges(start_ms, end_ms, covered)
+                if gaps:
+                    need_bt = True
+                    break
+            if need_bt:
+                break
+
+        if need_bt:
+            await asyncio.to_thread(
+                bot_session.init_live_session,
+                pairs,
+                start_ms,
+                end_ms,
+                datadir,
+                pool_mode="direct",
+                bypass_scanner=True,
+            )
+
+        all_rows: list[dict] = []
+        scenario_stats: list[dict] = []
+        for idx, sid in enumerate(order):
+            sc = next((s for s in bot_session.scenarios if s["id"] == sid), {})
+            schedule_broadcast(
+                {
+                    "type": "phase",
+                    "phase": "strategy_loading",
+                    "scenario_id": sid,
+                    "label": sc.get("label", sid),
+                    "index": idx + 1,
+                    "total": len(order),
+                    "pairs_total": len(pairs),
+                }
+            )
+            sid_rows: list[dict] = []
+            for p in pairs:
+                entry = ftc.load_entry(ROOT, sid, p) or {
+                    "scenario_id": sid,
+                    "pair": p,
+                    "ranges": [],
+                    "trades": [],
+                }
+                gaps = ftc.missing_ranges(start_ms, end_ms, list(entry.get("ranges") or []))
+                if not gaps:
+                    cache_hits += 1
+                else:
+                    for g0, g1 in gaps:
+                        await asyncio.to_thread(
+                            bot_session.load_scenario_instances, sid, [p], g0, g1, datadir
+                        )
+                        new_rows = _annotated_rows(sid)
+                        entry = ftc.upsert_range(ROOT, sid, p, g0, g1, new_rows)
+                        cache_computed += 1
+                bot_session.mark_strategy_walkthrough_done(sid)
+                ranged = ftc.trades_in_range(list(entry.get("trades") or []), start_ms, end_ms)
+                sid_rows.extend(ftc.filter_trades_by_ml(ranged, ml_enabled=ml_enabled))
+
+            sid_rows.sort(key=lambda t: int(t.get("open_ms") or 0))
+            all_rows.extend(sid_rows)
+            scenario_stats.append(
+                {
+                    "scenario_id": sid,
+                    "label": sc.get("label", sid),
+                    "trades": len(sid_rows),
+                }
+            )
+            schedule_broadcast(
+                {
+                    "type": "batch_trades",
+                    "scenario_id": sid,
+                    "label": sc.get("label", sid),
+                    "trades": sid_rows,
+                    "total": len(sid_rows),
+                    "revealed": len(sid_rows),
+                }
+            )
+            schedule_broadcast(
+                {
+                    "type": "phase",
+                    "phase": "strategy_done",
+                    "scenario_id": sid,
+                    "label": sc.get("label", sid),
+                    "index": idx + 1,
+                    "total": len(order),
+                }
+            )
+
+        bot_session.status["running"] = False
+        bot_session.status["phase"] = "ready"
+        bot_session.status["bypass_scanner"] = True
+        schedule_broadcast({"type": "phase", "phase": "sequential_done", "find_trades": True})
+        return {
+            "ok": True,
+            "pair": pair,
+            "timeframe": tf,
+            "range_ms": [start_ms, end_ms],
+            "scenarios": scenario_stats,
+            "trades": all_rows,
+            "count": len(all_rows),
+            "active_scenario_id": order[0],
+            "ml_gate": ml_enabled,
+            "cache": {
+                "hits": cache_hits,
+                "computed_ranges": cache_computed,
+                "dir": str(ROOT / ftc.CACHE_DIR),
+            },
+        }
 
     app = FastAPI(title="CriptoTools Sim Player", version="2.0")
 
@@ -530,50 +736,80 @@ def create_app() -> FastAPI:
         _write_scenarios(scenarios)
         return {"ok": True, "updated": updated, "enabled": bool(enabled)}
 
-    @app.get("/sim/pairs")
-    def sim_pairs():
+    def _preferred_pairs() -> list[str]:
         pool_path = ROOT / "simulation" / "config" / "player_pair_pool.json"
         if pool_path.is_file():
             pool = json.loads(pool_path.read_text(encoding="utf-8")).get("pairs") or []
             if pool:
-                return {"pairs": pool}
-        configured = cfg.get("player_pairs") or []
-        discovered = ds.list_pairs("1s") or ds.list_pairs("1m") or ds.list_pairs("5m")
-        merged = list(dict.fromkeys(configured + discovered))
-        return {"pairs": merged}
+                return list(pool)
+        return list(cfg.get("player_pairs") or [])
+
+    def _all_available_pairs() -> list[str]:
+        """Every pair with candle files (1s / 1m / 5m), preferred first."""
+        preferred = _preferred_pairs()
+        found: list[str] = []
+        for tf in ("1s", "1m", "5m"):
+            found.extend(ds.list_pairs(tf) or [])
+        return list(dict.fromkeys([*preferred, *sorted(set(found))]))
+
+    def _resolve_pair_timeframe(
+        pair: str,
+        preferred: str = "1s",
+        *,
+        start_ms: int | None = None,
+        end_ms: int | None = None,
+    ) -> str | None:
+        order = [preferred] + [tf for tf in ("1s", "1m", "5m") if tf != preferred]
+        for tf in order:
+            rng = ds.pair_range(pair, tf)
+            if not (rng.get("start_ms") and rng.get("end_ms") and (rng.get("count") or 0) > 0):
+                continue
+            if start_ms is not None and end_ms is not None:
+                # Prefer TF that actually covers the requested window.
+                if rng["end_ms"] < start_ms or rng["start_ms"] > end_ms:
+                    continue
+                try:
+                    sample = ds.chart_slice(pair, tf, start_ms, end_ms, limit=3)
+                except FileNotFoundError:
+                    continue
+                if not sample:
+                    continue
+            return tf
+        return None
+
+    @app.get("/sim/pairs")
+    def sim_pairs():
+        preferred = _preferred_pairs()
+        pairs = _all_available_pairs()
+        if not pairs:
+            pairs = list(dict.fromkeys(preferred + (ds.list_pairs("5m") or [])))
+        return {"pairs": pairs, "preferred": preferred, "count": len(pairs)}
 
     @app.get("/sim/range")
     def sim_range(pair: str = Query(...), timeframe: str = Query("1s")):
-        rng = ds.pair_range(pair, timeframe)
+        tf = _resolve_pair_timeframe(pair, timeframe) or timeframe
+        rng = ds.pair_range(pair, tf)
         if not rng.get("start_ms") or not rng.get("end_ms"):
-            # Fallback: any available TF, then manifest player_timerange
-            for tf in ("1s", "1m", "5m"):
-                if tf == timeframe:
-                    continue
-                alt = ds.pair_range(pair, tf)
-                if alt.get("start_ms") and alt.get("end_ms"):
-                    rng = {**alt, "timeframe_source": tf}
-                    break
-            if not rng.get("start_ms") or not rng.get("end_ms"):
-                tr = str(cfg.get("player_timerange") or cfg.get("timerange") or "")
-                if "-" in tr:
-                    start_s, end_s = tr.split("-", 1)
-                    try:
-                        from datetime import datetime, timezone
+            tr = str(cfg.get("player_timerange") or cfg.get("timerange") or "")
+            if "-" in tr:
+                start_s, end_s = tr.split("-", 1)
+                try:
+                    from datetime import datetime, timezone
 
-                        s = datetime.strptime(start_s.strip(), "%Y%m%d").replace(tzinfo=timezone.utc)
-                        e = datetime.strptime(end_s.strip(), "%Y%m%d").replace(
-                            hour=23, minute=59, second=59, tzinfo=timezone.utc
-                        )
-                        rng = {
-                            "start_ms": int(s.timestamp() * 1000),
-                            "end_ms": int(e.timestamp() * 1000),
-                            "count": 0,
-                            "source": "manifest",
-                        }
-                    except ValueError:
-                        pass
-        return {"pair": pair, "timeframe": timeframe, **rng}
+                    s = datetime.strptime(start_s.strip(), "%Y%m%d").replace(tzinfo=timezone.utc)
+                    e = datetime.strptime(end_s.strip(), "%Y%m%d").replace(
+                        hour=23, minute=59, second=59, tzinfo=timezone.utc
+                    )
+                    rng = {
+                        "start_ms": int(s.timestamp() * 1000),
+                        "end_ms": int(e.timestamp() * 1000),
+                        "count": 0,
+                        "source": "manifest",
+                    }
+                    tf = timeframe
+                except ValueError:
+                    pass
+        return {"pair": pair, "timeframe": tf, "timeframe_source": tf, **rng}
 
     @app.get("/sim/chart")
     def sim_chart(
@@ -583,11 +819,26 @@ def create_app() -> FastAPI:
         end_ms: int | None = None,
         limit: int = Query(5000, le=20000),
     ):
+        tf = _resolve_pair_timeframe(pair, timeframe, start_ms=start_ms, end_ms=end_ms) or timeframe
         try:
-            candles = ds.chart_slice(pair, timeframe, start_ms, end_ms, limit)
+            candles = ds.chart_slice(pair, tf, start_ms, end_ms, limit)
         except FileNotFoundError as exc:
             raise HTTPException(404, str(exc)) from exc
-        return {"pair": pair, "timeframe": timeframe, "candles": candles}
+        if not candles:
+            # Last resort: try other TFs for this exact window.
+            for alt in ("1s", "1m", "5m"):
+                if alt == tf:
+                    continue
+                try:
+                    candles = ds.chart_slice(pair, alt, start_ms, end_ms, limit)
+                except FileNotFoundError:
+                    continue
+                if candles:
+                    tf = alt
+                    break
+        if not candles:
+            raise HTTPException(404, f"no candles for {pair} in requested range")
+        return {"pair": pair, "timeframe": tf, "candles": candles}
 
     def _load_ema_study_trades() -> list[dict]:
         rows: list[dict] = []
@@ -711,6 +962,7 @@ def create_app() -> FastAPI:
             bot_session.select(None)
 
             chart_pair = body.get("pair") or player.state.pair
+            bypass_scanner = bool(body.get("bypass_scanner", False))
             player.configure(chart_pair, start_ms, end_ms, tf, start_ms)
             schedule_broadcast(
                 {
@@ -720,11 +972,19 @@ def create_app() -> FastAPI:
                     "sequential": True,
                     "strategies": len(bot_session.enabled_scenario_ids()),
                     "pairs": len(pairs),
+                    "bypass_scanner": bypass_scanner,
                 }
             )
 
             player._sequential_task = asyncio.create_task(
-                run_live_walkthrough(start_ms, end_ms, tf, chart_pair, pairs)
+                run_live_walkthrough(
+                    start_ms,
+                    end_ms,
+                    tf,
+                    chart_pair,
+                    pairs,
+                    bypass_scanner=bypass_scanner,
+                )
             )
             snap = enrich_tick(player.snapshot())
             snap["sequential"] = True
@@ -733,6 +993,32 @@ def create_app() -> FastAPI:
             raise
         except Exception as exc:
             raise HTTPException(500, f"play failed: {exc}") from exc
+
+    @app.post("/sim/player/find-trades")
+    async def player_find_trades(body: dict | None = None):
+        """Find all strategy trades for pair+period without clock playback."""
+        body = body or {}
+        try:
+            pair = body.get("pair") or player.state.pair
+            pairs = body.get("pairs") or ([pair] if pair else [])
+            tf = body.get("timeframe", "1s")
+            start_ms = int(body.get("range_start_ms", 0))
+            end_ms = int(body.get("range_end_ms", 0))
+            if not pair or not start_ms or not end_ms:
+                raise HTTPException(400, "pair and period required")
+            if not pairs:
+                pairs = [pair]
+            bot_session.scenarios = load_bot_scenarios(ROOT)
+            bot_session.reset()
+            bot_session.select(None)
+            result = await run_find_trades(start_ms, end_ms, tf, pair, pairs)
+            snap = enrich_tick(player.snapshot())
+            snap.update(result)
+            return snap
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(500, f"find-trades failed: {exc}") from exc
 
     @app.post("/sim/player/prgon")
     async def player_prgon(body: dict | None = None):
@@ -792,9 +1078,17 @@ def create_app() -> FastAPI:
     def player_pause():
         return player.pause()
 
+    @app.post("/sim/player/resume")
+    async def player_resume():
+        return enrich_tick(player.resume())
+
     @app.post("/sim/player/stop")
     def player_stop():
-        return player.stop()
+        snap = player.stop()
+        bot_session.status["running"] = False
+        if bot_session.status.get("phase") not in ("ready", "idle", "error"):
+            bot_session.status["phase"] = "stopped"
+        return enrich_tick(snap)
 
     @app.post("/sim/player/reset")
     def player_reset(body: dict | None = None):
@@ -1012,6 +1306,150 @@ def create_app() -> FastAPI:
     def ml_entry_gate_set(body: dict):
         enabled = bool(body.get("enabled", True))
         return bot_session.set_ml_gate_enabled(enabled)
+
+    def _ensure_site_scripts_path() -> Path:
+        scripts = ROOT / "site" / "scripts"
+        s = str(scripts)
+        if s not in sys.path:
+            sys.path.insert(0, s)
+        return scripts
+
+    def _enrich_scan_report(scan: dict[str, Any]) -> dict[str, Any]:
+        from simulation.exchange_sim.grid_pick_explain import explain_grid_pick, metrics_summary
+
+        best = scan.get("best") or scan.get("best_overall")
+        overall = scan.get("best_overall")
+        top5 = scan.get("top5") or scan.get("top5_available") or scan.get("near_top5") or []
+        near = scan.get("near_top5") or []
+        qualified = bool(scan.get("qualified", bool(best)))
+        # When no hard-pass pair, preview nearest candidates in top5 / as display best.
+        display = best
+        if display is None and top5:
+            display = top5[0]
+        rank_note = ""
+        if (
+            best
+            and overall
+            and best.get("pair")
+            and overall.get("pair")
+            and best.get("pair") != overall.get("pair")
+        ):
+            rank_note = (
+                f"Лучший overall {overall.get('pair')} уже в активных grid — "
+                f"взята следующая доступная."
+            )
+        if not qualified and display:
+            fails = display.get("fail_reasons") or []
+            why = "; ".join(fails[:3]) if fails else "фильтры ranging не пройдены"
+            rank_note = (
+                f"Сейчас нет полностью qualifying ranging-пар. "
+                f"Показан ближайший кандидат ({why})."
+            )
+        reason = scan.get("message") if not display else explain_grid_pick(display, rank_note=rank_note)
+        if not display and scan.get("message"):
+            reason = (
+                "Сейчас нет ranging-пар по фильтрам сканера (ADX, BB width, структура). "
+                f"Проверено кандидатов: {scan.get('candidates_checked') or '—'}. "
+                "Попробуйте позже — рынок может быть в тренде."
+            )
+        return {
+            "ok": bool(best) if qualified else bool(display),
+            "qualified": qualified,
+            "scanned_at": scan.get("scanned_at"),
+            "candidates_checked": scan.get("candidates_checked"),
+            "ranging_found": scan.get("ranging_found"),
+            "available_count": scan.get("available_count"),
+            "active_pairs": scan.get("active_pairs") or [],
+            "best": display,
+            "best_qualified": best,
+            "best_overall": overall,
+            "top5": top5[:5],
+            "near_top5": near[:5],
+            "metrics": metrics_summary(display),
+            "reason": reason,
+            "errors": (scan.get("errors") or [])[:10],
+            "message": scan.get("message"),
+        }
+
+    @app.post("/sim/bybit-grid/scan")
+    async def bybit_grid_scan():
+        """Live ranging scan for Bybit Grid — does NOT create a bot."""
+        _ensure_site_scripts_path()
+        # Local player: write scan cache under site/, not VPS path default.
+        os.environ.setdefault("CT_BASE", str(ROOT / "site"))
+        site_env = ROOT / "site" / ".env"
+        if site_env.is_file():
+            os.environ.setdefault("CT_ENV", str(site_env))
+
+        def _run() -> dict[str, Any]:
+            try:
+                from bybit_grid_manager import get_credentials
+
+                get_credentials()
+            except Exception:
+                pass
+            from scan_bybit_grid import run_scan_only
+
+            out = run_scan_only(verbose=False, for_player=True)
+            scan = out.get("scan") if isinstance(out, dict) else out
+            if not isinstance(scan, dict):
+                raise RuntimeError("scan returned empty result")
+            return _enrich_scan_report(scan)
+
+        try:
+            return await asyncio.to_thread(_run)
+        except Exception as exc:
+            raise HTTPException(500, f"bybit-grid scan failed: {exc}") from exc
+
+    @app.get("/sim/bybit-grid/status")
+    def bybit_grid_status():
+        """Last saved scan report (if any), with explanation."""
+        _ensure_site_scripts_path()
+        try:
+            from scan_bybit_grid import get_scan_status
+
+            scan = get_scan_status()
+            if not scan.get("best") and not scan.get("scanned_at"):
+                return {"ok": True, "scanned_at": None, "best": None, "reason": "Скан ещё не запускался."}
+            return _enrich_scan_report(scan)
+        except Exception as exc:
+            raise HTTPException(500, f"bybit-grid status failed: {exc}") from exc
+
+    @app.get("/sim/bybit-grid/chart")
+    def bybit_grid_chart(
+        symbol: str = Query(..., min_length=3),
+        limit: int = Query(200, ge=20, le=1000),
+    ):
+        """Live 5m candles from Bybit public API for grid preview."""
+        _ensure_site_scripts_path()
+        sym = symbol.replace("/", "").replace(":USDT", "").upper()
+        if not sym.endswith("USDT"):
+            sym = f"{sym}USDT"
+        try:
+            from scan_ranging_pairs import fetch_klines
+
+            df = fetch_klines(sym, "5", int(limit))
+        except Exception as exc:
+            raise HTTPException(502, f"bybit klines failed: {exc}") from exc
+        if df is None or df.empty:
+            raise HTTPException(404, f"no 5m candles for {sym}")
+        candles: list[dict[str, Any]] = []
+        for _, row in df.iterrows():
+            ts = int(row["timestamp"])
+            # Bybit returns ms strings
+            if ts > 10_000_000_000:
+                ts = ts // 1000
+            candles.append(
+                {
+                    "time": ts,
+                    "open": float(row["open"]),
+                    "high": float(row["high"]),
+                    "low": float(row["low"]),
+                    "close": float(row["close"]),
+                }
+            )
+        pair = f"{sym[:-4]}/USDT:USDT" if sym.endswith("USDT") else sym
+        return {"symbol": sym, "pair": pair, "timeframe": "5m", "candles": candles}
 
     @app.websocket("/sim/ws")
     async def ws_endpoint(websocket: WebSocket):
