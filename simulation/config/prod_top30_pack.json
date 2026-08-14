@@ -31,15 +31,16 @@
       "label": "Parabolic SAR flip",
       "group": "newset",
       "stoploss": -0.02,
-      "tp": 0.014,
+      "tp": 0.022,
       "winner_exp": "exp14_lgbm_gate045",
       "score_ml_test_pnl": 87.0566,
       "min_profit_proba": 0.45,
       "sim_module": "SimNewSetStrategies",
       "minimal_roi": {
-        "0": 0.014,
-        "50": 0.007,
-        "150": 0.0
+        "0": 0.022,
+        "120": 0.012,
+        "360": 0.006,
+        "720": 0.0
       },
       "num": 1,
       "ui_order": 1
@@ -789,10 +790,97 @@
         "720": 0.01,
         "1440": 0
       }
+    },
+    {
+      "rank": 101,
+      "num": 101,
+      "ui_order": 101,
+      "scenario_id": "new_psar_test",
+      "class_name": "PsaraFlipTestStrategy",
+      "label": "Parabolic SAR flip (test)",
+      "group": "newset_test",
+      "test_group": true,
+      "stoploss": -0.02,
+      "tp": 0.012,
+      "winner_exp": "test_block_xgb_wide",
+      "score_ml_test_pnl": 88.021,
+      "min_profit_proba": 0.45,
+      "sim_module": "SimNewSetStrategies",
+      "minimal_roi": {
+        "0": 0.012,
+        "45": 0.008,
+        "120": 0.005,
+        "360": 0.0
+      }
+    },
+    {
+      "rank": 102,
+      "num": 102,
+      "ui_order": 102,
+      "scenario_id": "chart3_atrch_test",
+      "class_name": "AtrChannelBreakoutTestStrategy",
+      "label": "ATR channel breakout (test)",
+      "group": "chart3_test",
+      "test_group": true,
+      "stoploss": -0.02,
+      "tp": 0.012,
+      "winner_exp": "test_block_xgb_wide",
+      "score_ml_test_pnl": 81.3649,
+      "min_profit_proba": 0.45,
+      "sim_module": "SimChartTaWave3Strategies",
+      "minimal_roi": {
+        "0": 0.012,
+        "45": 0.007,
+        "120": 0.0
+      }
+    },
+    {
+      "rank": 103,
+      "num": 103,
+      "ui_order": 103,
+      "scenario_id": "trend_breakout_test",
+      "class_name": "AdxMomentumTestStrategy",
+      "label": "Breakout-Retest (test)",
+      "group": "trend_test",
+      "test_group": true,
+      "stoploss": -0.03,
+      "tp": 0.02,
+      "winner_exp": "test_block_xgb_wide",
+      "score_ml_test_pnl": 889.1399,
+      "min_profit_proba": 0.7,
+      "sim_module": "SimTrendStrategies",
+      "minimal_roi": {
+        "0": 0.02,
+        "60": 0.012,
+        "180": 0.008,
+        "480": 0
+      }
+    },
+    {
+      "rank": 104,
+      "num": 104,
+      "ui_order": 104,
+      "scenario_id": "trend_supertrend_test",
+      "class_name": "SupertrendTestStrategy",
+      "label": "Supertrend (ATR) (test)",
+      "group": "trend_test",
+      "test_group": true,
+      "stoploss": -0.03,
+      "tp": 0.012,
+      "winner_exp": "test_block_xgb_wide",
+      "score_ml_test_pnl": 71.5166,
+      "min_profit_proba": 0.7,
+      "sim_module": "SimClassicStrategies",
+      "minimal_roi": {
+        "0": 0.012,
+        "60": 0.008,
+        "180": 0.005,
+        "480": 0.0
+      }
     }
   ],
   "legacy_disabled": [
     "CriptoPairsStrategy"
   ],
-  "note": "num = stable catalog number (never renumber on add/remove). ui_order = UI sort (0 = top). rank kept for pack legacy. Entries 32+ = Jul legacy set re-enabled after april-cut ML retrain."
+  "note": "num = stable catalog number (never renumber on add/remove). ui_order = UI sort (0 = top). rank kept for pack legacy. Entries 32+ = Jul legacy set re-enabled after april-cut ML retrain. nums 101+ = UI test_group (wide XGB); not in main enable-all."
 }

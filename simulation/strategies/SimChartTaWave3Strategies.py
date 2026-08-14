@@ -365,3 +365,49 @@ class AtrChannelBreakoutStrategy(_LiteBase):
         dataframe.loc[dataframe["close"] < dataframe["ema20"], "exit_long"] = 1
         dataframe.loc[dataframe["close"] > dataframe["ema20"], "exit_short"] = 1
         return dataframe
+
+
+class AtrChannelBreakoutTestStrategy(AtrChannelBreakoutStrategy):
+    """ATR-channel test: no chase entries; exit when close loses EMA20 (via router custom_exit)."""
+
+    pair_cooldown_minutes = 180
+    rsi_long_max = 65
+    rsi_short_min = 35
+    range_lookback = 12
+    max_long_range_pos = 0.75
+    min_short_range_pos = 0.25
+
+    def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+        dataframe = super().populate_indicators(dataframe, metadata)
+        dataframe["rsi_14"] = ta.RSI(dataframe, timeperiod=14)
+        hi = dataframe["high"].rolling(self.range_lookback).max()
+        lo = dataframe["low"].rolling(self.range_lookback).min()
+        span = (hi - lo).where((hi - lo) > 0)
+        dataframe["range_pos_1h"] = (dataframe["close"] - lo) / span
+        return dataframe
+
+    def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+        dataframe = super().populate_entry_trend(dataframe, metadata)
+        rsi = dataframe["rsi_14"]
+        pos = dataframe["range_pos_1h"]
+        late_long = (rsi >= self.rsi_long_max) | (pos >= self.max_long_range_pos)
+        late_short = (rsi <= self.rsi_short_min) | (pos <= self.min_short_range_pos)
+        dataframe.loc[late_long, "enter_long"] = 0
+        dataframe.loc[late_short, "enter_short"] = 0
+        return dataframe
+
+    def exit_reason_from_ohlcv(self, dataframe: DataFrame, trade, current_rate: float) -> str | None:
+        if dataframe is None or len(dataframe) < 30:
+            return None
+        df = self.populate_indicators(dataframe.copy(), {"pair": getattr(trade, "pair", "")})
+        last = df.iloc[-1]
+        ema20 = last.get("ema20")
+        close = float(last.get("close") or current_rate or 0)
+        if ema20 is None or close <= 0:
+            return None
+        ema20 = float(ema20)
+        if trade.is_short and close > ema20:
+            return "atr_fail"
+        if (not trade.is_short) and close < ema20:
+            return "atr_fail"
+        return None

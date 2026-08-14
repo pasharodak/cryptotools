@@ -90,6 +90,8 @@ cryptotools/
 - **User** = запись в `user_data/users.json`, секреты `user_data/secrets/{id}.enc`, стек в `user_data/tenants/{id}/`, порты из пула `18100+`, systemd `cryptotools-{strategy,grid,finder}@{id}`.
 - UI логин → `POST /api/pair-config/auth/login` (JWT). Вызовы ботов → `/api/pair-config/bot-proxy/{bot}/...`.
 - Новые users: дефолт `max_open_trades=1` на категорию и Bybit `max_active_bots=1`; потолок как у админа (50 / 5).
+- **Права пользователя** (`allowed_strategies` / `allowed_blocks` в `users.json`): админ в Настройки→Пользователи→«Права». `null` = всё; список = только выбранное. Блоки: `test_strategies`, `strategy`, `grid`, `bybitgrid`, `finder`, `history`, `dashboard`, `rating`.
+- **Войти как** → `POST /auth/impersonate`; возврат → `POST /auth/stop-impersonate` (JWT claim `imp_by`).
 - Sudoers: `deploy/sudoers-cryptotools-tenants`. Master key: `SECRETS_MASTER_KEY` в `.cryptotools.env`.
 
 UI: HTTPS **`:8443`**. Linux user на VPS: `cryptotools`. Секреты: `/home/cryptotools/.cryptotools.env`.
@@ -147,7 +149,7 @@ class FooStrategy(SimLiveCooldownMixin, _Sim):
 3. В `MultiStrategyRouter.py`: `STRATEGY_REGISTRY`, `SCENARIO_BY_TAG`, при необходимости `TAG_RISK`.
 4. Включить в `enabled_strategies.json` + `_sim_map`; зеркало в `bot_strategies.json`.
 5. Обновить `simulation/scripts/apply_prod_ml_config.py` (`_strategy_config`) и `simulation/config/prod_ml_bots.json` (`enabled_scenarios`), иначе следующий деплой **сотрёт** флаги.
-6. Каталог UI: `AVAILABLE_STRATEGIES` в `pair_config_server.py` — поля **`id`** (стабильный class/`enter_tag`), **`num`** (номер, не менять при add/remove), **`ui_order`** (сортировка в UI), **`name`** (без `#N` в строке). Не удалять id из каталога — только `enabled=false`, иначе пропадут лейблы в истории/статах (сделки в БД остаются).
+6. Каталог UI: `AVAILABLE_STRATEGIES` в `pair_config_server.py` — поля **`id`** (стабильный class/`enter_tag`), **`num`** (номер, не менять при add/remove), **`ui_order`** (сортировка в UI), **`name`** (без `#N` в строке), опционально **`test_group: true`** (блок «Тестовые стратегии» **сверху** панели, отдельно от основных; те же тумблеры, тот же router). Не удалять id из каталога — только `enabled=false`, иначе пропадут лейблы в истории/статах (сделки в БД остаются).
 7. `deploy_prod_ml.ps1` — добавить scp модели `by_scenario/{scenario_id}` в список.
 8. Залить `simulation/strategies` (деплой уже копирует папку).
 
@@ -174,6 +176,16 @@ UI: `#num` стабильный; сверху по `ui_order=0` — **`AltVolume
 - #38 `LiteIntradayStrategy` (`lite_intraday`) — 19 · 45%
 - #39 `FibPullbackStrategy` (`trend_fib`) — 15 · 45%
 - … полный top-31 см. `simulation/config/prod_top30_pack.json`
+
+UI **«Тестовые стратегии»** (`test_group`, nums 101+; **первый** блок панели; отдельные `enter_tag` / scenario, не live #1/#2/#32/#35):
+- #101 `PsaraFlipTestStrategy` (`new_psar_test`)
+- #102 `AtrChannelBreakoutTestStrategy` (`chart3_atrch_test`)
+- #103 `AdxMomentumTestStrategy` (`trend_breakout_test`)
+- #104 `SupertrendTestStrategy` (`trend_supertrend_test`) — 1x · SL −3% · без chase · выход `st_flip`
+
+Порядок панели: Тестовые → Стратегии → Grid → Bybit Grid → ML Finder (внизу, обычно disabled).
+
+Тестовый блок имеет **свои** настройки (`user_data/test_strategy_settings.json`, без рестарта): max open / на одну / stake / fallback SL·TP. Роутер режет входы тестовых тегов по этим лимитам; stake через `custom_stake_amount`.
 
 ML gate (strategy bots): `profit_only`, floor `min_confidence` **0.45**; per-scenario порог из `pnl_classifier_meta.json` (`min_profit_proba`).
 PnL classifiers: **sigmoid** calibration (smooth confidence %); isotonic historically collapsed live scores to 0%/100%.

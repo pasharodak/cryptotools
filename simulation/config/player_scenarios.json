@@ -226,6 +226,25 @@
         "settings": "Supertrend flip · RSI 45/55 · ATR×3 · 3x · prod ML gate"
     },
     {
+        "id": "trend_supertrend_test",
+        "label": "Supertrend (ATR) (test)",
+        "enabled": false,
+        "strategy": "SimSupertrendTest",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_lite_base.json",
+        "scan_type": "strategy",
+        "group": "trend_test",
+        "stake_usdt": 15,
+        "stoploss": -0.03,
+        "minimal_roi": {
+            "0": 0.012,
+            "60": 0.008,
+            "180": 0.005,
+            "480": 0.0
+        },
+        "settings": "Тест · Supertrend flip · без chase RSI/1h · 1x · SL −3% · TP 1.2% · выход st_flip"
+    },
+    {
         "id": "trend_macd_ema",
         "label": "MACD + EMA200 (ML Gate)",
         "enabled": true,
@@ -423,11 +442,12 @@
         "stake_usdt": 15,
         "stoploss": -0.02,
         "minimal_roi": {
-            "0": 0.014,
-            "50": 0.007,
-            "150": 0
+            "0": 0.022,
+            "120": 0.012,
+            "360": 0.006,
+            "720": 0
         },
-        "settings": "PSAR · SL −2% · TP 1.4%"
+        "settings": "PSAR · SL −2% · TP 2.2%"
     },
     {
         "id": "chart_willr",

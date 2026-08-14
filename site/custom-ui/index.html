@@ -8,16 +8,18 @@
   <title>CriptoTools — панель управления</title>
   <link rel="icon" type="image/png" href="bitcoin-icon.png?v=20260801" />
   <link rel="apple-touch-icon" href="bitcoin-icon.png?v=20260801" />
-  <link rel="stylesheet" href="styles.css?v=20260809f" />
+  <link rel="stylesheet" href="styles.css?v=20260815d" />
 </head>
 <body>
   <div id="login-screen" class="screen">
     <div class="login-card">
       <div class="brand-title">
-        <img class="brand-icon" src="bitcoin-icon.png?v=20260801" alt="" width="40" height="40" />
+        <span class="brand-mark" aria-hidden="true">
+          <img class="brand-icon" src="bitcoin-icon.png?v=20260801" alt="" width="40" height="40" />
+        </span>
         <h1>CriptoTools</h1>
       </div>
-      <p class="muted">Grid и стратегии с ML-фильтром · ML Finder · Bybit Grid</p>
+      <p class="muted">Тестовые и основные стратегии · Grid · Bybit Grid</p>
       <label>Логин<input id="login-user" type="text" autocomplete="username" /></label>
       <label>Пароль<input id="login-pass" type="password" autocomplete="current-password" /></label>
       <button id="login-btn" class="btn primary">Войти</button>
@@ -29,14 +31,22 @@
     <div id="secrets-banner" class="secrets-banner hidden" role="status">
       Добавьте ключи Bybit в Настройках — без них боты пользователя не запустятся.
     </div>
+    <div id="impersonate-banner" class="impersonate-banner hidden" role="status">
+      <span id="impersonate-banner-text">Вы вошли под пользователем</span>
+      <button type="button" class="btn btn-sm primary" id="impersonate-return-btn">Вернуться в админ</button>
+    </div>
     <header class="topbar" id="topbar">
       <div class="topbar-head">
         <div class="topbar-brand">
           <button type="button" class="brand-title brand-home-btn" id="brand-home-btn" title="На главную">
-            <img class="brand-icon" src="bitcoin-icon.png?v=20260801" alt="" width="32" height="32" />
-            <h1>CriptoTools</h1>
+            <span class="brand-mark" aria-hidden="true">
+              <img class="brand-icon" src="bitcoin-icon.png?v=20260801" alt="" width="32" height="32" />
+            </span>
+            <span class="brand-copy">
+              <h1>CriptoTools</h1>
+              <p class="muted topbar-sub" id="max-trades-hint">Стратегии · Grid · Bybit Grid · ML gate</p>
+            </span>
           </button>
-          <p class="muted topbar-sub" id="max-trades-hint">Стратегии — 2, Grid — 1, Bybit Grid — 1 · ML gate на FT-ботах</p>
         </div>
         <button
           type="button"
@@ -52,55 +62,71 @@
         </button>
       </div>
       <nav class="topbar-menu" id="topbar-menu">
-        <div id="trades-summary" class="trades-summary" aria-live="polite">—</div>
-        <p class="muted menu-desc">Настройки пар, статистика, обновление</p>
+        <p class="muted menu-desc">Аналитика, справка и настройки панели</p>
         <div class="topbar-actions">
           <div class="toolbar-row toolbar-main">
-            <button id="stats-btn" class="btn btn-icon-text" type="button">
-              <span class="lbl-full">Статистика</span>
-              <span class="lbl-short">📊</span>
-            </button>
-            <button id="pnl-dashboard-btn" class="btn btn-icon-text" type="button">
-              <span class="lbl-full">Дашборд</span>
-              <span class="lbl-short">📈</span>
-            </button>
-            <button id="rating-btn" class="btn btn-icon-text" type="button">
-              <span class="lbl-full">Рейтинг</span>
-              <span class="lbl-short">🏆</span>
-            </button>
-            <button id="history-btn" class="btn btn-icon-text" type="button">
-              <span class="lbl-full">История</span>
-              <span class="lbl-short">📜</span>
-            </button>
-            <button id="info-btn" class="btn btn-icon-text" type="button">
-              <span class="lbl-full">Инфо</span>
-              <span class="lbl-short">ℹ</span>
-            </button>
-            <button id="guide-btn" class="btn btn-icon-text" type="button">
-              <span class="lbl-full">Инструкция</span>
-              <span class="lbl-short">📖</span>
-            </button>
-            <button id="changelog-btn" class="btn btn-icon-text" type="button">
-              <span class="lbl-full">Изменения</span>
-              <span class="lbl-short">📝</span>
-            </button>
-            <button id="logs-btn" class="btn btn-icon-text" type="button">
-              <span class="lbl-full">Логи</span>
-              <span class="lbl-short">📋</span>
-            </button>
-            <button id="settings-btn" class="btn btn-icon-text" type="button">
-              <span class="lbl-full">Настройки</span>
-              <span class="lbl-short">⚙</span>
-            </button>
-            <button id="refresh-btn" class="btn btn-icon-text" type="button">
-              <span class="lbl-full">Обновить</span>
-              <span class="lbl-short">↻ Обновить</span>
-            </button>
+            <div class="nav-group" role="group" aria-label="Аналитика">
+              <button id="stats-btn" class="btn btn-nav" type="button" title="Статистика">
+                <span class="nav-glyph" aria-hidden="true">◈</span>
+                <span class="lbl-full">Статистика</span>
+                <span class="lbl-short">Стат</span>
+              </button>
+              <button id="pnl-dashboard-btn" class="btn btn-nav" type="button" data-block="dashboard" title="Дашборд PnL">
+                <span class="nav-glyph" aria-hidden="true">◎</span>
+                <span class="lbl-full">Дашборд</span>
+                <span class="lbl-short">PnL</span>
+              </button>
+              <button id="rating-btn" class="btn btn-nav" type="button" data-block="rating" title="Рейтинг">
+                <span class="nav-glyph" aria-hidden="true">★</span>
+                <span class="lbl-full">Рейтинг</span>
+                <span class="lbl-short">Топ</span>
+              </button>
+              <button id="history-btn" class="btn btn-nav" type="button" data-block="history" title="История сделок">
+                <span class="nav-glyph" aria-hidden="true">☰</span>
+                <span class="lbl-full">История</span>
+                <span class="lbl-short">Ист</span>
+              </button>
+            </div>
+            <div class="nav-group" role="group" aria-label="Справка">
+              <button id="info-btn" class="btn btn-nav" type="button" title="Инфо по стратегиям">
+                <span class="nav-glyph" aria-hidden="true">ⓘ</span>
+                <span class="lbl-full">Инфо</span>
+                <span class="lbl-short">Инфо</span>
+              </button>
+              <button id="guide-btn" class="btn btn-nav" type="button" title="Инструкция">
+                <span class="nav-glyph" aria-hidden="true">▸</span>
+                <span class="lbl-full">Инструкция</span>
+                <span class="lbl-short">Гайд</span>
+              </button>
+              <button id="changelog-btn" class="btn btn-nav" type="button" title="Изменения">
+                <span class="nav-glyph" aria-hidden="true">±</span>
+                <span class="lbl-full">Изменения</span>
+                <span class="lbl-short">Чендж</span>
+              </button>
+            </div>
+            <div class="nav-group nav-group-system" role="group" aria-label="Система">
+              <button id="logs-btn" class="btn btn-nav" type="button" title="Логи">
+                <span class="nav-glyph" aria-hidden="true">≡</span>
+                <span class="lbl-full">Логи</span>
+                <span class="lbl-short">Логи</span>
+              </button>
+              <button id="settings-btn" class="btn btn-nav" type="button" title="Настройки">
+                <span class="nav-glyph" aria-hidden="true">⚙</span>
+                <span class="lbl-full">Настройки</span>
+                <span class="lbl-short">Настр</span>
+              </button>
+              <button id="refresh-btn" class="btn btn-nav btn-nav-accent" type="button" title="Обновить">
+                <span class="nav-glyph" aria-hidden="true">↻</span>
+                <span class="lbl-full">Обновить</span>
+                <span class="lbl-short">↻</span>
+              </button>
+            </div>
           </div>
           <div class="toolbar-row toolbar-meta">
+            <div id="trades-summary" class="trades-summary" aria-live="polite">—</div>
             <span id="server-status" class="server-status muted" aria-live="polite" title="Загрузка сервера">—</span>
             <span id="last-update" class="muted last-update"></span>
-            <button id="logout-btn" class="btn ghost" type="button">Выйти</button>
+            <button id="logout-btn" class="btn btn-sm btn-logout" type="button">Выйти</button>
           </div>
         </div>
       </nav>
@@ -110,39 +136,78 @@
 
     <div id="dashboard-view">
     <main class="grid-4">
-      <section class="panel panel-finder" id="panel-finder">
+      <section class="panel panel-test-strategies" id="panel-test-strategies" data-block="test_strategies">
         <div class="panel-head">
-          <h2>ML Finder</h2>
+          <div class="panel-title">
+            <h2>Тестовые стратегии</h2>
+            <p class="muted" id="test-strategy-active-name">—</p>
+          </div>
           <div class="panel-head-actions">
-            <button type="button" class="btn ghost btn-sm panel-stats-btn" data-stats-scope="finder">Статистика</button>
-            <span class="badge" id="finder-state" title="XGBoost scanner + pnl classifier gate">—</span>
+            <button type="button" class="btn ghost btn-sm panel-stats-btn" data-stats-scope="test_strategy">Статистика</button>
+            <span class="badge" id="test-strategy-state">—</span>
           </div>
         </div>
-        <p class="panel-retired-note">TradeFinderStrategy — сканирует рынок (scan_stride), ATR SL/TP. На входе — pnl classifier gate <strong>profit ≥60%</strong>.</p>
-        <div class="stats" id="finder-stats"></div>
-        <div class="actions" id="finder-actions"></div>
-        <h3>Открытые сделки</h3>
-        <div class="trades-list" id="finder-trades"></div>
-        <div class="collapsible-section is-collapsed pairs-collapsible" id="finder-pairs-section">
+        <p class="ml-gate-badge" id="test-strategy-ml-gate">ML gate · wide XGB+sigmoid · scenarios *_test · отдельные модели от продакшена</p>
+        <p class="muted panel-note test-strategy-isolate-note">Отдельные лимиты / stake / SL·TP только для тестовых (файл test_strategy_settings). Не трогают основные стратегии. Слоты бота (max_open_trades) — общие.</p>
+        <div id="test-strategy-risk-panel" class="strategy-risk-bar"></div>
+        <div class="stats" id="test-strategy-stats"></div>
+        <div class="collapsible-section is-collapsed" id="test-strategy-panel-section">
           <button
             type="button"
             class="collapsible-toggle"
-            id="finder-pairs-toggle"
+            id="test-strategy-panel-toggle"
             data-collapsible-toggle
             aria-expanded="false"
-            aria-controls="finder-pairs-body"
+            aria-controls="test-strategy-panel-body"
           >
-            <span class="collapsible-title">Белый список</span>
-            <span class="collapsible-sub muted" id="finder-pairs-summary">—</span>
+            <span class="collapsible-title">Тестовые стратегии</span>
+            <span class="collapsible-sub muted" id="test-strategy-panel-summary">—</span>
             <span class="collapsible-chevron" aria-hidden="true">▸</span>
           </button>
-          <div class="collapsible-body" id="finder-pairs-body">
-            <p class="pairs" id="finder-pairs"></p>
+          <div class="collapsible-body" id="test-strategy-panel-body">
+            <p class="muted panel-note">Новые модели (wide XGB): #101–104. Сигналы как у прод-оригиналов, но свой ML gate. Прод-набор — в блоке ниже.</p>
+            <div id="test-strategy-enable-bulk" class="strategy-enable-bulk"></div>
+            <div id="test-strategy-ml-conf-bulk" class="strategy-ml-conf-bulk"></div>
+            <ul id="test-strategy-panel-toggles" class="strategy-toggle-list"></ul>
+          </div>
+        </div>
+        <div class="collapsible-section is-collapsed trades-collapsible" id="test-strategy-trades-section">
+          <button
+            type="button"
+            class="collapsible-toggle"
+            id="test-strategy-trades-toggle"
+            data-collapsible-toggle
+            aria-expanded="false"
+            aria-controls="test-strategy-trades-body"
+          >
+            <span class="collapsible-title">Открытые сделки</span>
+            <span class="collapsible-sub muted" id="test-strategy-trades-summary">—</span>
+            <span class="collapsible-chevron" aria-hidden="true">▸</span>
+          </button>
+          <div class="collapsible-body" id="test-strategy-trades-body">
+            <div class="trades-list" id="test-strategy-trades"></div>
+          </div>
+        </div>
+        <div class="collapsible-section is-collapsed pairs-collapsible" id="test-strategy-pairs-section">
+          <button
+            type="button"
+            class="collapsible-toggle"
+            id="test-strategy-pairs-toggle"
+            data-collapsible-toggle
+            aria-expanded="false"
+            aria-controls="test-strategy-pairs-body"
+          >
+            <span class="collapsible-title">Белый список</span>
+            <span class="collapsible-sub muted" id="test-strategy-pairs-summary">—</span>
+            <span class="collapsible-chevron" aria-hidden="true">▸</span>
+          </button>
+          <div class="collapsible-body" id="test-strategy-pairs-body">
+            <p class="pairs" id="test-strategy-pairs"></p>
           </div>
         </div>
       </section>
 
-      <section class="panel panel-strategy" id="panel-strategy">
+      <section class="panel panel-strategy" id="panel-strategy" data-block="strategy">
         <div class="panel-head">
           <div class="panel-title">
             <h2>Стратегии + ML gate</h2>
@@ -179,8 +244,23 @@
             <ul id="strategy-panel-toggles" class="strategy-toggle-list"></ul>
           </div>
         </div>
-        <h3>Открытые сделки</h3>
-        <div class="trades-list" id="strategy-trades"></div>
+        <div class="collapsible-section is-collapsed trades-collapsible" id="strategy-trades-section">
+          <button
+            type="button"
+            class="collapsible-toggle"
+            id="strategy-trades-toggle"
+            data-collapsible-toggle
+            aria-expanded="false"
+            aria-controls="strategy-trades-body"
+          >
+            <span class="collapsible-title">Открытые сделки</span>
+            <span class="collapsible-sub muted" id="strategy-trades-summary">—</span>
+            <span class="collapsible-chevron" aria-hidden="true">▸</span>
+          </button>
+          <div class="collapsible-body" id="strategy-trades-body">
+            <div class="trades-list" id="strategy-trades"></div>
+          </div>
+        </div>
         <div class="collapsible-section is-collapsed pairs-collapsible" id="strategy-pairs-section">
           <button
             type="button"
@@ -200,7 +280,7 @@
         </div>
       </section>
 
-      <section class="panel panel-grid" id="panel-grid">
+      <section class="panel panel-grid" id="panel-grid" data-block="grid">
         <div class="panel-head">
           <div class="panel-title">
             <h2>Grid (волатильность) + ML gate</h2>
@@ -215,8 +295,23 @@
         <div class="stats" id="grid-stats"></div>
         <div class="actions" id="grid-actions"></div>
         <p class="muted grid-scan-info" id="grid-scan-info">Скан боковика: —</p>
-        <h3>Открытые сделки</h3>
-        <div class="trades-list" id="grid-trades"></div>
+        <div class="collapsible-section is-collapsed trades-collapsible" id="grid-trades-section">
+          <button
+            type="button"
+            class="collapsible-toggle"
+            id="grid-trades-toggle"
+            data-collapsible-toggle
+            aria-expanded="false"
+            aria-controls="grid-trades-body"
+          >
+            <span class="collapsible-title">Открытые сделки</span>
+            <span class="collapsible-sub muted" id="grid-trades-summary">—</span>
+            <span class="collapsible-chevron" aria-hidden="true">▸</span>
+          </button>
+          <div class="collapsible-body" id="grid-trades-body">
+            <div class="trades-list" id="grid-trades"></div>
+          </div>
+        </div>
         <div class="collapsible-section is-collapsed pairs-collapsible" id="grid-pairs-section">
           <button
             type="button"
@@ -236,7 +331,7 @@
         </div>
       </section>
 
-      <section class="panel panel-bybitgrid" id="panel-bybitgrid">
+      <section class="panel panel-bybitgrid" id="panel-bybitgrid" data-block="bybitgrid">
         <div class="panel-head">
           <div class="panel-title">
             <h2>Bybit Grid</h2>
@@ -251,8 +346,23 @@
         <div class="actions" id="bybitgrid-actions"></div>
         <div id="bybitgrid-settings" class="bybitgrid-settings"></div>
         <p class="muted bybitgrid-hint" id="bybitgrid-hint">Нативные grid-боты Bybit (отдельно от Grid-бота)</p>
-        <h3>Активные grid-боты</h3>
-        <div class="trades-list" id="bybitgrid-bots"></div>
+        <div class="collapsible-section is-collapsed trades-collapsible" id="bybitgrid-bots-section">
+          <button
+            type="button"
+            class="collapsible-toggle"
+            id="bybitgrid-bots-toggle"
+            data-collapsible-toggle
+            aria-expanded="false"
+            aria-controls="bybitgrid-bots-body"
+          >
+            <span class="collapsible-title">Активные grid-боты</span>
+            <span class="collapsible-sub muted" id="bybitgrid-bots-summary">—</span>
+            <span class="collapsible-chevron" aria-hidden="true">▸</span>
+          </button>
+          <div class="collapsible-body" id="bybitgrid-bots-body">
+            <div class="trades-list" id="bybitgrid-bots"></div>
+          </div>
+        </div>
         <div class="stats-history-section bybitgrid-history-section">
           <button type="button" class="btn ghost btn-sm stats-history-toggle" id="bybitgrid-history-toggle" aria-expanded="false">
             История <span id="bybitgrid-history-count" class="muted"></span>
@@ -265,6 +375,53 @@
         </div>
         <h3>Параметры по умолчанию</h3>
         <p class="pairs" id="bybitgrid-defaults"></p>
+      </section>
+
+      <section class="panel panel-finder panel-finder-retired" id="panel-finder" data-block="finder">
+        <div class="panel-head">
+          <h2>ML Finder</h2>
+          <div class="panel-head-actions">
+            <button type="button" class="btn ghost btn-sm panel-stats-btn" data-stats-scope="finder">Статистика</button>
+            <span class="badge" id="finder-state" title="XGBoost scanner + pnl classifier gate">—</span>
+          </div>
+        </div>
+        <p class="panel-retired-note">Пока отключён на сервере. TradeFinderStrategy — сканер рынка + pnl gate. Не влияет на стратегии и Grid.</p>
+        <div class="stats" id="finder-stats"></div>
+        <div class="actions" id="finder-actions"></div>
+        <div class="collapsible-section is-collapsed trades-collapsible" id="finder-trades-section">
+          <button
+            type="button"
+            class="collapsible-toggle"
+            id="finder-trades-toggle"
+            data-collapsible-toggle
+            aria-expanded="false"
+            aria-controls="finder-trades-body"
+          >
+            <span class="collapsible-title">Открытые сделки</span>
+            <span class="collapsible-sub muted" id="finder-trades-summary">—</span>
+            <span class="collapsible-chevron" aria-hidden="true">▸</span>
+          </button>
+          <div class="collapsible-body" id="finder-trades-body">
+            <div class="trades-list" id="finder-trades"></div>
+          </div>
+        </div>
+        <div class="collapsible-section is-collapsed pairs-collapsible" id="finder-pairs-section">
+          <button
+            type="button"
+            class="collapsible-toggle"
+            id="finder-pairs-toggle"
+            data-collapsible-toggle
+            aria-expanded="false"
+            aria-controls="finder-pairs-body"
+          >
+            <span class="collapsible-title">Белый список</span>
+            <span class="collapsible-sub muted" id="finder-pairs-summary">—</span>
+            <span class="collapsible-chevron" aria-hidden="true">▸</span>
+          </button>
+          <div class="collapsible-body" id="finder-pairs-body">
+            <p class="pairs" id="finder-pairs"></p>
+          </div>
+        </div>
       </section>
     </main>
     </div>
@@ -326,6 +483,7 @@
             <button type="button" class="btn btn-sm pnl-dash-scope is-active" data-pnl-dash-scope="all">Все</button>
             <button type="button" class="btn btn-sm pnl-dash-scope" data-pnl-dash-scope="finder">ML Finder</button>
             <button type="button" class="btn btn-sm pnl-dash-scope" data-pnl-dash-scope="strategy">Стратегии</button>
+            <button type="button" class="btn btn-sm pnl-dash-scope" data-pnl-dash-scope="test_strategy">Тестовые</button>
             <button type="button" class="btn btn-sm pnl-dash-scope" data-pnl-dash-scope="grid">Grid</button>
             <button type="button" class="btn btn-sm pnl-dash-scope" data-pnl-dash-scope="bybitgrid">Bybit Grid</button>
           </div>
@@ -449,6 +607,7 @@
             <button type="button" class="btn btn-sm history-filter is-active" data-history-scope="all">Все</button>
             <button type="button" class="btn btn-sm history-filter" data-history-scope="finder">ML Finder</button>
             <button type="button" class="btn btn-sm history-filter" data-history-scope="strategy">Стратегии</button>
+            <button type="button" class="btn btn-sm history-filter" data-history-scope="test_strategy">Тестовые</button>
             <button type="button" class="btn btn-sm history-filter" data-history-scope="grid">Grid</button>
             <button type="button" class="btn btn-sm history-filter" data-history-scope="bybitgrid">Bybit Grid</button>
           </div>
@@ -551,20 +710,9 @@
           <p id="secrets-msg" class="pair-msg hidden"></p>
         </div>
 
-        <div class="settings-section settings-max-trades">
-          <h3>Лимиты ботов</h3>
-          <p class="muted modal-note">Макс. сделок и stake сохраняются в config и применяются через reload. <strong>0</strong> активных = бот останавливается и не торгует. У новых пользователей старт — 1 на категорию.</p>
-          <div id="finder-max-trades" class="max-trades-row"></div>
-          <div id="strategy-max-trades" class="max-trades-row"></div>
-          <div id="strategy-max-per-strategy" class="max-trades-row"></div>
-          <div id="strategy-stake" class="max-trades-row"></div>
-          <div id="grid-max-trades" class="max-trades-row"></div>
-          <div id="grid-stake" class="max-trades-row"></div>
-        </div>
-
         <div class="settings-section">
           <h3>Торговые пары</h3>
-          <p class="muted modal-note">Добавление пар вручную — для ML Finder (whitelist в config.json). Grid и Стратегии — сканер + ML gate.</p>
+          <p class="muted modal-note">Добавление пар вручную — для ML Finder (whitelist в config.json). Grid и Стратегии — сканер + ML gate. Лимиты / stake / стратегии — на карточках панели.</p>
           <div class="settings-add">
             <input id="pair-input" type="text" placeholder="Например: BTC/USDT:USDT" />
             <button id="pair-add-btn" class="btn primary" type="button">Добавить</button>
@@ -594,7 +742,7 @@
 
         <div class="settings-section hidden" data-admin-only>
           <h3>Пользователи</h3>
-          <p class="muted modal-note">Создание изолированных аккаунтов: свои ключи Bybit, свои боты, старт с 1 слотом на категорию.</p>
+          <p class="muted modal-note">Создание изолированных аккаунтов: свои ключи Bybit, свои боты, старт с 1 слотом на категорию. Права — списки блоков и стратегий; «Войти как» — сессия пользователя с возвратом.</p>
           <div class="settings-add users-create-form">
             <input id="users-new-name" type="text" placeholder="Логин" autocomplete="off" />
             <input id="users-new-pass" type="password" placeholder="Пароль" autocomplete="new-password" />
@@ -603,18 +751,42 @@
           <p id="users-msg" class="pair-msg hidden"></p>
           <ul id="users-list" class="users-list"></ul>
         </div>
+      </div>
+    </div>
 
-        <div class="settings-section settings-strategy">
-          <h3>Стратегии бота</h3>
-          <p class="muted modal-note">
-            Стратегии с ML gate (profit ≥60%). Включите нужные — бот откроет сделку по сигналу
-            <strong>любой</strong> активной. Supertrend / MACD / Fib — своя ML-модель (ML Gate).
-          </p>
-          <div id="strategy-enable-bulk-settings" class="strategy-enable-bulk"></div>
-          <div id="strategy-ml-conf-bulk-settings" class="strategy-ml-conf-bulk"></div>
-          <ul id="strategy-toggle-list" class="strategy-toggle-list"></ul>
-          <p id="strategy-enabled-hint" class="muted strategy-desc"></p>
-          <div id="strategy-risk-settings" class="strategy-risk-row max-trades-row"></div>
+    <div id="user-perms-modal" class="modal hidden" aria-hidden="true">
+      <div class="modal-backdrop" data-close="user-perms"></div>
+      <div class="modal-card modal-card-wide user-perms-card">
+        <div class="modal-head">
+          <h2 id="user-perms-title">Права пользователя</h2>
+          <button class="btn ghost btn-sm" id="user-perms-close" type="button">✕</button>
+        </div>
+        <p class="muted modal-note">Пустой список = ничего не доступно. «Все» снимает ограничение (полный доступ). Сохранение выключает у пользователя стратегии вне списка.</p>
+        <input type="hidden" id="user-perms-id" value="" />
+        <div class="user-perms-section">
+          <div class="user-perms-head">
+            <h3>Блоки панели</h3>
+            <div class="user-perms-quick">
+              <button type="button" class="btn btn-sm ghost" id="user-perms-blocks-all">Все</button>
+              <button type="button" class="btn btn-sm ghost" id="user-perms-blocks-none">Снять</button>
+            </div>
+          </div>
+          <div id="user-perms-blocks" class="user-perms-grid"></div>
+        </div>
+        <div class="user-perms-section">
+          <div class="user-perms-head">
+            <h3>Стратегии</h3>
+            <div class="user-perms-quick">
+              <button type="button" class="btn btn-sm ghost" id="user-perms-strats-all">Все</button>
+              <button type="button" class="btn btn-sm ghost" id="user-perms-strats-none">Снять</button>
+            </div>
+          </div>
+          <div id="user-perms-strategies" class="user-perms-grid user-perms-strategies"></div>
+        </div>
+        <p id="user-perms-msg" class="pair-msg hidden"></p>
+        <div class="modal-actions">
+          <button type="button" class="btn ghost" id="user-perms-cancel">Отмена</button>
+          <button type="button" class="btn primary" id="user-perms-save">Сохранить</button>
         </div>
       </div>
     </div>
@@ -916,6 +1088,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=20260809f"></script>
+  <script src="app.js?v=20260815d"></script>
 </body>
 </html>

@@ -22,9 +22,11 @@ from ctengine.strategy import IStrategy
 from AdxDiCrossStrategy import AdxDiCrossStrategy
 from AdxMacdVolComboStrategy import AdxMacdVolComboStrategy
 from AdxMomentumStrategy import AdxMomentumStrategy
+from AdxMomentumTestStrategy import AdxMomentumTestStrategy
 from AltVolumeBreakoutStrategy import AltVolumeBreakoutStrategy
 from AroonCrossStrategy import AroonCrossStrategy
 from AtrChannelBreakoutStrategy import AtrChannelBreakoutStrategy
+from AtrChannelBreakoutTestStrategy import AtrChannelBreakoutTestStrategy
 from AwesomeOscStrategy import AwesomeOscStrategy
 from BbSqueezeBreakoutStrategy import BbSqueezeBreakoutStrategy
 from BollingerRsiStrategy import BollingerRsiStrategy
@@ -49,11 +51,13 @@ from MfiReclaimStrategy import MfiReclaimStrategy
 from ObvEmaCrossStrategy import ObvEmaCrossStrategy
 from PpoSignalStrategy import PpoSignalStrategy
 from PsaraFlipStrategy import PsaraFlipStrategy
+from PsaraFlipTestStrategy import PsaraFlipTestStrategy
 from RocMomentumStrategy import RocMomentumStrategy
 from ScalpEmaCrossStrategy import ScalpEmaCrossStrategy
 from ScalpMacdHistStrategy import ScalpMacdHistStrategy
 from SupertrendRsiObvComboStrategy import SupertrendRsiObvComboStrategy
 from SupertrendStrategy import SupertrendStrategy
+from SupertrendTestStrategy import SupertrendTestStrategy
 from TemaCrossStrategy import TemaCrossStrategy
 from TripleEmaStrategy import TripleEmaStrategy
 from TrixSignalStrategy import TrixSignalStrategy
@@ -85,22 +89,49 @@ MAX_PER_STRATEGY_FILE = Path(
         str(_USER_DATA_DIR / "max_open_trades_per_strategy.json"),
     )
 )
+TEST_SETTINGS_FILE = Path(
+    os.environ.get(
+        "CT_TEST_STRATEGY_SETTINGS",
+        str(_USER_DATA_DIR / "test_strategy_settings.json"),
+    )
+)
 HEDGE_TAG_SUFFIX = ":hedge"
 INV_TAG_SUFFIX = ":inv"
+
+DEFAULT_TEST_SETTINGS: dict = {
+    "max_open_trades": 3,
+    "max_open_trades_per_strategy": 0,
+    "stake_amount": 5.0,
+    "stoploss": -0.03,
+    "take_profit": 0.012,
+}
+
+TEST_STRATEGY_TAGS = frozenset(
+    {
+        "PsaraFlipTestStrategy",
+        "AtrChannelBreakoutTestStrategy",
+        "AdxMomentumTestStrategy",
+        "SupertrendTestStrategy",
+    }
+)
 
 STRATEGY_REGISTRY: dict[str, type[IStrategy]] = {
     "CriptoPairsStrategy": CriptoPairsStrategy,
     "SupertrendStrategy": SupertrendStrategy,
+    "SupertrendTestStrategy": SupertrendTestStrategy,
     "MacdEmaStrategy": MacdEmaStrategy,
     "FibPullbackStrategy": FibPullbackStrategy,
     "TripleEmaStrategy": TripleEmaStrategy,
     "BollingerRsiStrategy": BollingerRsiStrategy,
     "AdxMomentumStrategy": AdxMomentumStrategy,
+    "AdxMomentumTestStrategy": AdxMomentumTestStrategy,
     "LiteIntradayStrategy": LiteIntradayStrategy,
     "LiteRangeStrategy": LiteRangeStrategy,
     "AltVolumeBreakoutStrategy": AltVolumeBreakoutStrategy,
     "PsaraFlipStrategy": PsaraFlipStrategy,
+    "PsaraFlipTestStrategy": PsaraFlipTestStrategy,
     "AtrChannelBreakoutStrategy": AtrChannelBreakoutStrategy,
+    "AtrChannelBreakoutTestStrategy": AtrChannelBreakoutTestStrategy,
     "CmfZeroCrossStrategy": CmfZeroCrossStrategy,
     "ScalpEmaCrossStrategy": ScalpEmaCrossStrategy,
     "ChaikinOscStrategy": ChaikinOscStrategy,
@@ -138,8 +169,22 @@ TAG_RISK: dict[str, dict] = {
         "tp": 0.012,
         "minimal_roi": {"0": 0.012, "25": 0.006, "75": 0.0},
     },
-    "PsaraFlipStrategy": {"stoploss": -0.02, "tp": 0.014, "minimal_roi": {"0": 0.014, "50": 0.007, "150": 0.0}},
+    "PsaraFlipStrategy": {
+        "stoploss": -0.02,
+        "tp": 0.022,
+        "minimal_roi": {"0": 0.022, "120": 0.012, "360": 0.006, "720": 0.0},
+    },
+    "PsaraFlipTestStrategy": {
+        "stoploss": -0.02,
+        "tp": 0.012,
+        "minimal_roi": {"0": 0.012, "45": 0.008, "120": 0.005, "360": 0.0},
+    },
     "AtrChannelBreakoutStrategy": {"stoploss": -0.02, "tp": 0.014, "minimal_roi": {"0": 0.014, "60": 0.007, "180": 0.0}},
+    "AtrChannelBreakoutTestStrategy": {
+        "stoploss": -0.02,
+        "tp": 0.012,
+        "minimal_roi": {"0": 0.012, "45": 0.007, "120": 0.0},
+    },
     "CmfZeroCrossStrategy": {"stoploss": -0.017, "tp": 0.011, "minimal_roi": {"0": 0.011, "45": 0.0055, "130": 0.0}},
     "ScalpEmaCrossStrategy": {"stoploss": -0.01, "tp": 0.008, "minimal_roi": {"0": 0.008, "20": 0.004, "60": 0.0}},
     "ChaikinOscStrategy": {"stoploss": -0.017, "tp": 0.011, "minimal_roi": {"0": 0.011, "45": 0.0055, "130": 0.0}},
@@ -174,6 +219,11 @@ TAG_RISK: dict[str, dict] = {
         "tp": 0.03,
         "minimal_roi": {"0": 0.03, "180": 0.015, "480": 0.008, "960": 0},
     },
+    "AdxMomentumTestStrategy": {
+        "stoploss": -0.03,
+        "tp": 0.02,
+        "minimal_roi": {"0": 0.02, "60": 0.012, "180": 0.008, "480": 0},
+    },
     "BollingerRsiStrategy": {
         "stoploss": -0.02,
         "tp": 0.025,
@@ -188,6 +238,11 @@ TAG_RISK: dict[str, dict] = {
         "stoploss": -0.025,
         "tp": 0.03,
         "minimal_roi": {"0": 0.03, "120": 0.015, "360": 0.008, "720": 0},
+    },
+    "SupertrendTestStrategy": {
+        "stoploss": -0.03,
+        "tp": 0.012,
+        "minimal_roi": {"0": 0.012, "60": 0.008, "180": 0.005, "480": 0.0},
     },
     "TripleEmaStrategy": {
         "stoploss": -0.025,
@@ -235,6 +290,13 @@ SCENARIO_BY_TAG: dict[str, dict[str, str]] = {
         "strategy": "AdxMomentumStrategy",
         "label": "Breakout-Retest",
     },
+    "AdxMomentumTestStrategy": {
+        "scenario_id": "trend_breakout_test",
+        "scan_type": "strategy",
+        "group": "trend_test",
+        "strategy": "AdxMomentumTestStrategy",
+        "label": "Breakout-Retest (test wide)",
+    },
     "LiteIntradayStrategy": {
         "scenario_id": "lite_intraday",
         "scan_type": "strategy",
@@ -255,6 +317,13 @@ SCENARIO_BY_TAG: dict[str, dict[str, str]] = {
         "group": "trend",
         "strategy": "SupertrendStrategy",
         "label": "Supertrend (ATR) (ML Gate)",
+    },
+    "SupertrendTestStrategy": {
+        "scenario_id": "trend_supertrend_test",
+        "scan_type": "strategy",
+        "group": "trend_test",
+        "strategy": "SupertrendTestStrategy",
+        "label": "Supertrend (ATR) (test wide)",
     },
     "MacdEmaStrategy": {
         "scenario_id": "trend_macd_ema",
@@ -284,12 +353,26 @@ SCENARIO_BY_TAG: dict[str, dict[str, str]] = {
         "strategy": "PsaraFlipStrategy",
         "label": "Parabolic SAR flip",
     },
+    "PsaraFlipTestStrategy": {
+        "scenario_id": "new_psar_test",
+        "scan_type": "strategy",
+        "group": "newset_test",
+        "strategy": "PsaraFlipTestStrategy",
+        "label": "Parabolic SAR flip (test wide)",
+    },
     "AtrChannelBreakoutStrategy": {
         "scenario_id": "chart3_atrch",
         "scan_type": "strategy",
         "group": "chart3",
         "strategy": "AtrChannelBreakoutStrategy",
         "label": "ATR channel breakout",
+    },
+    "AtrChannelBreakoutTestStrategy": {
+        "scenario_id": "chart3_atrch_test",
+        "scan_type": "strategy",
+        "group": "chart3_test",
+        "strategy": "AtrChannelBreakoutTestStrategy",
+        "label": "ATR channel breakout (test wide)",
     },
     "CmfZeroCrossStrategy": {
         "scenario_id": "chart2_cmf",
@@ -556,12 +639,51 @@ def load_max_open_trades_per_strategy() -> int:
         return 0
 
 
+def load_test_strategy_settings() -> dict:
+    """Isolated test-block limits / stake / fallback SL-TP (no bot reload)."""
+    out = dict(DEFAULT_TEST_SETTINGS)
+    if not TEST_SETTINGS_FILE.is_file():
+        return out
+    try:
+        data = json.loads(TEST_SETTINGS_FILE.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, TypeError):
+        return out
+    if not isinstance(data, dict):
+        return out
+    try:
+        if "max_open_trades" in data:
+            out["max_open_trades"] = max(0, int(data["max_open_trades"]))
+        if "max_open_trades_per_strategy" in data:
+            out["max_open_trades_per_strategy"] = max(0, int(data["max_open_trades_per_strategy"]))
+        if "stake_amount" in data:
+            out["stake_amount"] = float(data["stake_amount"])
+        if "stoploss" in data:
+            out["stoploss"] = -abs(float(data["stoploss"]))
+        if "take_profit" in data:
+            out["take_profit"] = abs(float(data["take_profit"]))
+    except (TypeError, ValueError):
+        return dict(DEFAULT_TEST_SETTINGS)
+    return out
+
+
+def is_test_strategy_tag(tag: str | None) -> bool:
+    return bool(tag) and str(tag) in TEST_STRATEGY_TAGS
+
+
 def count_open_trades_for_tag(tag: str) -> int:
     if not tag:
         return 0
     n = 0
     for trade in Trade.get_open_trades():
         if base_enter_tag(trade.enter_tag) == tag:
+            n += 1
+    return n
+
+
+def count_open_test_trades() -> int:
+    n = 0
+    for trade in Trade.get_open_trades():
+        if is_test_strategy_tag(base_enter_tag(trade.enter_tag)):
             n += 1
     return n
 
@@ -592,9 +714,12 @@ class MultiStrategyRouter(IStrategy):
     minimal_roi = PROD_STRATEGY_MINIMAL_ROI
     stoploss = PROD_STRATEGY_STOPLOSS
     trailing_stop = False
-    use_exit_signal = False
+    # Must be True: ctengine only calls custom_exit inside the use_exit_signal branch.
+    # populate_exit_trend stays empty — exits come from per-tag custom_exit (SAR flip / retest_fail).
+    use_exit_signal = True
     use_custom_stoploss = True
     use_custom_roi = True
+    use_custom_exit = True
 
     # Block entries when market is trending (mean-reversion only)
     adx_max_entry = 25
@@ -672,6 +797,36 @@ class MultiStrategyRouter(IStrategy):
         dataframe["exit_short"] = 0
         return dataframe
 
+    def custom_exit(
+        self,
+        pair: str,
+        trade: Trade,
+        current_time: datetime,
+        current_rate: float,
+        current_profit: float,
+        **kwargs,
+    ) -> str | bool | None:
+        """Per-tag exits (SAR flip / failed retest) without global exit_signal."""
+        tag = base_enter_tag(trade.enter_tag)
+        if tag not in STRATEGY_REGISTRY:
+            return None
+        inst = self._get_instance(tag)
+        fn = getattr(inst, "exit_reason_from_ohlcv", None)
+        if not callable(fn):
+            return None
+        try:
+            df = self.dp.get_pair_dataframe(pair, self.timeframe)
+        except Exception:
+            df = None
+        if df is None or getattr(df, "empty", True):
+            try:
+                df, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+            except Exception:
+                return None
+        if df is None or getattr(df, "empty", True):
+            return None
+        return fn(df, trade, current_rate)
+
     def leverage(
         self,
         pair: str,
@@ -690,6 +845,27 @@ class MultiStrategyRouter(IStrategy):
             )
         return min(3.0, max_leverage)
 
+    def custom_stake_amount(
+        self,
+        pair: str,
+        current_time: datetime,
+        current_rate: float,
+        proposed_stake: float,
+        min_stake: float | None,
+        max_stake: float,
+        leverage: float,
+        entry_tag: str | None,
+        side: str,
+        **kwargs,
+    ) -> float:
+        tag = base_enter_tag(entry_tag)
+        if not is_test_strategy_tag(tag):
+            return proposed_stake
+        stake = float(load_test_strategy_settings().get("stake_amount") or proposed_stake)
+        if min_stake is not None:
+            stake = max(float(min_stake), stake)
+        return min(stake, float(max_stake))
+
     def custom_stoploss(
         self,
         pair: str,
@@ -701,17 +877,25 @@ class MultiStrategyRouter(IStrategy):
         **kwargs,
     ) -> float | None:
         tag = base_enter_tag(trade.enter_tag)
-        if not tag_uses_trained_risk(tag):
-            return None
-        risk = TAG_RISK.get(tag)
-        if not risk:
-            return None
-        return stoploss_from_open(
-            float(risk["stoploss"]),
-            current_profit,
-            is_short=trade.is_short,
-            leverage=float(trade.leverage or 1.0),
-        )
+        if tag_uses_trained_risk(tag):
+            risk = TAG_RISK.get(tag)
+            if not risk:
+                return None
+            return stoploss_from_open(
+                float(risk["stoploss"]),
+                current_profit,
+                is_short=trade.is_short,
+                leverage=float(trade.leverage or 1.0),
+            )
+        if is_test_strategy_tag(tag):
+            sl = float(load_test_strategy_settings().get("stoploss") or DEFAULT_TEST_SETTINGS["stoploss"])
+            return stoploss_from_open(
+                sl,
+                current_profit,
+                is_short=trade.is_short,
+                leverage=float(trade.leverage or 1.0),
+            )
+        return None
 
     def custom_roi(
         self,
@@ -724,21 +908,25 @@ class MultiStrategyRouter(IStrategy):
         **kwargs,
     ) -> float | None:
         tag = base_enter_tag(entry_tag or trade.enter_tag)
-        if not tag_uses_trained_risk(tag):
-            return None
-        risk = TAG_RISK.get(tag)
-        if not risk:
-            return None
-        roi_map = risk.get("minimal_roi")
-        if isinstance(roi_map, dict) and roi_map:
-            # Same rule as ctengine/freqtrade: largest key <= trade_duration (minutes).
-            keys = sorted((int(k), float(v)) for k, v in roi_map.items())
-            chosen = float(keys[0][1])
-            for mins, val in keys:
-                if trade_duration >= mins:
-                    chosen = val
-            return chosen
-        return float(risk["tp"])
+        if tag_uses_trained_risk(tag):
+            risk = TAG_RISK.get(tag)
+            if not risk:
+                return None
+            roi_map = risk.get("minimal_roi")
+            if isinstance(roi_map, dict) and roi_map:
+                keys = sorted((int(k), float(v)) for k, v in roi_map.items())
+                chosen = float(keys[0][1])
+                for mins, val in keys:
+                    if trade_duration >= mins:
+                        chosen = val
+                return chosen
+            return float(risk["tp"])
+        if is_test_strategy_tag(tag):
+            return float(
+                load_test_strategy_settings().get("take_profit")
+                or DEFAULT_TEST_SETTINGS["take_profit"]
+            )
+        return None
 
     def confirm_trade_entry(
         self,
@@ -756,9 +944,19 @@ class MultiStrategyRouter(IStrategy):
         # Hedge leg always follows the primary — do not re-check ML / cooldown / per-tag cap.
         if entry_tag and HEDGE_TAG_SUFFIX in str(entry_tag):
             return True
-        per_strat_limit = load_max_open_trades_per_strategy()
-        if per_strat_limit > 0 and tag and count_open_trades_for_tag(tag) >= per_strat_limit:
-            return False
+        test_tag = is_test_strategy_tag(tag)
+        if test_tag:
+            test_cfg = load_test_strategy_settings()
+            test_cap = int(test_cfg.get("max_open_trades") or 0)
+            if test_cap <= 0 or count_open_test_trades() >= test_cap:
+                return False
+            per_test = int(test_cfg.get("max_open_trades_per_strategy") or 0)
+            if per_test > 0 and tag and count_open_trades_for_tag(tag) >= per_test:
+                return False
+        else:
+            per_strat_limit = load_max_open_trades_per_strategy()
+            if per_strat_limit > 0 and tag and count_open_trades_for_tag(tag) >= per_strat_limit:
+                return False
         if tag in STRATEGY_REGISTRY:
             inst = self._get_instance(tag)
             cooldown = getattr(inst, "pair_in_cooldown", None)
@@ -768,7 +966,11 @@ class MultiStrategyRouter(IStrategy):
         if not scenario:
             return True
         df, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
-        stake = float(self.config.get("stake_amount") or 0)
+        if test_tag:
+            test_cfg = load_test_strategy_settings()
+            stake = float(test_cfg.get("stake_amount") or self.config.get("stake_amount") or 0)
+        else:
+            stake = float(self.config.get("stake_amount") or 0)
         if tag_uses_trained_risk(tag):
             risk = TAG_RISK.get(tag) or {}
             sl = float(risk.get("stoploss", self.stoploss))
@@ -777,6 +979,10 @@ class MultiStrategyRouter(IStrategy):
                 roi = {str(k): float(v) for k, v in risk["minimal_roi"].items()}
             else:
                 roi = {"0": float(tp)} if tp is not None else dict(self.minimal_roi)
+        elif test_tag:
+            test_cfg = load_test_strategy_settings()
+            sl = float(test_cfg.get("stoploss") or self.stoploss)
+            roi = {"0": float(test_cfg.get("take_profit") or 0.05)}
         else:
             sl = float(self.stoploss)
             roi = dict(self.minimal_roi)
@@ -807,7 +1013,12 @@ class MultiStrategyRouter(IStrategy):
         scenario = SCENARIO_BY_TAG.get(tag)
         if not scenario:
             return
-        stake = float(self.config.get("stake_amount") or 0)
+        test_tag = is_test_strategy_tag(tag)
+        if test_tag:
+            test_cfg = load_test_strategy_settings()
+            stake = float(test_cfg.get("stake_amount") or self.config.get("stake_amount") or 0)
+        else:
+            stake = float(self.config.get("stake_amount") or 0)
         if tag_uses_trained_risk(tag):
             risk = TAG_RISK.get(tag) or {}
             sl = float(risk.get("stoploss", self.stoploss))
@@ -816,6 +1027,10 @@ class MultiStrategyRouter(IStrategy):
                 roi = {str(k): float(v) for k, v in risk["minimal_roi"].items()}
             else:
                 roi = {"0": float(tp)} if tp is not None else dict(self.minimal_roi)
+        elif test_tag:
+            test_cfg = load_test_strategy_settings()
+            sl = float(test_cfg.get("stoploss") or self.stoploss)
+            roi = {"0": float(test_cfg.get("take_profit") or 0.05)}
         else:
             sl = float(self.stoploss)
             roi = dict(self.minimal_roi)

@@ -29,6 +29,7 @@ from simulation.ml.market_features import (
     MARKET_FEATURES,
     MarketFeatureStore,
     manifest_datadir,
+    set_market_feature_set,
 )
 
 DB_DIR = "simulation/results/trade_db"
@@ -44,7 +45,7 @@ CAT_FEATURES = [
     "strategy",
     "is_short",
 ]
-NUM_FEATURES = [
+NUM_FEATURES_TRADE = [
     "stake_usdt",
     "stoploss",
     "roi_at_entry",
@@ -52,7 +53,22 @@ NUM_FEATURES = [
     "dow_utc",
     "mins_since_armed",
     "log_open_rate",
-] + MARKET_FEATURES
+]
+# Same list object is mutated by refresh_num_features() so importers stay in sync.
+NUM_FEATURES = list(NUM_FEATURES_TRADE) + list(MARKET_FEATURES)
+
+
+def refresh_num_features() -> list[str]:
+    """Rebuild NUM_FEATURES in-place after set_market_feature_set()."""
+    NUM_FEATURES.clear()
+    NUM_FEATURES.extend(list(NUM_FEATURES_TRADE) + list(MARKET_FEATURES))
+    return list(NUM_FEATURES)
+
+
+def activate_feature_set(mode: str = "core") -> list[str]:
+    """Switch market feature set and refresh NUM_FEATURES (in-place)."""
+    set_market_feature_set(mode)
+    return refresh_num_features()
 
 
 def feature_columns() -> list[str]:
