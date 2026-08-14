@@ -4,7 +4,7 @@
     "sl_atr_mult": 0.8,
     "max_bars": 48,
     "sample_stride": 12,
-    "scan_stride": 3,
+    "scan_stride": 2,
     "min_confidence": 0.52,
     "stake_usdt": 10,
     "cooldown_bars": 12,

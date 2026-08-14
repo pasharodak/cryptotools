@@ -11,17 +11,28 @@ import pandas as pd
 from simulation.exchange_sim.datastore import HistoricalDatastore
 
 TREND_12H_BARS_BY_TF = {"5m": 144, "15m": 48, "1h": 12}
+TREND_24H_BARS_BY_TF = {"5m": 288, "15m": 96, "1h": 24}
+TREND_48H_BARS_BY_TF = {"5m": 576, "15m": 192, "1h": 48}
 
 
 def trend_12h_bars(timeframe: str = "5m") -> int:
     return TREND_12H_BARS_BY_TF.get(timeframe, 144)
 
 
+def trend_24h_bars(timeframe: str = "5m") -> int:
+    return TREND_24H_BARS_BY_TF.get(timeframe, 288)
+
+
+def trend_48h_bars(timeframe: str = "5m") -> int:
+    return TREND_48H_BARS_BY_TF.get(timeframe, 576)
+
+
 def min_indicator_warmup(timeframe: str = "5m") -> int:
-    return max(30, trend_12h_bars(timeframe) + 1)
+    return max(30, trend_48h_bars(timeframe) + 1)
 
 
-MARKET_FEATURES = [
+# Baseline pack features (prod / historical experiments).
+MARKET_FEATURES_CORE = [
     "rsi_14",
     "atr_pct_14",
     "adx_14",
@@ -35,6 +46,42 @@ MARKET_FEATURES = [
     "dist_high_20_pct",
     "dist_low_20_pct",
 ]
+
+# Extra longer-horizon + multi-TF context (mutated into MARKET_FEATURES for wide trains).
+MARKET_FEATURES_WIDE = [
+    "rsi_28",
+    "atr_pct_28",
+    "adx_28",
+    "vol_ratio_48",
+    "ret_24",
+    "ret_48",
+    "trend_24h",
+    "trend_48h",
+    "ema_spread_slow_pct",  # EMA21 vs EMA55
+    "dist_high_48_pct",
+    "dist_low_48_pct",
+    "bb_width_20",
+    "trend_4h_dir",
+    "trend_4h_score",
+    "trend_4h_strength",
+    "trend_4h_adx",
+    "trend_4h_ema_align",
+]
+
+# Default = core (prod-safe). Wide experiments call set_market_feature_set("wide").
+MARKET_FEATURES = list(MARKET_FEATURES_CORE)
+
+
+def set_market_feature_set(mode: str = "core") -> list[str]:
+    """Switch active MARKET_FEATURES in-place (same list object used by importers)."""
+    mode = (mode or "core").strip().lower()
+    if mode in ("wide", "v2", "feats_v2"):
+        target = list(MARKET_FEATURES_CORE) + list(MARKET_FEATURES_WIDE)
+    else:
+        target = list(MARKET_FEATURES_CORE)
+    MARKET_FEATURES.clear()
+    MARKET_FEATURES.extend(target)
+    return list(MARKET_FEATURES)
 
 
 def _rsi(close: pd.Series, period: int = 14) -> pd.Series:
@@ -81,11 +128,18 @@ def compute_indicator_frame(
     v = df["volume"].astype(float)
 
     atr = _atr(h, l, c, 14)
+    atr28 = _atr(h, l, c, 28)
     ema9 = c.ewm(span=9, adjust=False).mean()
     ema21 = c.ewm(span=21, adjust=False).mean()
+    ema55 = c.ewm(span=55, adjust=False).mean()
     high_20 = h.rolling(20, min_periods=5).max()
     low_20 = l.rolling(20, min_periods=5).min()
+    high_48 = h.rolling(48, min_periods=10).max()
+    low_48 = l.rolling(48, min_periods=10).min()
     vol_sma = v.rolling(20, min_periods=5).mean()
+    vol_sma_48 = v.rolling(48, min_periods=10).mean()
+    mid_20 = c.rolling(20, min_periods=5).mean()
+    std_20 = c.rolling(20, min_periods=5).std()
 
     out = pd.DataFrame(
         {
@@ -101,6 +155,19 @@ def compute_indicator_frame(
             "range_pct": (h - l) / c.replace(0, np.nan),
             "dist_high_20_pct": (c - high_20) / c.replace(0, np.nan),
             "dist_low_20_pct": (c - low_20) / c.replace(0, np.nan),
+            # Wider windows (selected via MARKET_FEATURES_WIDE)
+            "rsi_28": _rsi(c, 28),
+            "atr_pct_28": atr28 / c.replace(0, np.nan),
+            "adx_28": _adx(h, l, c, 28),
+            "vol_ratio_48": v / vol_sma_48.replace(0, np.nan),
+            "ret_24": c.pct_change(24),
+            "ret_48": c.pct_change(48),
+            "trend_24h": c.pct_change(trend_24h_bars(timeframe)),
+            "trend_48h": c.pct_change(trend_48h_bars(timeframe)),
+            "ema_spread_slow_pct": (ema21 - ema55) / c.replace(0, np.nan),
+            "dist_high_48_pct": (c - high_48) / c.replace(0, np.nan),
+            "dist_low_48_pct": (c - low_48) / c.replace(0, np.nan),
+            "bb_width_20": (2.0 * std_20) / mid_20.replace(0, np.nan),
         },
         index=df.index,
     )

@@ -148,8 +148,9 @@ class IchimokuTkCrossStrategy(_LiteBase):
 class PsaraFlipStrategy(_LiteBase):
     """Parabolic SAR flip — enter on SAR side change with EMA filter."""
 
+    # Live 3d: avg win ~0.9% / avg loss ~2% — raise TP, slow ROI decay (SL kept).
     stoploss = -0.02
-    minimal_roi = {"0": 0.014, "50": 0.007, "150": 0}
+    minimal_roi = {"0": 0.022, "120": 0.012, "360": 0.006, "720": 0}
     pair_cooldown_minutes = 100
 
     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
@@ -176,3 +177,45 @@ class PsaraFlipStrategy(_LiteBase):
         dataframe.loc[flip_dn, "exit_long"] = 1
         dataframe.loc[flip_up, "exit_short"] = 1
         return dataframe
+
+
+class PsaraFlipTestStrategy(PsaraFlipStrategy):
+    """PSAR test block: skip late chase, exit on reverse SAR flip via router custom_exit."""
+
+    pair_cooldown_minutes = 240
+    rsi_long_max = 65
+    rsi_short_min = 35
+    range_lookback = 12
+    max_long_range_pos = 0.75
+    min_short_range_pos = 0.25
+
+    def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+        dataframe = super().populate_indicators(dataframe, metadata)
+        dataframe["rsi_14"] = ta.RSI(dataframe, timeperiod=14)
+        hi = dataframe["high"].rolling(self.range_lookback).max()
+        lo = dataframe["low"].rolling(self.range_lookback).min()
+        span = (hi - lo).where((hi - lo) > 0)
+        dataframe["range_pos_1h"] = (dataframe["close"] - lo) / span
+        return dataframe
+
+    def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+        dataframe = super().populate_entry_trend(dataframe, metadata)
+        rsi = dataframe["rsi_14"]
+        pos = dataframe["range_pos_1h"]
+        late_long = (rsi >= self.rsi_long_max) | (pos >= self.max_long_range_pos)
+        late_short = (rsi <= self.rsi_short_min) | (pos <= self.min_short_range_pos)
+        dataframe.loc[late_long, "enter_long"] = 0
+        dataframe.loc[late_short, "enter_short"] = 0
+        return dataframe
+
+    def exit_reason_from_ohlcv(self, dataframe: DataFrame, trade, current_rate: float) -> str | None:
+        if dataframe is None or len(dataframe) < 30:
+            return None
+        df = self.populate_indicators(dataframe.copy(), {"pair": getattr(trade, "pair", "")})
+        last = df.iloc[-1]
+        above = bool(last.get("above_sar"))
+        if trade.is_short and above:
+            return "sar_flip"
+        if (not trade.is_short) and (not above):
+            return "sar_flip"
+        return None

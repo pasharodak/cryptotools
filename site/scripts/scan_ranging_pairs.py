@@ -189,7 +189,8 @@ def analyze_ranging(
     cfg: dict[str, Any],
     *,
     df_htf: pd.DataFrame | None = None,
-) -> dict[str, float] | None:
+    strict: bool = True,
+) -> dict[str, Any] | None:
     p = _ranging_cfg(cfg)
     bb_period = int(p["bb_period"])
     adx_period = int(p["adx_period"])
@@ -259,29 +260,33 @@ def analyze_ranging(
     lookback = int(cfg.get("lookback_candles", 96))
     structure = _range_structure(df, lookback)
 
+    fails: list[str] = []
     if last_adx >= adx_max:
-        return None
+        fails.append(f"ADX {last_adx:.1f}≥{adx_max:g}")
     if last_bb < bb_width_min or last_bb > bb_width_max:
-        return None
+        fails.append(f"BB width {last_bb*100:.2f}% вне коридора")
     if inside_ratio < min_inside_bb_ratio:
-        return None
+        fails.append(f"inside BB {inside_ratio*100:.0f}%")
     if ema_slope > float(p["max_ema50_slope"]):
-        return None
+        fails.append("EMA50 slope")
     if atr_ratio > float(p["max_atr_ratio"]) or atr_ratio < float(p["min_atr_ratio"]):
-        return None
+        fails.append(f"ATR-ratio {atr_ratio:.2f}")
     if bb_pctile < float(p["bb_squeeze_percentile"]):
-        return None
+        fails.append("BB squeeze")
     if bb_pctile < float(p["bb_width_percentile_min"]) or bb_pctile > float(p["bb_width_percentile_max"]):
-        return None
+        fails.append(f"BB pctile {bb_pctile:.0f}")
     if adx_slope > float(p["max_adx_slope"]):
-        return None
+        fails.append("ADX slope")
     if structure["midline_crosses"] < float(p["min_midline_crosses"]):
-        return None
+        fails.append("midline crosses")
     if structure["range_stability"] < float(p["min_range_stability"]):
+        fails.append("range stability")
+
+    if fails and strict:
         return None
 
     ideal_bb = float(p["ideal_bb_width"])
-    adx_fit = (adx_max - last_adx) / adx_max
+    adx_fit = max(min((adx_max - last_adx) / adx_max, 1.0), -1.0)
     bb_sweet = 1.0 - min(abs(last_bb - ideal_bb) / ideal_bb, 1.0)
     atr_fit = 1.0 - min(max(atr_ratio - 1.0, 0.0) / max(float(p["max_atr_ratio"]) - 1.0, 0.01), 1.0)
     structure_fit = min(structure["midline_crosses"] / float(p["min_midline_crosses"]), 1.0) * structure[
@@ -301,6 +306,8 @@ def analyze_ranging(
     )
     if cfg.get("mtf_enabled", True):
         score *= 1.12 if htf_confirmed else 0.82
+    if fails:
+        score *= 0.55  # near-miss penalty vs qualified pairs
 
     return {
         "adx": round(last_adx, 2),
@@ -315,6 +322,8 @@ def analyze_ranging(
         "range_stability": round(structure["range_stability"], 3),
         "htf_ok": htf_confirmed,
         "score": round(score, 6),
+        "qualified": not fails,
+        "fail_reasons": fails[:4],
     }
 
 

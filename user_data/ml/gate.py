@@ -283,8 +283,8 @@ class LiveMlGate:
             "mins_since_armed": max(0.0, (open_ms - self._armed_at_ms) / 60000.0),
             "log_open_rate": float(np.log1p(rate)) if rate > 0 else 0.0,
         }
-        for col in MARKET_FEATURES:
-            row[col] = market.get(col, float("nan"))
+        for col, val in market.items():
+            row[col] = val
         return row
 
     def _grid_model_usable(self) -> bool:
@@ -319,8 +319,8 @@ class LiveMlGate:
             pipe = self._pipe
         if pipe is None:
             return {"predicted": "profit", "confidence": 0.0, "ready": False}
-        features = feature_columns()
-        x = pd.DataFrame([{k: row[k] for k in features}])
+        features = self._feature_names_for_pipe(pipe, sid)
+        x = pd.DataFrame([{k: row.get(k, float("nan")) for k in features}])
         proba = pipe.predict_proba(x)[0]
         p_loss, p_profit = float(proba[0]), float(proba[1])
         pred = "profit" if p_profit >= p_loss else "loss"
@@ -332,6 +332,29 @@ class LiveMlGate:
             "ready": True,
             "model_scope": scope,
         }
+
+    def _feature_names_for_pipe(self, pipe: Any, scenario_id: str) -> list[str]:
+        """Prefer pipeline/meta feature list so wide models work alongside core pack."""
+        names = getattr(pipe, "feature_names_in_", None)
+        if names is not None and len(names):
+            return [str(x) for x in names]
+        meta = self._load_scenario_meta(scenario_id) if scenario_id else {}
+        feats = meta.get("features")
+        if isinstance(feats, list) and feats:
+            return [str(x) for x in feats]
+        mkt = meta.get("market_features")
+        if isinstance(mkt, list) and mkt:
+            base = [
+                "stake_usdt",
+                "stoploss",
+                "roi_at_entry",
+                "hour_utc",
+                "dow_utc",
+                "mins_since_armed",
+                "log_open_rate",
+            ]
+            return list(CAT_FEATURES) + base + [str(x) for x in mkt]
+        return feature_columns()
 
     def _resolve_gate_rules(self, scenario: dict[str, Any] | None) -> tuple[str, float]:
         sid = (scenario or {}).get("scenario_id") or ""

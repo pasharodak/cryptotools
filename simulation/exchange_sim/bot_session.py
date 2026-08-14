@@ -538,6 +538,7 @@ class BotSessionManager:
                 rows.append(
                     {
                         "inst_id": inst["id"],
+                        "scenario_id": scenario_id,
                         "pair": inst["pair"],
                         "label": inst["label"],
                         "closed": True,
@@ -870,12 +871,17 @@ class BotSessionManager:
         scan_interval_ms: int | None = None,
         pool_mode: str = "profile",
         scan_workers: int | None = None,
+        bypass_scanner: bool = False,
     ) -> None:
         """Scan-only init for sequential bot×pair live walkthrough (no bulk backtest).
 
         pool_mode:
           profile — intersect with player_pair_pool / probe_assign (default player UI)
           direct  — use the passed pairs list as-is (prod200 / full export)
+
+        bypass_scanner:
+          Live UI — keep selected pairs always armed so strategy trades are visible
+          even when the prod-like rolling whitelist never hits the pair.
         """
         self.instances = []
         self.scan_events = []
@@ -890,6 +896,7 @@ class BotSessionManager:
             "pairs": pairs,
             "range_ms": [start_ms, end_ms],
             "pool_mode": pool_mode,
+            "bypass_scanner": bool(bypass_scanner),
         }
         self._notify("session_ready")
         self._scan_workers = scan_workers
@@ -899,6 +906,40 @@ class BotSessionManager:
             pairs, _assignments, display_pool = self._resolve_sim_pool(pairs, start_ms, datadir)
         self.status["pool"] = display_pool
         self.status["sim_pool"] = display_pool
+
+        if bypass_scanner:
+            # Live chart mode: no prod scanner — arm pair for whole range; keep all strategy trades.
+            # Use non-rolling arm filter (rolling + grace_scans=0 would drop every pair).
+            self.status["phase"] = "simulating"
+            armed = frozenset(display_pool)
+            self.scan_schedule = {
+                "scan_interval_ms": scan_interval_ms or DEFAULT_SCAN_INTERVAL_MS,
+                "scan_times": [start_ms, end_ms],
+                "strategy_timeline": [(start_ms, armed), (end_ms, armed)],
+                "grid_timeline": [(start_ms, armed), (end_ms, armed)],
+                "strategy_arms": {p: start_ms for p in display_pool},
+                "grid_arms": {p: start_ms for p in display_pool},
+                "rolling_whitelist": False,
+                "whitelist_grace_scans": 2,
+                "trade_skip_loss_streak": 0,
+                "trade_skip_min_cum_loss_usdt": 0.0,
+                "trade_loss_window_ms": 0,
+                "events": [
+                    {
+                        "ms": start_ms,
+                        "scenario_id": "live_bypass",
+                        "pair": p,
+                        "action": "armed",
+                        "score": None,
+                        "rolling": False,
+                    }
+                    for p in display_pool
+                ],
+            }
+            self.scan_events = self.scan_schedule["events"]
+            self._notify("scan_ready")
+            return
+
         from .datastore import HistoricalDatastore
 
         ds = HistoricalDatastore(datadir, exchange="bybit")

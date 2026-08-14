@@ -14,6 +14,7 @@ const BOTS = {
     prefix: "/api/strategy",
     label: "Стратегии + ML",
     maxTrades: 2,
+    maxPerStrategy: 0,
     stakeAmount: 5,
     stakeEl: "strategy-stake",
     stateEl: "strategy-state",
@@ -22,6 +23,7 @@ const BOTS = {
     tradesEl: "strategy-trades",
     pairsEl: "strategy-pairs",
     maxTradesEl: "strategy-max-trades",
+    maxPerStrategyEl: "strategy-max-per-strategy",
   },
   grid: {
     prefix: "/api/grid",
@@ -45,6 +47,10 @@ const STRATEGY_SL_MIN = 1;
 const STRATEGY_SL_MAX = 20;
 const STRATEGY_TP_MIN = 2;
 const STRATEGY_TP_MAX = 50;
+const TEST_SL_MIN = 1;
+const TEST_SL_MAX = 20;
+const TEST_TP_MIN = 0.5;
+const TEST_TP_MAX = 50;
 const STAKE_EDITABLE_BOTS = new Set(["grid", "strategy"]);
 const FINDER_STATS_LABEL = "ML Finder (XGBoost scanner)";
 const GRID_STATS_LABEL = "Grid (BB+ADX) + ML gate";
@@ -61,6 +67,7 @@ const SESSION_TOKEN_KEY = "ct_token";
 const SESSION_UNTIL_KEY = "ct_session_until";
 const SESSION_ROLE_KEY = "ct_role";
 const SESSION_PASS_KEY = "ct_pass"; // legacy — cleared on login
+const SESSION_IMPERSONATING_KEY = "ct_impersonating";
 
 let strategyCatalog = [];
 let enabledStrategies = {};
@@ -72,7 +79,19 @@ let mlConfidenceStrategies = {};
 let mlConfidenceDefaults = {};
 let mlConfidenceChoices = [0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95];
 let strategyRisk = { stoploss_pct: 5, take_profit_pct: 10 };
+let testSettings = {
+  max_open_trades: 3,
+  max_open_trades_per_strategy: 0,
+  stake_amount: 5,
+  stoploss_pct: 3,
+  take_profit_pct: 1.2,
+};
 let dualHedgeEnabled = false;
+let allowedBlocks = null; // null = all
+let allowedStrategies = null; // null = all
+let permissionCatalog = { blocks: [], strategies: [] };
+let isImpersonating = false;
+let impersonatedBy = null;
 
 let lastBybitGridRefresh = 0;
 const BYBIT_GRID_REFRESH_MS = 30000;
@@ -208,6 +227,7 @@ function sessionHeader() {
 }
 
 function isAdminUser() {
+  if (isImpersonating) return false;
   return (currentUser?.role || localStorage.getItem(SESSION_ROLE_KEY) || "") === "admin";
 }
 
@@ -217,6 +237,7 @@ function saveSession() {
   localStorage.setItem(SESSION_TOKEN_KEY, sessionToken || "");
   localStorage.setItem(SESSION_UNTIL_KEY, String(until));
   if (currentUser?.role) localStorage.setItem(SESSION_ROLE_KEY, currentUser.role);
+  localStorage.setItem(SESSION_IMPERSONATING_KEY, isImpersonating ? "1" : "0");
   localStorage.removeItem(SESSION_PASS_KEY);
   sessionStorage.removeItem("ct_user");
   sessionStorage.removeItem("ct_pass");
@@ -228,10 +249,15 @@ function clearSession() {
   localStorage.removeItem(SESSION_UNTIL_KEY);
   localStorage.removeItem(SESSION_ROLE_KEY);
   localStorage.removeItem(SESSION_PASS_KEY);
+  localStorage.removeItem(SESSION_IMPERSONATING_KEY);
   sessionStorage.removeItem("ct_user");
   sessionStorage.removeItem("ct_pass");
   sessionToken = "";
   currentUser = null;
+  isImpersonating = false;
+  impersonatedBy = null;
+  allowedBlocks = null;
+  allowedStrategies = null;
 }
 
 function loadStoredSession() {
@@ -311,8 +337,33 @@ async function refreshAuthMe() {
   const me = await pairConfigApi("/auth/me");
   currentUser = me.user || me;
   if (me.token) sessionToken = me.token;
+  applyAuthMeState(me);
   updateMultiUserUi(me);
   return me;
+}
+
+function applyAuthMeState(me) {
+  isImpersonating = !!me?.impersonating;
+  impersonatedBy = me?.impersonated_by || null;
+  // null = unrestricted; [] = none
+  allowedBlocks = me?.allowed_blocks === undefined ? null : me.allowed_blocks;
+  allowedStrategies = me?.allowed_strategies === undefined ? null : me.allowed_strategies;
+  if (me?.permission_catalog) permissionCatalog = me.permission_catalog;
+  if (currentUser?.role) localStorage.setItem(SESSION_ROLE_KEY, currentUser.role);
+  localStorage.setItem(SESSION_IMPERSONATING_KEY, isImpersonating ? "1" : "0");
+}
+
+function userMayUseBlock(blockId) {
+  if (allowedBlocks == null) return true;
+  return allowedBlocks.includes(blockId);
+}
+
+function applyBlockVisibility() {
+  document.querySelectorAll("[data-block]").forEach((el) => {
+    const block = el.getAttribute("data-block");
+    if (!block) return;
+    el.classList.toggle("hidden", !userMayUseBlock(block));
+  });
 }
 
 function updateMultiUserUi(me) {
@@ -320,23 +371,36 @@ function updateMultiUserUi(me) {
   const secrets = me?.secrets || {};
   const banner = $("secrets-banner");
   if (banner) {
-    const need = role !== "admin" && !secrets.has_secrets;
-    banner.classList.toggle("hidden", !need);
+    // Show for tenants (incl. while admin impersonates) when secrets missing
+    const showSecretsBanner = (role !== "admin" || isImpersonating) && !secrets.has_secrets;
+    banner.classList.toggle("hidden", !showSecretsBanner);
+  }
+  const impBanner = $("impersonate-banner");
+  const impText = $("impersonate-banner-text");
+  if (impBanner) {
+    impBanner.classList.toggle("hidden", !isImpersonating);
+    if (impText && isImpersonating) {
+      const uname = currentUser?.username || currentUser?.id || "пользователь";
+      const by = impersonatedBy?.username || "админ";
+      impText.textContent = `Сессия: ${uname} (вход от ${by})`;
+    }
   }
   document.querySelectorAll("[data-admin-only]").forEach((el) => {
-    el.classList.toggle("hidden", role !== "admin");
+    el.classList.toggle("hidden", !isAdminUser());
   });
   document.querySelectorAll("[data-user-secrets]").forEach((el) => {
-    el.classList.toggle("hidden", role === "admin");
+    el.classList.toggle("hidden", isAdminUser());
   });
   const statusEl = $("secrets-status");
   if (statusEl) {
     statusEl.textContent = secrets.has_secrets
       ? "Ключи Bybit заданы"
-      : role === "admin"
+      : isAdminUser()
         ? "Ключи админа из серверного .env"
         : "Ключи Bybit не заданы — боты не запустятся";
   }
+  applyBlockVisibility();
+  syncRatingUserFilterVisibility();
 }
 
 async function loginBot(_bot) {
@@ -583,7 +647,11 @@ const STATS_SCOPE_META = {
   finder: { title: "Статистика — ML Finder", note: "Сделки TradeFinderStrategy (XGBoost scanner + pnl gate), даже если Finder сейчас выключен." },
   strategy: {
     title: "Статистика — стратегии + ML gate",
-    note: "Все закрытые сделки стратегий по enter_tag — включая сейчас выключенные. Входы с ML gate.",
+    note: "Закрытые сделки основных стратегий по enter_tag (без тестового блока). Входы с ML gate.",
+  },
+  test_strategy: {
+    title: "Статистика — тестовые стратегии",
+    note: "Только тестовый блок (Psara / ATR channel / Breakout-Retest / Supertrend и др. с test_group). Тот же strategy-бот.",
   },
   grid: {
     title: "Статистика — Grid + ML gate",
@@ -806,18 +874,36 @@ function addBybitGridToRow(row, item) {
   }
 }
 
-function filterStatsRows(rows, scope) {
+function isBotStatsLabel(name) {
+  return (
+    name === FINDER_STATS_LABEL ||
+    name === GRID_STATS_LABEL ||
+    name === BYBIT_GRID_STATS_LABEL
+  );
+}
+
+function isTestCatalogEntry(s) {
+  return !!(s && (s.test_group || s.testGroup));
+}
+
+function isTestStatsRow(row, catalog = strategyCatalog) {
+  const list = catalog || strategyCatalog || [];
+  const ids = new Set(list.filter(isTestCatalogEntry).map((s) => s.id));
+  if (ids.has(row.key)) return true;
+  const fromCatalog = list.find((s) => strategyCatalogLabel(s) === row.name);
+  return !!(fromCatalog && isTestCatalogEntry(fromCatalog));
+}
+
+function filterStatsRows(rows, scope, catalog = strategyCatalog) {
   if (scope === "all") return rows;
   if (scope === "finder") return rows.filter((r) => r.name === FINDER_STATS_LABEL);
   if (scope === "grid") return rows.filter((r) => r.name === GRID_STATS_LABEL);
   if (scope === "bybitgrid") return rows.filter((r) => r.name === BYBIT_GRID_STATS_LABEL);
   if (scope === "strategy") {
-    return rows.filter(
-      (r) =>
-        r.name !== FINDER_STATS_LABEL &&
-        r.name !== GRID_STATS_LABEL &&
-        r.name !== BYBIT_GRID_STATS_LABEL
-    );
+    return rows.filter((r) => !isBotStatsLabel(r.name) && !isTestStatsRow(r, catalog));
+  }
+  if (scope === "test_strategy") {
+    return rows.filter((r) => isTestStatsRow(r, catalog));
   }
   return rows;
 }
@@ -891,7 +977,7 @@ function buildHistoryEntries(
   const ftBots =
     scope === "all"
       ? ["finder", "strategy", "grid"]
-      : scope === "bybitgrid"
+      : scope === "bybitgrid" || scope === "test_strategy"
         ? []
         : [scope];
 
@@ -900,7 +986,7 @@ function buildHistoryEntries(
       entries.push({ kind: "trade", bot: "finder", trade: t });
     }
   }
-  if (ftBots.includes("strategy")) {
+  if (ftBots.includes("strategy") || scope === "test_strategy") {
     for (const t of filterClosedTrades(stratTrades, period, dateFrom, dateTo)) {
       entries.push({ kind: "trade", bot: "strategy", trade: t });
     }
@@ -917,6 +1003,17 @@ function buildHistoryEntries(
   }
 
   let filtered = entries;
+  if (scope === "test_strategy" || scope === "strategy") {
+    const testIds = new Set(
+      (strategyCatalog || []).filter(isTestCatalogEntry).map((s) => s.id)
+    );
+    filtered = filtered.filter((entry) => {
+      if (entry.kind !== "trade" || entry.bot !== "strategy") return false;
+      const sid = tradeSourceId(entry.trade, entry.bot);
+      const isTest = testIds.has(sid);
+      return scope === "test_strategy" ? isTest : !isTest;
+    });
+  }
   if (strategyFilter && strategyFilter !== "all") {
     filtered = filtered.filter((entry) => {
       if (entry.kind === "bybit") return false;
@@ -1060,11 +1157,21 @@ function downloadHistoryCsv(entries) {
 }
 
 function historyCardHtml(entry) {
+  const botClass =
+    entry.kind === "bybit"
+      ? "bot-bybitgrid"
+      : entry.bot === "finder"
+        ? "bot-finder"
+        : entry.bot === "grid"
+          ? "bot-grid"
+          : entry.bot === "strategy" && isTestTrade(entry.trade, "strategy")
+            ? "bot-test"
+            : "bot-strategy";
   if (entry.kind === "bybit") {
     const item = entry.item;
     const pnl = Number(item.realised_pnl ?? item.pnl ?? 0);
     const pair = escapeHtml(item.pair || item.symbol || "—");
-    return `<article class="history-card ${pnlClass(pnl)}">
+    return `<article class="history-card ${pnlClass(pnl)} ${botClass}">
       <div class="history-card-top">
         <div class="history-card-main">
           <strong class="history-card-pair">${pair}</strong>
@@ -1088,7 +1195,7 @@ function historyCardHtml(entry) {
     mlConf && mlConf !== "—"
       ? `<span class="history-chip history-chip-ml" title="${escapeHtml(fmtMlConfidenceDetail(t))}">ML ${escapeHtml(mlConf)}</span>`
       : `<span class="history-chip history-chip-ml is-missing" title="Фактическая уверенность ML недоступна">ML —</span>`;
-  return `<article class="history-card ${pnlClass(abs)}">
+  return `<article class="history-card ${pnlClass(abs)} ${botClass}">
     <div class="history-card-top">
       <div class="history-card-main">
         <strong class="history-card-pair">${escapeHtml(t.pair || "—")}</strong>
@@ -1159,14 +1266,14 @@ function renderHistoryTable(entries) {
             const item = entry.item;
             const pnl = Number(item.realised_pnl ?? item.pnl ?? 0);
             const pnlClassName = pnlClass(pnl);
-            return `<tr>
+            return `<tr class="history-row bot-bybitgrid">
           <td>${fmtBybitHistoryDate(item)}</td>
-          <td>${BYBIT_GRID_STATS_LABEL}</td>
-          <td>${escapeHtml(item.pair || item.symbol || "—")}</td>
+          <td><span class="history-bot-badge">${BYBIT_GRID_STATS_LABEL}</span></td>
+          <td class="history-pair-cell">${escapeHtml(item.pair || item.symbol || "—")}</td>
           <td>${escapeHtml(item.grid_mode_label || "grid")}</td>
           <td>Bybit</td>
           <td>—</td>
-          <td class="${pnlClassName}">${fmtUsdSigned(pnl, 2)}</td>
+          <td class="history-pnl-cell ${pnlClassName}">${fmtUsdSigned(pnl, 2)}</td>
           <td>${escapeHtml(bybitExitLabel(item))}</td>
         </tr>`;
           }
@@ -1178,14 +1285,22 @@ function renderHistoryTable(entries) {
           const pnlClassName = pnlClass(abs);
           const mlConf = fmtMlConfidence(t);
           const mlTitle = escapeHtml(fmtMlConfidenceDetail(t));
-          return `<tr>
+          const botClass =
+            entry.bot === "finder"
+              ? "bot-finder"
+              : entry.bot === "grid"
+                ? "bot-grid"
+                : entry.bot === "strategy" && isTestTrade(t, "strategy")
+                  ? "bot-test"
+                  : "bot-strategy";
+          return `<tr class="history-row ${botClass}">
         <td>${fmtTradeDate(t)}</td>
-        <td>${botLabel}</td>
-        <td>${escapeHtml(t.pair || "—")}</td>
-        <td>${side}</td>
+        <td><span class="history-bot-badge">${botLabel}</span></td>
+        <td class="history-pair-cell">${escapeHtml(t.pair || "—")}</td>
+        <td><span class="history-side-badge side-${t.is_short ? "short" : "long"}">${side}</span></td>
         <td>${escapeHtml(source)}</td>
         <td title="${mlTitle}">${escapeHtml(mlConf)}</td>
-        <td class="${pnlClassName}">${fmtUsdSigned(abs, 2)}<br><span class="muted" style="font-size:0.75rem">${fmtPct(pct)}</span></td>
+        <td class="history-pnl-cell ${pnlClassName}">${fmtUsdSigned(abs, 2)}<br><span class="muted history-pnl-pct">${fmtPct(pct)}</span></td>
         <td>${escapeHtml(exitReasonLabel(t.exit_reason))}</td>
       </tr>`;
         })
@@ -1283,7 +1398,7 @@ function updateHistoryFilterUi() {
   if (stratWrap) {
     stratWrap.classList.toggle(
       "hidden",
-      historyScope !== "all" && historyScope !== "strategy"
+      historyScope !== "all" && historyScope !== "strategy" && historyScope !== "test_strategy"
     );
   }
   if ($("history-date-from")) $("history-date-from").value = historyDateFrom;
@@ -1348,12 +1463,9 @@ async function loadHistory() {
 }
 
 function openHistory() {
+  if (!userMayUseBlock("history")) return;
   closeMobileMenu();
-  $("changelog-view")?.classList.add("hidden");
-  $("logs-view")?.classList.add("hidden");
-  $("settings-view")?.classList.add("hidden");
-  $("pnl-dashboard-view")?.classList.add("hidden");
-  $("dashboard-view")?.classList.add("hidden");
+  hideMainViewsForOverlay();
   const view = $("history-view");
   view?.classList.remove("hidden");
   view?.setAttribute("aria-hidden", "false");
@@ -1369,7 +1481,7 @@ function closeHistory() {
 
 function setHistoryScope(scope) {
   historyScope = STATS_SCOPE_META[scope] ? scope : "all";
-  if (historyScope !== "all" && historyScope !== "strategy") {
+  if (historyScope !== "all" && historyScope !== "strategy" && historyScope !== "test_strategy") {
     historyStrategyFilter = "all";
   }
   historyPage = 1;
@@ -1636,7 +1748,8 @@ function renderPnlDashboard(data) {
   const bybitFiltered = filterBybitHistory(data.bybitHistory, pnlDashPeriod);
   const rows = filterStatsRows(
     buildStatsRows(finderFiltered, stratFiltered, gridFiltered, bybitFiltered, catalog),
-    pnlDashScope
+    pnlDashScope,
+    catalog
   );
 
   let totalProfit = 0;
@@ -1661,19 +1774,19 @@ function renderPnlDashboard(data) {
         : "";
     summaryEl.innerHTML = `
       ${warnHtml}
-      <div class="stats-kpi">
+      <div class="stats-kpi stats-kpi-income">
         <span>Доход</span>
         <strong class="pos">${fmtUsd(totalProfit)}</strong>
       </div>
-      <div class="stats-kpi">
+      <div class="stats-kpi stats-kpi-expense">
         <span>Расход</span>
         <strong class="neg">${fmtUsd(totalLoss)}</strong>
       </div>
-      <div class="stats-kpi">
+      <div class="stats-kpi stats-kpi-net">
         <span>Итого</span>
         <strong class="${pnlClass(net)}">${fmtUsdSigned(net)}</strong>
       </div>
-      <div class="stats-kpi">
+      <div class="stats-kpi stats-kpi-ratio">
         <span>Успешные / неуспешные</span>
         <strong>${totalWins} / ${totalLosses}</strong>
       </div>
@@ -1732,12 +1845,9 @@ async function loadPnlDashboard(force = false) {
 }
 
 function openPnlDashboard() {
+  if (!userMayUseBlock("dashboard")) return;
   closeMobileMenu();
-  $("changelog-view")?.classList.add("hidden");
-  $("logs-view")?.classList.add("hidden");
-  $("settings-view")?.classList.add("hidden");
-  $("history-view")?.classList.add("hidden");
-  $("dashboard-view")?.classList.add("hidden");
+  hideMainViewsForOverlay();
   const view = $("pnl-dashboard-view");
   view?.classList.remove("hidden");
   view?.setAttribute("aria-hidden", "false");
@@ -1775,6 +1885,416 @@ function bindPnlDashboardControls() {
   });
   $("pnl-dashboard-back-btn")?.addEventListener("click", closePnlDashboard);
   $("pnl-dashboard-refresh-btn")?.addEventListener("click", () => loadPnlDashboard(true));
+}
+
+let ratingPeriod = "all";
+let ratingScope = "strategies"; // strategies | pairs
+let ratingUserFilter = ""; // "" = all accounts (admin only)
+let ratingDataCache = {}; // key: `${scope}:${user||"all"}`
+let ratingSortKey = "pnl";
+let ratingSortDesc = true;
+const ratingExpandedPairs = new Set();
+
+function ratingCacheKey(scope = ratingScope, user = ratingUserFilter) {
+  return `${scope}:${user || "all"}`;
+}
+
+function ratingAccountLabel() {
+  if (!ratingUserFilter) return "Все аккаунты";
+  const sel = $("rating-user-filter");
+  const opt = sel?.selectedOptions?.[0];
+  if (opt?.textContent) return opt.textContent.trim();
+  return ratingUserFilter;
+}
+
+async function ensureRatingUserOptions() {
+  const group = $("rating-user-group");
+  const sel = $("rating-user-filter");
+  if (!group || !sel) return;
+  if (!isAdminUser()) {
+    group.classList.add("hidden");
+    ratingUserFilter = "";
+    sel.value = "";
+    return;
+  }
+  group.classList.remove("hidden");
+  try {
+    const data = await pairConfigApi("/users");
+    const users = Array.isArray(data.users) ? data.users : [];
+    const prev = ratingUserFilter;
+    const options = [`<option value="">Все аккаунты</option>`];
+    for (const u of users) {
+      const id = String(u.id || "");
+      if (!id) continue;
+      const name = String(u.username || id);
+      const isAdm = u.role === "admin" || id === "admin";
+      const label = isAdm ? `Главный (${name})` : name;
+      options.push(`<option value="${escapeHtml(id)}">${escapeHtml(label)}</option>`);
+    }
+    sel.innerHTML = options.join("");
+    const ids = new Set(users.map((u) => String(u.id || "")));
+    ratingUserFilter = prev && ids.has(prev) ? prev : "";
+    sel.value = ratingUserFilter;
+  } catch {
+    // Keep current options if /users fails
+  }
+}
+
+function syncRatingUserFilterVisibility() {
+  const group = $("rating-user-group");
+  if (!group) return;
+  if (!isAdminUser()) {
+    group.classList.add("hidden");
+    if (ratingUserFilter) {
+      ratingUserFilter = "";
+      const sel = $("rating-user-filter");
+      if (sel) sel.value = "";
+    }
+  } else {
+    group.classList.remove("hidden");
+  }
+}
+
+function hideMainViewsForOverlay() {
+  $("changelog-view")?.classList.add("hidden");
+  $("logs-view")?.classList.add("hidden");
+  $("settings-view")?.classList.add("hidden");
+  $("history-view")?.classList.add("hidden");
+  $("pnl-dashboard-view")?.classList.add("hidden");
+  $("pnl-dashboard-view")?.setAttribute("aria-hidden", "true");
+  $("rating-view")?.classList.add("hidden");
+  $("rating-view")?.setAttribute("aria-hidden", "true");
+  $("dashboard-view")?.classList.add("hidden");
+}
+
+function openRating() {
+  if (!userMayUseBlock("rating")) return;
+  closeMobileMenu();
+  hideMainViewsForOverlay();
+  const view = $("rating-view");
+  view?.classList.remove("hidden");
+  view?.setAttribute("aria-hidden", "false");
+  ensureRatingUserOptions()
+    .catch(() => {})
+    .finally(() => loadRating(false));
+}
+
+function closeRating() {
+  $("rating-view")?.classList.add("hidden");
+  $("rating-view")?.setAttribute("aria-hidden", "true");
+  $("dashboard-view")?.classList.remove("hidden");
+}
+
+function setRatingPeriod(period) {
+  ratingPeriod = normalizeStatsPeriod(period);
+  updateRatingFilterUi();
+  loadRating(true);
+}
+
+function setRatingScope(scope) {
+  const next = scope === "pairs" ? "pairs" : "strategies";
+  if (ratingScope === next) return;
+  ratingScope = next;
+  ratingExpandedPairs.clear();
+  updateRatingFilterUi();
+  loadRating(false);
+}
+
+function setRatingUserFilter(userId) {
+  const next = String(userId || "");
+  if (ratingUserFilter === next) return;
+  ratingUserFilter = next;
+  ratingExpandedPairs.clear();
+  updateRatingFilterUi();
+  loadRating(true);
+}
+
+function toggleRatingPairExpand(pairId) {
+  if (!pairId) return;
+  if (ratingExpandedPairs.has(pairId)) ratingExpandedPairs.delete(pairId);
+  else ratingExpandedPairs.add(pairId);
+  const cached = ratingDataCache[ratingCacheKey()];
+  if (cached) renderRating(cached);
+}
+
+function updateRatingFilterUi() {
+  const isPairs = ratingScope === "pairs";
+  syncRatingUserFilterVisibility();
+  document.querySelectorAll(".rating-scope").forEach((btn) => {
+    const active = btn.dataset.ratingScope === ratingScope;
+    btn.classList.toggle("is-active", active);
+    btn.setAttribute("aria-selected", active ? "true" : "false");
+  });
+  document.querySelectorAll(".rating-period").forEach((btn) => {
+    btn.classList.toggle("is-active", btn.dataset.ratingPeriod === ratingPeriod);
+  });
+  const sel = $("rating-user-filter");
+  if (sel && sel.value !== ratingUserFilter) sel.value = ratingUserFilter;
+
+  const title = $("rating-title");
+  const subtitle = $("rating-subtitle");
+  const account = ratingAccountLabel();
+  if (title) title.textContent = isPairs ? "Рейтинг пар" : "Рейтинг стратегий";
+  if (subtitle) {
+    subtitle.textContent = isPairs
+      ? `${account} · strategy / finder / grid · клик по паре — детализация`
+      : `${account} · закрытые сделки strategy-бота`;
+  }
+
+  const labelTh = $("rating-col-label");
+  if (labelTh) {
+    labelTh.dataset.labelBase = isPairs ? "Пара" : "Стратегия";
+  }
+
+  document.querySelectorAll("#rating-table .rating-sort").forEach((th) => {
+    const key = th.dataset.ratingSort;
+    const active = key === ratingSortKey;
+    th.classList.toggle("is-active", active);
+    th.classList.toggle("is-asc", active && !ratingSortDesc);
+    th.classList.toggle("is-desc", active && ratingSortDesc);
+    const base = th.dataset.labelBase || th.textContent.replace(/\s*[▲▼]\s*$/, "").trim();
+    th.dataset.labelBase = base;
+    th.textContent = active ? `${base} ${ratingSortDesc ? "▼" : "▲"}` : base;
+  });
+}
+
+function ratingSortValue(row, key) {
+  if (key === "label") return String(row.label || row.pair || row.strategy_id || "").toLowerCase();
+  if (key === "rank") return Number(row.rank || 0);
+  return Number(row[key] ?? 0);
+}
+
+function sortedRatingRows(data) {
+  const rows = Array.isArray(data?.rows)
+    ? [...data.rows]
+    : Array.isArray(data?.pnl)
+      ? [...data.pnl]
+      : [];
+  const desc = ratingSortDesc;
+  const key = ratingSortKey;
+  rows.sort((a, b) => {
+    const av = ratingSortValue(a, key);
+    const bv = ratingSortValue(b, key);
+    if (typeof av === "string" || typeof bv === "string") {
+      const cmp = String(av).localeCompare(String(bv), "ru");
+      return desc ? -cmp : cmp;
+    }
+    if (av === bv) return 0;
+    return desc ? (bv > av ? 1 : -1) : av > bv ? 1 : -1;
+  });
+  return rows;
+}
+
+function setRatingSort(key) {
+  if (!key) return;
+  if (ratingSortKey === key) ratingSortDesc = !ratingSortDesc;
+  else {
+    ratingSortKey = key;
+    // strings asc first; numbers (pnl/trades/...) desc first
+    ratingSortDesc = key !== "label";
+  }
+  const cached = ratingDataCache[ratingCacheKey()];
+  if (cached) renderRating(cached);
+  else loadRating(false);
+}
+
+function ratingMetricCells(r) {
+  const income = Number(r.income ?? 0);
+  const lossAbs = Number(r.loss_abs ?? Math.abs(r.loss_sum ?? 0));
+  const pnl = Number(r.pnl ?? 0);
+  const wr = r.winrate != null ? Number(r.winrate) : null;
+  const incomeCls = income > 0 ? "pos" : "";
+  const lossCls = lossAbs > 0 ? "neg" : "";
+  const pnlCls = pnl > 0 ? "pos" : pnl < 0 ? "neg" : "";
+  const wrBar =
+    wr == null
+      ? "—"
+      : `<span class="rating-wr">
+          <span class="rating-wr-val">${wr.toFixed(1)}</span>
+          <span class="rating-wr-track" aria-hidden="true"><span class="rating-wr-fill" style="width:${Math.max(0, Math.min(100, wr))}%"></span></span>
+        </span>`;
+  return {
+    income,
+    lossAbs,
+    pnl,
+    incomeCls,
+    lossCls,
+    pnlCls,
+    wrBar,
+    cells: `
+      <td class="num">${r.trades ?? 0}</td>
+      <td class="num rating-wr-cell">${wrBar}</td>
+      <td class="num ${incomeCls}">${fmtUsd(income)}</td>
+      <td class="num ${lossCls}">${lossAbs > 0 ? fmtUsd(-lossAbs) : fmtUsd(0)}</td>
+      <td class="num rating-net ${pnlCls}"><strong>${fmtUsd(pnl)}</strong></td>`,
+  };
+}
+
+function renderRatingDetailRows(pairId, details) {
+  if (!Array.isArray(details) || !details.length) {
+    return `<tr class="rating-detail-row" data-pair="${escapeHtml(pairId)}">
+      <td></td>
+      <td colspan="6" class="muted rating-detail-empty">Нет детализации</td>
+    </tr>`;
+  }
+  return details
+    .map((d) => {
+      const m = ratingMetricCells(d);
+      const strat = escapeHtml(d.strategy_label || d.label || d.strategy_id || "—");
+      const bot = escapeHtml(d.bot_label || d.bot || "");
+      return `<tr class="rating-detail-row" data-pair="${escapeHtml(pairId)}">
+        <td class="rating-detail-pad"></td>
+        <td class="rating-detail-label">
+          <span class="rating-detail-strategy">${strat}</span>
+          ${bot ? `<span class="rating-detail-bot">${bot}</span>` : ""}
+        </td>
+        ${m.cells}
+      </tr>`;
+    })
+    .join("");
+}
+
+function renderRating(data) {
+  updateRatingFilterUi();
+  const rows = sortedRatingRows(data);
+  const body = $("rating-table-body");
+  const status = $("rating-status");
+  const summary = $("rating-summary");
+  if (!body) return;
+  const isPairs = ratingScope === "pairs";
+
+  if (!rows.length) {
+    body.innerHTML = `<tr><td colspan="7" class="stats-history-empty">Нет закрытых сделок за период</td></tr>`;
+  } else if (!isPairs) {
+    body.innerHTML = rows
+      .map((r, idx) => {
+        const m = ratingMetricCells(r);
+        const place = idx + 1;
+        const placeCls =
+          place === 1 ? "is-gold" : place === 2 ? "is-silver" : place === 3 ? "is-bronze" : "";
+        return `<tr class="rating-row ${placeCls}">
+          <td class="rating-place"><span class="rating-place-badge">${place}</span></td>
+          <td class="rating-strategy">${escapeHtml(r.label || r.strategy_id || "—")}</td>
+          ${m.cells}
+        </tr>`;
+      })
+      .join("");
+  } else {
+    body.innerHTML = rows
+      .map((r, idx) => {
+        const m = ratingMetricCells(r);
+        const place = idx + 1;
+        const placeCls =
+          place === 1 ? "is-gold" : place === 2 ? "is-silver" : place === 3 ? "is-bronze" : "";
+        const pairId = String(r.pair || r.label || "");
+        const expanded = ratingExpandedPairs.has(pairId);
+        const details = Array.isArray(r.details) ? r.details : [];
+        const chevron = expanded ? "▾" : "▸";
+        const main = `<tr class="rating-row rating-pair-row ${placeCls} ${expanded ? "is-expanded" : ""}" data-pair="${escapeHtml(pairId)}" tabindex="0" role="button" aria-expanded="${expanded ? "true" : "false"}">
+          <td class="rating-place"><span class="rating-place-badge">${place}</span></td>
+          <td class="rating-strategy rating-pair-label">
+            <span class="rating-expand-icon" aria-hidden="true">${chevron}</span>
+            <span>${escapeHtml(pairId || "—")}</span>
+            <span class="rating-pair-meta muted">${details.length} ист.</span>
+          </td>
+          ${m.cells}
+        </tr>`;
+        return expanded ? main + renderRatingDetailRows(pairId, details) : main;
+      })
+      .join("");
+
+    body.querySelectorAll(".rating-pair-row").forEach((tr) => {
+      const pairId = tr.dataset.pair || "";
+      const toggle = () => toggleRatingPairExpand(pairId);
+      tr.addEventListener("click", toggle);
+      tr.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter" || ev.key === " ") {
+          ev.preventDefault();
+          toggle();
+        }
+      });
+    });
+  }
+
+  const periodLabel = STATS_PERIOD_LABELS[ratingPeriod] || STATS_PERIOD_LABELS.all;
+  const users = data?.users ?? 0;
+  const trades = data?.trades_total ?? 0;
+  const entityLabel = isPairs ? "Пар" : "Стратегий";
+  const entityCount = isPairs
+    ? data?.pairs_total ?? rows.length
+    : data?.strategies_total ?? rows.length;
+  if (summary) {
+    const accountChip = data?.user_label
+      ? `<div class="rating-chip"><span>Аккаунт</span><strong>${escapeHtml(data.user_label)}</strong></div>`
+      : `<div class="rating-chip"><span>Аккаунтов</span><strong>${users}</strong></div>`;
+    summary.innerHTML = `
+      <div class="rating-chip"><span>Период</span><strong>${escapeHtml(periodLabel)}</strong></div>
+      <div class="rating-chip"><span>${entityLabel}</span><strong>${entityCount}</strong></div>
+      <div class="rating-chip"><span>Сделок</span><strong>${trades}</strong></div>
+      ${accountChip}
+    `;
+  }
+  if (status) {
+    status.textContent = isPairs
+      ? "Клик по паре — стратегии и боты · PnL = сумма плюсов · Убытки = сумма минусов · Чистый PnL = итог"
+      : "Клик по заголовку — сортировка · PnL = сумма плюсов · Убытки = сумма минусов · Чистый PnL = итог";
+  }
+}
+
+async function loadRating(force) {
+  const status = $("rating-status");
+  if (status) status.textContent = "Загрузка…";
+  updateRatingFilterUi();
+  const scope = ratingScope;
+  const user = isAdminUser() ? ratingUserFilter : "";
+  const cacheKey = ratingCacheKey(scope, user);
+  try {
+    const cached = ratingDataCache[cacheKey];
+    if (!force && cached && cached.period === ratingPeriod && (cached.user_filter || "") === (user || "")) {
+      renderRating(cached);
+      return;
+    }
+    const params = new URLSearchParams({
+      period: ratingPeriod,
+      limit: "100",
+    });
+    if (user) params.set("user", user);
+    const endpoint =
+      scope === "pairs" ? `/pair-rating?${params}` : `/strategy-rating?${params}`;
+    const data = await pairConfigApi(endpoint);
+    ratingDataCache[cacheKey] = data;
+    if (ratingScope === scope && (isAdminUser() ? ratingUserFilter : "") === user) {
+      renderRating(data);
+    }
+  } catch (e) {
+    if (e.message === "auth") logout();
+    else if (status) status.textContent = formatApiError(e.message);
+  }
+}
+
+function bindRatingControls() {
+  document.querySelectorAll(".rating-period").forEach((btn) => {
+    if (btn.dataset.bound) return;
+    btn.dataset.bound = "1";
+    btn.addEventListener("click", () => setRatingPeriod(btn.dataset.ratingPeriod || "all"));
+  });
+  document.querySelectorAll(".rating-scope").forEach((btn) => {
+    if (btn.dataset.bound) return;
+    btn.dataset.bound = "1";
+    btn.addEventListener("click", () => setRatingScope(btn.dataset.ratingScope || "strategies"));
+  });
+  document.querySelectorAll("#rating-table .rating-sort").forEach((th) => {
+    if (th.dataset.bound) return;
+    th.dataset.bound = "1";
+    th.addEventListener("click", () => setRatingSort(th.dataset.ratingSort || "pnl"));
+  });
+  const userSel = $("rating-user-filter");
+  if (userSel && !userSel.dataset.bound) {
+    userSel.dataset.bound = "1";
+    userSel.addEventListener("change", () => setRatingUserFilter(userSel.value || ""));
+  }
+  $("rating-back-btn")?.addEventListener("click", closeRating);
+  $("rating-refresh-btn")?.addEventListener("click", () => loadRating(true));
 }
 
 function addClosedTradeToRow(row, trade) {
@@ -1824,7 +2344,8 @@ function renderStatsModal(data) {
 
   const rows = filterStatsRows(
     buildStatsRows(finderFiltered, stratFiltered, gridFiltered, bybitFiltered, catalog),
-    statsScope
+    statsScope,
+    catalog
   );
 
   let totalProfit = 0;
@@ -1850,19 +2371,19 @@ function renderStatsModal(data) {
 
   summaryEl.innerHTML = `
     ${warnHtml}
-    <div class="stats-kpi">
+    <div class="stats-kpi stats-kpi-income">
       <span>Прибыль</span>
       <strong class="pos">${fmtUsd(totalProfit)}</strong>
     </div>
-    <div class="stats-kpi">
+    <div class="stats-kpi stats-kpi-expense">
       <span>Потери</span>
       <strong class="neg">${fmtUsd(totalLoss)}</strong>
     </div>
-    <div class="stats-kpi">
+    <div class="stats-kpi stats-kpi-net">
       <span>Итого</span>
       <strong class="${pnlClass(net)}">${fmtUsdSigned(net)}</strong>
     </div>
-    <div class="stats-kpi">
+    <div class="stats-kpi stats-kpi-ratio">
       <span>Успешные / неуспешные</span>
       <strong>${totalWins} / ${totalLosses}${totalFlat ? ` · 0: ${totalFlat}` : ""}</strong>
     </div>
@@ -2105,7 +2626,12 @@ function syncEnabledFromPayload(data) {
     mlConfidenceStrategies[s.id] = mlConf[s.id] != null ? Number(mlConf[s.id]) : def;
   }
   syncStrategyRiskFromPayload(data);
+  syncTestSettingsFromPayload(data);
   if (data?.dual_hedge != null) dualHedgeEnabled = !!data.dual_hedge;
+  if (data?.max_open_trades_per_strategy != null) {
+    BOTS.strategy.maxPerStrategy = Number(data.max_open_trades_per_strategy);
+    updateMaxTradesHint();
+  }
 }
 
 function syncStrategyRiskFromPayload(data) {
@@ -2113,6 +2639,18 @@ function syncStrategyRiskFromPayload(data) {
   if (!risk) return;
   if (risk.stoploss_pct != null) strategyRisk.stoploss_pct = Number(risk.stoploss_pct);
   if (risk.take_profit_pct != null) strategyRisk.take_profit_pct = Number(risk.take_profit_pct);
+}
+
+function syncTestSettingsFromPayload(data) {
+  const ts = data?.test_settings;
+  if (!ts) return;
+  if (ts.max_open_trades != null) testSettings.max_open_trades = Number(ts.max_open_trades);
+  if (ts.max_open_trades_per_strategy != null) {
+    testSettings.max_open_trades_per_strategy = Number(ts.max_open_trades_per_strategy);
+  }
+  if (ts.stake_amount != null) testSettings.stake_amount = Number(ts.stake_amount);
+  if (ts.stoploss_pct != null) testSettings.stoploss_pct = Number(ts.stoploss_pct);
+  if (ts.take_profit_pct != null) testSettings.take_profit_pct = Number(ts.take_profit_pct);
 }
 
 function strategyRiskSummaryText() {
@@ -2135,47 +2673,75 @@ async function setDualHedge(enabled) {
 }
 
 function renderDualHedgeControl() {
-  const el = $("strategy-dual-hedge");
-  if (!el) return;
-  el.innerHTML = `
+  const html = `
     <label class="strategy-dual-hedge-label">
-      <input type="checkbox" id="strategy-dual-hedge-cb" ${dualHedgeEnabled ? "checked" : ""} />
+      <input type="checkbox" class="strategy-dual-hedge-cb" ${dualHedgeEnabled ? "checked" : ""} />
       <span>
         <strong>Dual hedge</strong>
         <span class="muted"> — на каждый сигнал сразу long + short (2 позиции, 2× stake · max_open_trades ≥ 4)</span>
       </span>
     </label>
-    <p class="muted strategy-dual-hedge-hint">Bybit hedge mode · 1 пара = 2 слота max_open_trades · ML gate на обе ноги</p>
+    <p class="muted strategy-dual-hedge-hint">Bybit hedge mode · 1 пара = 2 слота max_open_trades · ML gate на обе ноги · общий флаг для strategy-бота</p>
   `;
-  const cb = $("strategy-dual-hedge-cb");
-  if (!cb || cb.dataset.bound) return;
-  cb.dataset.bound = "1";
-  cb.addEventListener("change", async () => {
-    const next = cb.checked;
-    cb.disabled = true;
-    try {
-      if (next && !confirm("Включить dual hedge? На каждый сигнал сразу long + short. max_open_trades поднимется до 4, Bybit — hedge mode.")) {
-        cb.checked = false;
-        return;
+  for (const id of ["strategy-dual-hedge"]) {
+    const el = $(id);
+    if (!el) continue;
+    el.innerHTML = html;
+    const cb = el.querySelector(".strategy-dual-hedge-cb");
+    if (!cb || cb.dataset.bound) continue;
+    cb.dataset.bound = "1";
+    cb.addEventListener("change", async () => {
+      const next = cb.checked;
+      document.querySelectorAll(".strategy-dual-hedge-cb").forEach((x) => {
+        x.disabled = true;
+      });
+      try {
+        if (
+          next &&
+          !confirm(
+            "Включить dual hedge? На каждый сигнал сразу long + short. max_open_trades поднимется до 4, Bybit — hedge mode."
+          )
+        ) {
+          document.querySelectorAll(".strategy-dual-hedge-cb").forEach((x) => {
+            x.checked = false;
+          });
+          return;
+        }
+        const data = await setDualHedge(next);
+        document.querySelectorAll(".strategy-dual-hedge-cb").forEach((x) => {
+          x.checked = next;
+        });
+        if (data?.limits_note) showPairMsg(data.limits_note);
+        await refreshAll();
+      } catch (e) {
+        document.querySelectorAll(".strategy-dual-hedge-cb").forEach((x) => {
+          x.checked = !next;
+        });
+        if (e.message === "auth") logout();
+        else alert(formatApiError(e.message));
+      } finally {
+        document.querySelectorAll(".strategy-dual-hedge-cb").forEach((x) => {
+          x.disabled = false;
+        });
       }
-      const data = await setDualHedge(next);
-      if (data?.limits_note) showPairMsg(data.limits_note);
-      await refreshAll();
-    } catch (e) {
-      cb.checked = !next;
-      if (e.message === "auth") logout();
-      else alert(formatApiError(e.message));
-    } finally {
-      cb.disabled = false;
-    }
-  });
+    });
+  }
+}
+
+function isTestStrategy(s) {
+  return !!(s && (s.test_group || s.testGroup));
+}
+
+function catalogByGroup(testGroup = false) {
+  return strategyCatalog.filter((s) => isTestStrategy(s) === !!testGroup);
 }
 
 function updateStrategyDisplay() {
   const el = $("strategy-active-name");
   const hint = $("strategy-enabled-hint");
   const panelSummary = $("strategy-panel-summary");
-  const active = strategyCatalog.filter((s) => enabledStrategies[s.id]);
+  const mainCatalog = catalogByGroup(false);
+  const active = mainCatalog.filter((s) => enabledStrategies[s.id]);
 
   if (el) {
     el.classList.remove("warn");
@@ -2189,8 +2755,8 @@ function updateStrategyDisplay() {
         : strategyCatalogLabel(active[0]);
     } else {
       el.textContent = riskNote
-        ? `${active.length} из ${strategyCatalog.length} активны · ${riskNote}`
-        : `${active.length} из ${strategyCatalog.length} активны`;
+        ? `${active.length} из ${mainCatalog.length} активны · ${riskNote}`
+        : `${active.length} из ${mainCatalog.length} активны`;
     }
   }
 
@@ -2199,7 +2765,7 @@ function updateStrategyDisplay() {
     if (!active.length) {
       hint.textContent = "Включите хотя бы одну стратегию";
     } else {
-      hint.textContent = `${active.length} из ${strategyCatalog.length} включено · сигнал от любой из них${riskNote ? ` · ${riskNote}` : ""}`;
+      hint.textContent = `${active.length} из ${mainCatalog.length} включено · сигнал от любой из них${riskNote ? ` · ${riskNote}` : ""}`;
     }
   }
 
@@ -2210,12 +2776,52 @@ function updateStrategyDisplay() {
     } else if (active.length === 1) {
       panelSummary.textContent = `${strategyCatalogLabel(active[0])}${riskNote ? ` · ${riskNote}` : ""} · изменить`;
     } else {
-      panelSummary.textContent = `${active.length} из ${strategyCatalog.length} включено${riskNote ? ` · ${riskNote}` : ""} · изменить`;
+      panelSummary.textContent = `${active.length} из ${mainCatalog.length} включено${riskNote ? ` · ${riskNote}` : ""} · изменить`;
     }
   }
 
+  updateTestStrategyDisplay();
   renderStrategyRiskControls();
+  renderTestStrategyRiskControls();
   renderDualHedgeControl();
+}
+
+function updateTestStrategyDisplay() {
+  const el = $("test-strategy-active-name");
+  const hint = $("test-strategy-enabled-hint");
+  const panelSummary = $("test-strategy-panel-summary");
+  const catalog = catalogByGroup(true);
+  const active = catalog.filter((s) => enabledStrategies[s.id]);
+
+  if (el) {
+    if (!catalog.length) {
+      el.textContent = "Нет тестовых в каталоге";
+    } else if (!active.length) {
+      el.textContent = "Все тестовые выключены";
+    } else if (active.length === 1) {
+      el.textContent = strategyCatalogLabel(active[0]);
+    } else {
+      el.textContent = `${active.length} из ${catalog.length} активны`;
+    }
+  }
+
+  if (hint) {
+    if (!active.length) {
+      hint.textContent = "Тестовые стратегии выключены — на торговлю не влияют";
+    } else {
+      hint.textContent = `${active.length} из ${catalog.length} включено · тот же MultiStrategyRouter`;
+    }
+  }
+
+  if (panelSummary) {
+    if (!active.length) {
+      panelSummary.textContent = "все выкл · развернуть";
+    } else if (active.length === 1) {
+      panelSummary.textContent = `${strategyCatalogLabel(active[0])} · изменить`;
+    } else {
+      panelSummary.textContent = `${active.length} из ${catalog.length} включено · изменить`;
+    }
+  }
 }
 
 function bindCollapsibleSections() {
@@ -2245,6 +2851,12 @@ function renderWhitelist(bot, whitelist) {
   if (el) el.textContent = pairs.join(", ") || "—";
   const summary = $(`${bot}-pairs-summary`);
   if (summary) summary.textContent = whitelistSummaryText(pairs);
+  if (bot === "strategy") {
+    const testEl = $("test-strategy-pairs");
+    if (testEl) testEl.textContent = pairs.join(", ") || "—";
+    const testSummary = $("test-strategy-pairs-summary");
+    if (testSummary) testSummary.textContent = whitelistSummaryText(pairs);
+  }
 }
 
 function trainedRiskHint(id) {
@@ -2279,10 +2891,10 @@ function bulkMlConfidenceChoices() {
   return [...set].sort((a, b) => a - b);
 }
 
-async function setAllStrategiesMlConfidence(value, { reset = false } = {}) {
+async function setAllStrategiesMlConfidence(value, { reset = false, group = "main" } = {}) {
   const payload = reset
-    ? { action: "set_all_strategies_ml_confidence", reset: true }
-    : { action: "set_all_strategies_ml_confidence", ml_confidence: value };
+    ? { action: "set_all_strategies_ml_confidence", reset: true, group }
+    : { action: "set_all_strategies_ml_confidence", ml_confidence: value, group };
   const data = await pairConfigApi("/pairs", "POST", payload);
   syncEnabledFromPayload(data);
   updateStrategyDisplay();
@@ -2291,11 +2903,107 @@ async function setAllStrategiesMlConfidence(value, { reset = false } = {}) {
   return data;
 }
 
-function renderBulkMlConfidenceControls() {
-  const ids = ["strategy-ml-conf-bulk", "strategy-ml-conf-bulk-settings"];
+async function setAllStrategiesEnabled(enabled, { group = "main" } = {}) {
+  const data = await pairConfigApi("/pairs", "POST", {
+    action: "set_all_strategies_enabled",
+    enabled: !!enabled,
+    group,
+  });
+  syncEnabledFromPayload(data);
+  updateStrategyDisplay();
+  renderStrategyToggles();
+  return data;
+}
+
+function renderBulkEnableControlsFor(ids, { group = "main", label = "Стратегии", hint = "" } = {}) {
+  const catalog = catalogByGroup(group === "test");
+  const activeCount = catalog.filter((s) => enabledStrategies[s.id]).length;
+  const total = catalog.length;
+  const html = `
+    <div class="strategy-enable-bulk-inner">
+      <span class="strategy-enable-bulk-label">${label}</span>
+      <span class="muted strategy-enable-bulk-count">${activeCount} / ${total} вкл</span>
+      <div class="strategy-enable-bulk-actions">
+        <button type="button" class="btn btn-sm primary" data-strategy-enable-all>Включить все</button>
+        <button type="button" class="btn btn-sm ghost" data-strategy-disable-all>Выключить все</button>
+      </div>
+    </div>
+    <p class="muted strategy-enable-bulk-hint">${hint}</p>
+  `;
+  for (const id of ids) {
+    const el = $(id);
+    if (!el) continue;
+    el.innerHTML = html;
+    const onBtn = el.querySelector("[data-strategy-enable-all]");
+    const offBtn = el.querySelector("[data-strategy-disable-all]");
+    if (onBtn && !onBtn.dataset.bound) {
+      onBtn.dataset.bound = "1";
+      onBtn.addEventListener("click", async () => {
+        const confirmMsg =
+          group === "test" ? "Включить все тестовые стратегии?" : "Включить все стратегии?";
+        if (!confirm(confirmMsg)) return;
+        onBtn.disabled = true;
+        if (offBtn) offBtn.disabled = true;
+        try {
+          await setAllStrategiesEnabled(true, { group });
+          const msg =
+            group === "test" ? "Все тестовые стратегии включены" : "Все стратегии включены";
+          if (isSettingsOpen()) showPairMsg(msg);
+        } catch (e) {
+          if (e.message === "auth") logout();
+          else alert(formatApiError(e.message));
+        } finally {
+          onBtn.disabled = false;
+          if (offBtn) offBtn.disabled = false;
+        }
+      });
+    }
+    if (offBtn && !offBtn.dataset.bound) {
+      offBtn.dataset.bound = "1";
+      offBtn.addEventListener("click", async () => {
+        const confirmMsg =
+          group === "test"
+            ? "Выключить все тестовые стратегии?"
+            : "Выключить все стратегии? Новые входы по основным остановятся.";
+        if (!confirm(confirmMsg)) return;
+        onBtn.disabled = true;
+        offBtn.disabled = true;
+        try {
+          await setAllStrategiesEnabled(false, { group });
+          const msg =
+            group === "test" ? "Все тестовые стратегии выключены" : "Все стратегии выключены";
+          if (isSettingsOpen()) showPairMsg(msg);
+        } catch (e) {
+          if (e.message === "auth") logout();
+          else alert(formatApiError(e.message));
+        } finally {
+          onBtn.disabled = false;
+          offBtn.disabled = false;
+        }
+      });
+    }
+  }
+}
+
+function renderBulkEnableControls() {
+  renderBulkEnableControlsFor(["strategy-enable-bulk"], {
+    group: "main",
+    label: "Стратегии",
+    hint:
+      "Выключить все = пауза входов по основным · Включить все = pack без тестовых · без рестарта · деплой не затирает включения",
+  });
+  renderBulkEnableControlsFor(["test-strategy-enable-bulk"], {
+    group: "test",
+    label: "Тестовые",
+    hint: "Только тестовый блок · общий strategy-бот · без рестарта",
+  });
+}
+
+function renderBulkMlConfidenceControlsFor(ids, { group = "main" } = {}) {
+  const catalog = catalogByGroup(group === "test");
   const choices = bulkMlConfidenceChoices();
   const common = (() => {
-    const vals = strategyCatalog.map((s) => Number(mlConfidenceStrategies[s.id])).filter(Number.isFinite);
+    const vals = catalog.map((s) => Number(mlConfidenceStrategies[s.id])).filter(Number.isFinite);
     if (!vals.length) return null;
     const first = vals[0];
     return vals.every((v) => Math.abs(v - first) < 1e-9) ? first : null;
@@ -2307,20 +3015,21 @@ function renderBulkMlConfidenceControls() {
       return `<option value="${v}"${sel}>${p}%</option>`;
     })
     .join("");
+  const scopeLabel = group === "test" ? "тестовых" : "основных";
   const html = `
     <div class="strategy-ml-conf-bulk-inner">
       <label class="strategy-ml-conf-bulk-label">
-        <span>Уверенность ML для всех</span>
+        <span>Уверенность ML для ${scopeLabel}</span>
         <select class="strategy-ml-conf-bulk-select" data-ml-conf-bulk-select>
           ${options}
         </select>
       </label>
       <div class="strategy-ml-conf-bulk-actions">
-        <button type="button" class="btn btn-sm primary" data-ml-conf-bulk-apply>Применить ко всем</button>
-        <button type="button" class="btn btn-sm ghost" data-ml-conf-bulk-reset title="Вернуть порог из обучения (pack) для каждой стратегии">Стандарт</button>
+        <button type="button" class="btn btn-sm primary" data-ml-conf-bulk-apply>Применить</button>
+        <button type="button" class="btn btn-sm ghost" data-ml-conf-bulk-reset title="Вернуть порог из обучения (pack)">Стандарт</button>
       </div>
     </div>
-    <p class="muted strategy-ml-conf-bulk-hint">Один порог на все стратегии · без рестарта бота · «Стандарт» = дефолт каждой стратегии из pack</p>
+    <p class="muted strategy-ml-conf-bulk-hint">Только ${scopeLabel} · без рестарта · «Стандарт» = дефолт из pack</p>
   `;
   for (const id of ids) {
     const el = $(id);
@@ -2335,12 +3044,12 @@ function renderBulkMlConfidenceControls() {
         const value = Number(select?.value);
         if (!Number.isFinite(value)) return;
         const pct = Math.round(value * 100);
-        if (!confirm(`Поставить уверенность ML ${pct}% для всех стратегий?`)) return;
+        if (!confirm(`Поставить уверенность ML ${pct}% для ${scopeLabel}?`)) return;
         applyBtn.disabled = true;
         if (resetBtn) resetBtn.disabled = true;
         try {
-          await setAllStrategiesMlConfidence(value);
-          const msg = `Уверенность ML ${pct}% для всех стратегий`;
+          await setAllStrategiesMlConfidence(value, { group });
+          const msg = `Уверенность ML ${pct}% для ${scopeLabel}`;
           if (isSettingsOpen()) showPairMsg(msg);
         } catch (e) {
           if (e.message === "auth") logout();
@@ -2354,12 +3063,12 @@ function renderBulkMlConfidenceControls() {
     if (resetBtn && !resetBtn.dataset.bound) {
       resetBtn.dataset.bound = "1";
       resetBtn.addEventListener("click", async () => {
-        if (!confirm("Сбросить уверенность ML к стандарту (pack) для всех стратегий?")) return;
+        if (!confirm(`Сбросить уверенность ML к стандарту для ${scopeLabel}?`)) return;
         applyBtn.disabled = true;
         resetBtn.disabled = true;
         try {
-          await setAllStrategiesMlConfidence(null, { reset: true });
-          const msg = "Уверенность ML сброшена к стандарту для всех";
+          await setAllStrategiesMlConfidence(null, { reset: true, group });
+          const msg = `Уверенность ML сброшена к стандарту (${scopeLabel})`;
           if (isSettingsOpen()) showPairMsg(msg);
         } catch (e) {
           if (e.message === "auth") logout();
@@ -2371,6 +3080,15 @@ function renderBulkMlConfidenceControls() {
       });
     }
   }
+}
+
+function renderBulkMlConfidenceControls() {
+  renderBulkMlConfidenceControlsFor(["strategy-ml-conf-bulk"], {
+    group: "main",
+  });
+  renderBulkMlConfidenceControlsFor(["test-strategy-ml-conf-bulk"], {
+    group: "test",
+  });
 }
 
 function renderMlConfidenceControl(id) {
@@ -2424,10 +3142,11 @@ function bindMlConfidenceMenusOnce() {
   });
 }
 
-function renderStrategyTogglesInto(container) {
+function renderStrategyTogglesInto(container, { testGroup = false } = {}) {
   if (!container) return;
   bindMlConfidenceMenusOnce();
-  container.innerHTML = strategyCatalog
+  const catalog = catalogByGroup(testGroup);
+  container.innerHTML = catalog
     .map((s) => {
       const hasTrain = !!trainedRiskAvailable[s.id] || !!trainedRiskSpecs[s.id];
       const trainOn = !!trainedRiskStrategies[s.id];
@@ -2616,9 +3335,10 @@ function renderStrategyTogglesInto(container) {
 }
 
 function renderStrategyToggles() {
+  renderBulkEnableControls();
   renderBulkMlConfidenceControls();
-  renderStrategyTogglesInto($("strategy-panel-toggles"));
-  renderStrategyTogglesInto($("strategy-toggle-list"));
+  renderStrategyTogglesInto($("strategy-panel-toggles"), { testGroup: false });
+  renderStrategyTogglesInto($("test-strategy-panel-toggles"), { testGroup: true });
 }
 
 async function refreshStrategyEnabled() {
@@ -2669,16 +3389,95 @@ function renderStrategyRiskInputHtml() {
 }
 
 function renderStrategyRiskControls() {
-  const panel = $("strategy-risk-panel");
-  if (panel) {
-    panel.innerHTML = renderStrategyRiskInputHtml();
-    bindStrategyRiskInput(panel.querySelector("[data-strategy-risk-input]"));
+  const targets = ["strategy-risk-panel"];
+  for (const id of targets) {
+    const el = $(id);
+    if (!el) continue;
+    el.innerHTML = renderStrategyRiskInputHtml();
+    bindStrategyRiskInput(el.querySelector("[data-strategy-risk-input]"));
   }
-  const settings = $("strategy-risk-settings");
-  if (settings) {
-    settings.innerHTML = renderStrategyRiskInputHtml();
-    bindStrategyRiskInput(settings.querySelector("[data-strategy-risk-input]"));
-  }
+}
+
+function renderTestStrategyRiskInputHtml() {
+  const sl = Number(testSettings.stoploss_pct);
+  const tp = Number(testSettings.take_profit_pct);
+  return `
+    <div class="strategy-risk-bar-inner">
+      <span class="strategy-risk-title">Стоп / тейк (тест)</span>
+      <div class="numeric-setting strategy-risk-setting" data-test-strategy-risk-input>
+        <label class="strategy-risk-field">
+          <span class="muted">SL</span>
+          <input type="number" class="numeric-setting-input strategy-risk-sl" min="${TEST_SL_MIN}" max="${TEST_SL_MAX}" step="0.5" value="${sl}" inputmode="decimal" aria-label="Стоп-лосс тестовых %" />
+          <span class="numeric-setting-suffix">%</span>
+        </label>
+        <label class="strategy-risk-field">
+          <span class="muted">TP</span>
+          <input type="number" class="numeric-setting-input strategy-risk-tp" min="${TEST_TP_MIN}" max="${TEST_TP_MAX}" step="0.1" value="${tp}" inputmode="decimal" aria-label="Тейк-профит тестовых %" />
+          <span class="numeric-setting-suffix">%</span>
+        </label>
+        <button type="button" class="btn btn-sm primary numeric-setting-save">Сохранить</button>
+      </div>
+      <span class="muted strategy-risk-hint">только тестовый блок · если у стратегии выкл. «SL/TP из обучения» · иначе TAG_RISK</span>
+    </div>
+  `;
+}
+
+function renderTestStrategyRiskControls() {
+  const el = $("test-strategy-risk-panel");
+  if (!el) return;
+  el.innerHTML = renderTestStrategyRiskInputHtml();
+  bindTestStrategyRiskInput(el.querySelector("[data-test-strategy-risk-input]"));
+}
+
+async function setTestStrategySettings(patch) {
+  const data = await pairConfigApi("/pairs", "POST", {
+    action: "set_test_strategy_settings",
+    ...patch,
+  });
+  syncEnabledFromPayload(data);
+  syncTestSettingsFromPayload(data);
+  updateStrategyDisplay();
+  renderTestStrategyRiskControls();
+  return data;
+}
+
+function bindTestStrategyRiskInput(container) {
+  if (!container) return;
+  const slInput = container.querySelector(".strategy-risk-sl");
+  const tpInput = container.querySelector(".strategy-risk-tp");
+  const btn = container.querySelector(".numeric-setting-save");
+  if (!slInput || !tpInput || !btn) return;
+
+  const save = async () => {
+    const sl = Number(slInput.value);
+    const tp = Number(tpInput.value);
+    if (!Number.isFinite(sl) || sl < TEST_SL_MIN || sl > TEST_SL_MAX) {
+      alert(`Стоп-лосс: от ${TEST_SL_MIN}% до ${TEST_SL_MAX}%`);
+      return;
+    }
+    if (!Number.isFinite(tp) || tp < TEST_TP_MIN || tp > TEST_TP_MAX) {
+      alert(`Тейк-профит: от ${TEST_TP_MIN}% до ${TEST_TP_MAX}%`);
+      return;
+    }
+    btn.disabled = true;
+    try {
+      await setTestStrategySettings({ stoploss_pct: sl, take_profit_pct: tp });
+      await refreshBotSafe("strategy");
+    } catch (e) {
+      if (e.message === "auth") logout();
+      else alert(formatApiError(e.message));
+    } finally {
+      btn.disabled = false;
+    }
+  };
+
+  btn.onclick = save;
+  slInput.onkeydown = (e) => {
+    if (e.key === "Enter") save();
+  };
+  tpInput.onkeydown = (e) => {
+    if (e.key === "Enter") save();
+  };
 }
 
 function bindStrategyRiskInput(container) {
@@ -2735,7 +3534,11 @@ function updateMaxTradesHint() {
   if (!el) return;
   const activeMax =
     BOTS.strategy.maxTrades + BOTS.grid.maxTrades + bybitGridMaxBots;
-  el.textContent = `До ${activeMax} позиций: Finder — ${BOTS.finder.maxTrades}, стратегии — ${BOTS.strategy.maxTrades}, Grid — ${BOTS.grid.maxTrades}, Bybit Grid — ${bybitGridMaxBots} · ML gate`;
+  const per =
+    Number(BOTS.strategy.maxPerStrategy) > 0
+      ? ` · ≤${BOTS.strategy.maxPerStrategy}/стратегия`
+      : "";
+  el.textContent = `До ${activeMax} позиций: Finder — ${BOTS.finder.maxTrades}, стратегии — ${BOTS.strategy.maxTrades}${per}, Grid — ${BOTS.grid.maxTrades}, Bybit Grid — ${bybitGridMaxBots} · ML gate`;
 }
 
 async function setMaxTrades(bot, value) {
@@ -2751,6 +3554,32 @@ async function setMaxTrades(bot, value) {
   showReloadWarning(data);
   if (data?.trade_warning) {
     showReloadWarning({ reload_warning: data.trade_warning });
+  }
+  return data;
+}
+
+async function setMaxOpenTradesPerStrategy(value) {
+  const next = Number(value);
+  if (!Number.isFinite(next) || next < 0 || next > MAX_TRADES_LIMIT) return;
+  const data = await pairConfigApi("/pairs", "POST", {
+    action: "set_max_open_trades_per_strategy",
+    max_open_trades_per_strategy: next,
+  });
+  if (data?.max_open_trades_per_strategy != null) {
+    BOTS.strategy.maxPerStrategy = Number(data.max_open_trades_per_strategy);
+  } else {
+    BOTS.strategy.maxPerStrategy = next;
+  }
+  updateMaxTradesHint();
+  renderMaxPerStrategySettings();
+  // Refresh dashboard card so the new value appears under «Открыто сделок»
+  refreshBotSafe("strategy").catch(() => {});
+  if (isSettingsOpen()) {
+    showPairMsg(
+      next > 0
+        ? `Лимит на стратегию: ${next}`
+        : "Лимит на стратегию снят (без потолка)"
+    );
   }
   return data;
 }
@@ -2837,6 +3666,37 @@ function renderMaxTradesInput(bot) {
   `;
 }
 
+function renderMaxPerStrategyInput() {
+  const value = Number(BOTS.strategy.maxPerStrategy) || 0;
+  return `
+    <div class="numeric-setting" data-max-per-strategy-input>
+      <input type="number" class="numeric-setting-input" min="0" max="${MAX_TRADES_LIMIT}" step="1" value="${value}" inputmode="numeric" aria-label="Макс. сделок на одну стратегию" />
+      <button type="button" class="btn btn-sm primary numeric-setting-save">Сохранить</button>
+    </div>
+  `;
+}
+
+function bindMaxPerStrategyInput(container) {
+  bindNumericSetting(container, {
+    validate: (value) =>
+      value >= 0 && value <= MAX_TRADES_LIMIT
+        ? true
+        : `От 0 до ${MAX_TRADES_LIMIT} (0 = без лимита на стратегию)`,
+    onSave: (value) => setMaxOpenTradesPerStrategy(value),
+  });
+}
+
+function renderMaxPerStrategySettings() {
+  const el = $("strategy-max-per-strategy");
+  if (!el) return;
+  el.innerHTML = `
+    <span class="max-trades-label">На одну стратегию</span>
+    ${renderMaxPerStrategyInput()}
+    <span class="muted max-trades-hint">0 = без лимита · иначе потолок открытых по enter_tag</span>
+  `;
+  bindMaxPerStrategyInput(el.querySelector("[data-max-per-strategy-input]"));
+}
+
 function renderStakeInput(bot) {
   const stake = BOTS[bot].stakeAmount;
   return `
@@ -2848,7 +3708,141 @@ function renderStakeInput(bot) {
   `;
 }
 
-function renderStats(bot, profit, balance, openCount, stakeAmount) {
+function renderStrategySharedLimitsInto(el, { compact = false } = {}) {
+  if (!el) return;
+  const bot = "strategy";
+  const cfg = BOTS[bot];
+  if (compact) {
+    el.innerHTML = `
+      <div class="stat stat-trades-limit">
+        <span class="stat-inline-label">Макс. сделок</span>
+        <strong>${cfg.maxTrades}</strong>
+        ${renderMaxTradesInput(bot)}
+      </div>
+      <div class="stat-per-strategy">
+        <span class="stat-inline-label">На одну стратегию</span>
+        ${renderMaxPerStrategyInput()}
+        <span class="muted stat-hint">0 = без лимита</span>
+      </div>
+      <div class="stat stat-stake-limit">
+        <span class="stat-inline-label">Stake</span>
+        ${renderStakeInput(bot)}
+      </div>
+    `;
+  } else {
+    el.innerHTML = `
+      <div class="max-trades-row">
+        <span class="max-trades-label">Стратегии · макс. сделок</span>
+        ${renderMaxTradesInput(bot)}
+        <span class="muted max-trades-hint">общий лимит strategy-бота · 0 = стоп</span>
+      </div>
+      <div class="max-trades-row">
+        <span class="max-trades-label">На одну стратегию</span>
+        ${renderMaxPerStrategyInput()}
+        <span class="muted max-trades-hint">0 = без лимита · иначе потолок по enter_tag</span>
+      </div>
+      <div class="max-trades-row">
+        <span class="max-trades-label">Стратегии · stake</span>
+        ${renderStakeInput(bot)}
+        <span class="muted max-trades-hint">от ${STAKE_MIN} до ${STAKE_MAX} USDT · общий для основных и тестовых</span>
+      </div>
+    `;
+  }
+  el.querySelectorAll("[data-max-trades-input]").forEach((node) => bindMaxTradesInput(node, bot));
+  el.querySelectorAll("[data-max-per-strategy-input]").forEach((node) => bindMaxPerStrategyInput(node));
+  el.querySelectorAll("[data-stake-input]").forEach((node) => bindStakeInput(node, bot));
+}
+
+function renderTestStrategyStats(el, profit, balance, openCount) {
+  if (!el) return;
+  const maxOpen = Number(testSettings.max_open_trades) || 0;
+  const per = Number(testSettings.max_open_trades_per_strategy) || 0;
+  const stake = Number(testSettings.stake_amount) || 5;
+  const profitClosed = profit?.profit_closed_coin ?? profit?.profit_closed_percent;
+  const usdt = getUsdtWallet(balance);
+  const botAvail = usdt?.bot_owned;
+  const walletFree = usdt?.free;
+  const inMargin = usdt?.used;
+  el.innerHTML = `
+    <div class="stat stat-trades-limit">
+      <span class="stat-inline-label">Открыто (тестовые)</span>
+      <strong>${openCount} / ${maxOpen}</strong>
+      <div class="numeric-setting" data-test-max-trades-input>
+        <input type="number" class="numeric-setting-input" min="0" max="${MAX_TRADES_LIMIT}" step="1" value="${maxOpen}" inputmode="numeric" aria-label="Макс. сделок тестового блока" />
+        <button type="button" class="btn btn-sm primary numeric-setting-save">Сохранить</button>
+      </div>
+      <span class="muted stat-hint">0 = стоп тестовых · отдельно от основных</span>
+    </div>
+    <div class="stat-per-strategy">
+      <span class="stat-inline-label">На одну тестовую</span>
+      <div class="numeric-setting" data-test-max-per-input>
+        <input type="number" class="numeric-setting-input" min="0" max="${MAX_TRADES_LIMIT}" step="1" value="${per}" inputmode="numeric" aria-label="Макс. сделок на одну тестовую стратегию" />
+        <button type="button" class="btn btn-sm primary numeric-setting-save">Сохранить</button>
+      </div>
+      <span class="muted stat-hint">0 = без лимита по enter_tag</span>
+    </div>
+    <div class="stat">Прибыль (закрытые)<strong>${profit?.profit_closed_coin != null ? fmtUsd(profit.profit_closed_coin) : fmtPctRatio(profitClosed)}</strong></div>
+    <div class="stat stat-stake-limit">
+      <span class="stat-inline-label">Stake (тест)</span>
+      <div class="numeric-setting numeric-setting-stake" data-test-stake-input>
+        <input type="number" class="numeric-setting-input" min="${STAKE_MIN}" max="${STAKE_MAX}" step="1" value="${stake}" inputmode="decimal" aria-label="Stake тестовых USDT" />
+        <span class="numeric-setting-suffix">USDT</span>
+        <button type="button" class="btn btn-sm primary numeric-setting-save">Сохранить</button>
+      </div>
+    </div>
+    <div class="stat" title="Сколько USDT этот бот может использовать для новой сделки (учитываются только его сделки в БД)">
+      Доступно боту<strong>${botAvail != null ? fmtUsd(botAvail) : "—"}</strong>
+      <span class="stat-hint">общий кошелёк ${walletFree != null ? fmtUsd(walletFree) : "—"} · в марже ${inMargin != null ? fmtUsd(inMargin) : "—"}</span>
+    </div>
+  `;
+  bindNumericSetting(el.querySelector("[data-test-max-trades-input]"), {
+    validate: (value) =>
+      value >= 0 && value <= MAX_TRADES_LIMIT ? true : `От 0 до ${MAX_TRADES_LIMIT}`,
+    onSave: async (value) => {
+      await setTestStrategySettings({ max_open_trades: value });
+    },
+  });
+  bindNumericSetting(el.querySelector("[data-test-max-per-input]"), {
+    validate: (value) =>
+      value >= 0 && value <= MAX_TRADES_LIMIT ? true : `От 0 до ${MAX_TRADES_LIMIT}`,
+    onSave: async (value) => {
+      await setTestStrategySettings({ max_open_trades_per_strategy: value });
+    },
+  });
+  bindNumericSetting(el.querySelector("[data-test-stake-input]"), {
+    validate: (value) =>
+      value >= STAKE_MIN && value <= STAKE_MAX
+        ? true
+        : `От ${STAKE_MIN} до ${STAKE_MAX} USDT`,
+    onSave: async (value) => {
+      await setTestStrategySettings({ stake_amount: value });
+    },
+  });
+}
+
+function renderTestStrategyLimits() {
+  /* limits rendered in #test-strategy-stats */
+}
+
+function isTestTrade(trade, bot = "strategy") {
+  if (bot !== "strategy") return false;
+  const sid = tradeSourceId(trade, bot);
+  return (strategyCatalog || []).some((s) => s.id === sid && isTestCatalogEntry(s));
+}
+
+function splitStrategyTrades(trades) {
+  const list = trades || [];
+  const main = [];
+  const test = [];
+  for (const t of list) {
+    if (isTestTrade(t, "strategy")) test.push(t);
+    else main.push(t);
+  }
+  return { main, test };
+}
+
+function renderStatsInto(el, bot, profit, balance, openCount, stakeAmount, { openLabel = null } = {}) {
+  if (!el) return;
   const cfg = BOTS[bot];
   if (STAKE_EDITABLE_BOTS.has(bot) && stakeAmount != null) {
     BOTS[bot].stakeAmount = Number(stakeAmount);
@@ -2857,16 +3851,24 @@ function renderStats(bot, profit, balance, openCount, stakeAmount) {
   const usdt = getUsdtWallet(balance);
   const botAvail = usdt?.bot_owned;
   const walletFree = usdt?.free;
-  const walletTotal = usdt?.balance;
   const inMargin = usdt?.used;
   const stakeCell = STAKE_EDITABLE_BOTS.has(bot)
     ? `<div class="stat stat-stake-limit"><span class="stat-inline-label">Stake</span>${renderStakeInput(bot)}</div>`
     : `<div class="stat">Stake<strong>${fmtUsd(stakeAmount ?? 5)}</strong></div>`;
-  const el = $(cfg.statsEl);
+  const perStrategyBlock =
+    bot === "strategy"
+      ? `<div class="stat-per-strategy">
+          <span class="stat-inline-label">На одну стратегию</span>
+          ${renderMaxPerStrategyInput()}
+          <span class="muted stat-hint">0 = без лимита</span>
+        </div>`
+      : "";
+  const tradesTitle = openLabel || "Открыто сделок";
   el.innerHTML = `
     <div class="stat stat-trades-limit">
-      Открыто сделок<strong>${openCount} / ${cfg.maxTrades}</strong>
+      ${tradesTitle}<strong>${openCount} / ${cfg.maxTrades}</strong>
       ${renderMaxTradesInput(bot)}
+      ${perStrategyBlock}
     </div>
     <div class="stat">Прибыль (закрытые)<strong>${profit?.profit_closed_coin != null ? fmtUsd(profit.profit_closed_coin) : fmtPctRatio(profitClosed)}</strong></div>
     ${stakeCell}
@@ -2876,9 +3878,16 @@ function renderStats(bot, profit, balance, openCount, stakeAmount) {
     </div>
   `;
   bindMaxTradesInput(el.querySelector("[data-max-trades-input]"), bot);
+  if (bot === "strategy") {
+    bindMaxPerStrategyInput(el.querySelector("[data-max-per-strategy-input]"));
+  }
   if (STAKE_EDITABLE_BOTS.has(bot)) {
     bindStakeInput(el.querySelector("[data-stake-input]"), bot);
   }
+}
+
+function renderStats(bot, profit, balance, openCount, stakeAmount) {
+  renderStatsInto($(BOTS[bot].statsEl), bot, profit, balance, openCount, stakeAmount);
 }
 
 function tradeDetailRows(t) {
@@ -2914,10 +3923,37 @@ function tradeDetailRows(t) {
   ];
 }
 
-function renderTrades(bot, trades) {
-  const cfg = BOTS[bot];
+function tradesSummaryText(trades, emptyLabel = "нет сделок") {
   const open = trades || [];
-  const el = $(cfg.tradesEl);
+  if (!open.length) return `${emptyLabel} · развернуть`;
+  if (open.length === 1) {
+    const t = open[0];
+    const pair = t.pair || t.symbol || "#1";
+    return `${pair} · развернуть`;
+  }
+  return `${open.length} сделок · развернуть`;
+}
+
+function updateTradesSectionSummary(summaryId, trades, emptyLabel) {
+  const summary = $(summaryId);
+  if (summary) summary.textContent = tradesSummaryText(trades, emptyLabel);
+}
+
+function renderTradesInto(el, bot, trades) {
+  if (!el) return;
+  const open = trades || [];
+  const summaryId =
+    el.id === "test-strategy-trades"
+      ? "test-strategy-trades-summary"
+      : el.id === "strategy-trades"
+        ? "strategy-trades-summary"
+        : el.id === "grid-trades"
+          ? "grid-trades-summary"
+          : el.id === "finder-trades"
+            ? "finder-trades-summary"
+            : null;
+  if (summaryId) updateTradesSectionSummary(summaryId, open);
+
   if (!open.length) {
     el.innerHTML = '<p class="empty">Нет открытых сделок</p>';
     return;
@@ -2957,86 +3993,112 @@ function renderTrades(bot, trades) {
       </article>`;
     })
     .join("");
+}
 
+function renderTrades(bot, trades) {
+  renderTradesInto($(BOTS[bot].tradesEl), bot, trades);
+}
+
+function bindTradeListEl(el) {
+  if (!el || el.dataset.actionsBound) return;
+  el.dataset.actionsBound = "1";
+
+  el.addEventListener("click", async (ev) => {
+    const toggle = ev.target.closest(".trade-toggle");
+    if (toggle) {
+      const card = toggle.closest(".trade-card");
+      if (!card) return;
+      const expanded = card.classList.toggle("is-expanded");
+      card.classList.toggle("is-collapsed", !expanded);
+      toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+      toggle.setAttribute("aria-label", expanded ? "Свернуть сделку" : "Развернуть сделку");
+      return;
+    }
+
+    const btn = ev.target.closest("[data-act=forceexit]");
+    if (!btn || btn.disabled) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+
+    const tradeBot = btn.dataset.bot;
+    const tradeId = btn.dataset.id;
+    if (!tradeBot || !tradeId) return;
+    if (!confirm(`Закрыть сделку #${tradeId}?`)) return;
+
+    const label = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "…";
+    try {
+      const result = await closeTrade(tradeBot, tradeId);
+      if (result?.result === "deleted") {
+        alert(`Сделка #${tradeId} удалена из базы бота (на бирже уже была закрыта).`);
+      }
+      await refreshAll();
+    } catch (e) {
+      if (e.message === "auth") logout();
+      else alert(formatApiError(e.message));
+    } finally {
+      btn.disabled = false;
+      btn.textContent = label;
+    }
+  });
 }
 
 function bindTradeLists() {
   for (const bot of Object.keys(BOTS)) {
-    const el = $(BOTS[bot].tradesEl);
-    if (!el || el.dataset.actionsBound) continue;
-    el.dataset.actionsBound = "1";
-
-    el.addEventListener("click", async (ev) => {
-      const toggle = ev.target.closest(".trade-toggle");
-      if (toggle) {
-        const card = toggle.closest(".trade-card");
-        if (!card) return;
-        const expanded = card.classList.toggle("is-expanded");
-        card.classList.toggle("is-collapsed", !expanded);
-        toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
-        toggle.setAttribute("aria-label", expanded ? "Свернуть сделку" : "Развернуть сделку");
-        return;
-      }
-
-      const btn = ev.target.closest("[data-act=forceexit]");
-      if (!btn || btn.disabled) return;
-      ev.preventDefault();
-      ev.stopPropagation();
-
-      const tradeBot = btn.dataset.bot;
-      const tradeId = btn.dataset.id;
-      if (!tradeBot || !tradeId) return;
-      if (!confirm(`Закрыть сделку #${tradeId}?`)) return;
-
-      const label = btn.textContent;
-      btn.disabled = true;
-      btn.textContent = "…";
-      try {
-        const result = await closeTrade(tradeBot, tradeId);
-        if (result?.result === "deleted") {
-          alert(`Сделка #${tradeId} удалена из базы бота (на бирже уже была закрыта).`);
-        }
-        await refreshAll();
-      } catch (e) {
-        if (e.message === "auth") logout();
-        else alert(formatApiError(e.message));
-      } finally {
-        btn.disabled = false;
-        btn.textContent = label;
-      }
-    });
+    bindTradeListEl($(BOTS[bot].tradesEl));
   }
+  bindTradeListEl($("test-strategy-trades"));
+}
+
+function strategyActionTargets() {
+  return [$("strategy-actions")].filter(Boolean);
 }
 
 function renderActions(bot, running) {
   const cfg = BOTS[bot];
+  const targets =
+    bot === "strategy" ? strategyActionTargets() : [$(cfg.actionsEl)].filter(Boolean);
+  if (!targets.length) return;
+
+  const fillAll = (html) => {
+    for (const el of targets) el.innerHTML = html;
+  };
+  const bindAll = (handler) => {
+    for (const el of targets) {
+      el.querySelectorAll("button").forEach((btn) => {
+        btn.addEventListener("click", handler);
+      });
+    }
+  };
+
   if (bot === "finder" && !finderBotEnabled) {
-    $(cfg.actionsEl).innerHTML =
-      '<p class="muted finder-disabled-note">ML Finder отключён на сервере. Кнопка «Старт» недоступна.</p>';
+    fillAll(
+      '<p class="muted finder-disabled-note">ML Finder отключён на сервере. Кнопка «Старт» недоступна.</p>'
+    );
     return;
   }
   const slotsDisabled = Number(cfg.maxTrades) <= 0;
   if (slotsDisabled) {
-    $(cfg.actionsEl).innerHTML = `
-      <p class="muted finder-disabled-note">Макс. сделок = 0 — бот остановлен и не торгует. Установите 1 или больше в Настройках.</p>
+    fillAll(`
+      <p class="muted finder-disabled-note">Макс. сделок = 0 — бот остановлен и не торгует. Установите 1 или больше на карточке бота.</p>
       <button class="btn" data-bot="${bot}" data-act="stop" ${!running ? "disabled" : ""}>Стоп</button>
       <button class="btn" data-bot="${bot}" data-act="reload">Reload config</button>
-    `;
-    $(cfg.actionsEl).querySelectorAll("button").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        const act = btn.dataset.act;
-        try {
-          if (act === "stop") {
-            if (!confirm(`Остановить бота «${BOTS[bot].label}»?`)) return;
-            await api(bot, "/stop", "POST");
-          }
-          if (act === "reload") await api(bot, "/reload_config", "POST");
-          await refreshAll();
-        } catch (e) {
-          if (e.message === "auth") logout();
-          else alert(formatApiError(e.message));
+    `);
+    bindAll(async (ev) => {
+      const btn = ev.currentTarget;
+      const act = btn.dataset.act;
+      try {
+        if (act === "stop") {
+          if (!confirm(`Остановить бота «${BOTS[bot].label}»?`)) return;
+          await api(bot, "/stop", "POST");
         }
-      });
+        if (act === "reload") await api(bot, "/reload_config", "POST");
+        await refreshAll();
+      } catch (e) {
+        if (e.message === "auth") logout();
+        else alert(formatApiError(e.message));
+      }
     });
     return;
   }
@@ -3046,73 +4108,74 @@ function renderActions(bot, running) {
       : bot === "strategy"
         ? `<button class="btn" data-bot="strategy" data-act="scan-strategy" title="Подбор пар под каждую включённую стратегию (150 ликвидных)">Скан пар</button>`
         : "";
-  $(cfg.actionsEl).innerHTML = `
+  fillAll(`
     <button class="btn primary" data-bot="${bot}" data-act="start" ${running ? "disabled" : ""}>Старт</button>
     <button class="btn" data-bot="${bot}" data-act="stop" ${!running ? "disabled" : ""}>Стоп</button>
     <button class="btn" data-bot="${bot}" data-act="reload">Reload config</button>
     ${scanBtn}
-  `;
-  $(cfg.actionsEl).querySelectorAll("button").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const act = btn.dataset.act;
-      const label = btn.textContent;
-      try {
-        if (act === "start") {
-          if (bot === "finder" && !finderBotEnabled) {
-            alert("ML Finder отключён на сервере.");
-            return;
-          }
-          if (Number(BOTS[bot].maxTrades) <= 0) {
-            alert("Макс. сделок = 0. Установите 1 или больше в Настройках.");
-            return;
-          }
-          await api(bot, "/start", "POST");
-        }
-        if (act === "stop") {
-          if (!confirm(`Остановить бота «${BOTS[bot].label}»? Новые сделки не будут открываться.`)) return;
-          await api(bot, "/stop", "POST");
-        }
-        if (act === "reload") await api(bot, "/reload_config", "POST");
-        if (act === "scan-ranging") {
-          if (!confirm("Запустить скан боковика по 150 ликвидным парам? Займёт ~2–3 мин.")) return;
-          btn.disabled = true;
-          btn.textContent = "Скан…";
-          const info = $("grid-scan-info");
-          if (info) info.textContent = "Скан выполняется…";
-          try {
-            await pairConfigApi("/ranging-scan", "POST", {});
-            await refreshBot("grid");
-          } finally {
-            btn.disabled = false;
-            btn.textContent = label;
-          }
-        } else if (act === "scan-strategy") {
-          if (!confirm("Запустить скан пар по каждой включённой стратегии (150 ликвидных)? Займёт ~2–3 мин.")) return;
-          btn.disabled = true;
-          btn.textContent = "Скан…";
-          const info = $("strategy-scan-info");
-          if (info) info.textContent = "Скан выполняется…";
-          try {
-            await pairConfigApi("/strategy-scan", "POST", {});
-            await refreshBot("strategy");
-          } finally {
-            btn.disabled = false;
-            btn.textContent = label;
-          }
-        } else {
-          refreshAll();
+  `);
+  bindAll(async (ev) => {
+    const btn = ev.currentTarget;
+    const act = btn.dataset.act;
+    const label = btn.textContent;
+    try {
+      if (act === "start") {
+        if (bot === "finder" && !finderBotEnabled) {
+          alert("ML Finder отключён на сервере.");
           return;
         }
-        await refreshAll();
-        if (bot === "grid") await loadGridScanInfo();
-        if (bot === "strategy") await loadStrategyScanInfo();
-      } catch (e) {
-        if (e.message === "auth") logout();
-        else alert(formatApiError(e.message));
-        if (bot === "grid") await loadGridScanInfo();
-        if (bot === "strategy") await loadStrategyScanInfo();
+        if (Number(BOTS[bot].maxTrades) <= 0) {
+          alert("Макс. сделок = 0. Установите 1 или больше в Настройках.");
+          return;
+        }
+        await api(bot, "/start", "POST");
       }
-    });
+      if (act === "stop") {
+        if (!confirm(`Остановить бота «${BOTS[bot].label}»? Новые сделки не будут открываться.`)) return;
+        await api(bot, "/stop", "POST");
+      }
+      if (act === "reload") await api(bot, "/reload_config", "POST");
+      if (act === "scan-ranging") {
+        if (!confirm("Запустить скан боковика по 150 ликвидным парам? Займёт ~2–3 мин.")) return;
+        btn.disabled = true;
+        btn.textContent = "Скан…";
+        const info = $("grid-scan-info");
+        if (info) info.textContent = "Скан выполняется…";
+        try {
+          await pairConfigApi("/ranging-scan", "POST", {});
+          await refreshBot("grid");
+        } finally {
+          btn.disabled = false;
+          btn.textContent = label;
+        }
+      } else if (act === "scan-strategy") {
+        if (!confirm("Запустить скан пар по каждой включённой стратегии (150 ликвидных)? Займёт ~2–3 мин.")) return;
+        btn.disabled = true;
+        btn.textContent = "Скан…";
+        for (const id of ["strategy-scan-info"]) {
+          const info = $(id);
+          if (info) info.textContent = "Скан выполняется…";
+        }
+        try {
+          await pairConfigApi("/strategy-scan", "POST", {});
+          await refreshBot("strategy");
+        } finally {
+          btn.disabled = false;
+          btn.textContent = label;
+        }
+      } else {
+        refreshAll();
+        return;
+      }
+      await refreshAll();
+      if (bot === "grid") await loadGridScanInfo();
+      if (bot === "strategy") await loadStrategyScanInfo();
+    } catch (e) {
+      if (e.message === "auth") logout();
+      else alert(formatApiError(e.message));
+      if (bot === "grid") await loadGridScanInfo();
+      if (bot === "strategy") await loadStrategyScanInfo();
+    }
   });
 }
 
@@ -3160,20 +4223,25 @@ const STRATEGY_SCAN_SHORT = {
 };
 
 async function loadStrategyScanInfo() {
-  const el = $("strategy-scan-info");
-  if (!el) return;
+  const els = ["strategy-scan-info"]
+    .map((id) => $(id))
+    .filter(Boolean);
+  if (!els.length) return;
+  const setText = (text) => {
+    for (const el of els) el.textContent = text;
+  };
   if (isAllVolumePairlist()) {
-    el.textContent = "Пары: top-200 USDT futures по объёму · whitelist отключён · сканер на паузе";
+    setText("Пары: top-200 USDT futures по объёму · whitelist отключён · сканер на паузе");
     return;
   }
   try {
     const d = await pairConfigApi("/strategy-scan");
     if (d.running) {
-      el.textContent = "Скан выполняется…";
+      setText("Скан выполняется…");
       return;
     }
     if (!d.scanned_at) {
-      el.textContent = "Скан пар ещё не запускался";
+      setText("Скан пар ещё не запускался");
       return;
     }
     const t = new Date(d.scanned_at).toLocaleString("ru-RU", {
@@ -3182,54 +4250,61 @@ async function loadStrategyScanInfo() {
       hour: "2-digit",
       minute: "2-digit",
     });
-    const n = d.selected_count ?? d.suitable_found ?? 0;
+    const n = d.selected_count ?? 0;
     const checked = d.candidates_checked ?? "?";
     const by = d.by_strategy || {};
-    const parts = (d.enabled_strategies || [])
-      .map((sid) => {
-        const short = STRATEGY_SCAN_SHORT[sid] || sid;
-        const cnt = by[sid]?.selected?.length ?? 0;
-        return `${short}: ${cnt}`;
-      })
-      .filter(Boolean);
-    const breakdown = parts.length ? ` · ${parts.join(", ")}` : "";
-    el.textContent = `Подходящих: ${n} пар (из ${checked})${breakdown} · ${t}`;
+    const parts = Object.entries(by)
+      .slice(0, 4)
+      .map(([sid, cnt]) => `${STRATEGY_SCAN_SHORT[sid] || sid.replace(/Strategy$/, "")}:${cnt}`)
+      .join(" · ");
+    setText(
+      parts
+        ? `Скан пар: ${n} (из ${checked}) · ${parts} · ${t}`
+        : `Скан пар: ${n} (из ${checked}) · ${t}`
+    );
   } catch {
-    el.textContent = "Скан пар: нет данных";
+    setText("Скан пар: нет данных");
   }
 }
 
 function setState(bot, running, hint = "") {
-  const el = $(BOTS[bot].stateEl);
+  const els =
+    bot === "strategy"
+      ? [$(BOTS[bot].stateEl), $("test-strategy-state")].filter(Boolean)
+      : [$(BOTS[bot].stateEl)].filter(Boolean);
+  const apply = (text, className, title) => {
+    for (const el of els) {
+      el.textContent = text;
+      el.className = className;
+      el.title = title;
+    }
+  };
   if (bot === "finder" && !finderBotEnabled) {
-    el.textContent = "DISABLED";
-    el.className = "badge stopped";
-    el.title = "ML Finder отключён на сервере — не запускается при перезагрузке";
+    apply("DISABLED", "badge stopped", "ML Finder отключён на сервере — не запускается при перезагрузке");
     return;
   }
   if (hint === "offline") {
-    el.textContent = "OFFLINE";
-    el.className = "badge stopped";
-    el.title = "Нет связи с API бота — перезапуск или перегрузка";
+    apply("OFFLINE", "badge stopped", "Нет связи с API бота — перезапуск или перегрузка");
     return;
   }
   if (hint === "sync") {
-    el.textContent = "SYNC…";
-    el.className = "badge running";
-    el.title = "Бот перезагружается или обновляет конфиг — подождите";
+    apply("SYNC…", "badge running", "Бот перезагружается или обновляет конфиг — подождите");
     return;
   }
-  el.textContent = running ? "RUNNING" : "STOPPED";
-  el.className = `badge ${running ? "running" : "stopped"}`;
-  el.title = running
+  const title = running
     ? bot === "finder"
       ? `ML Finder · scanner + pnl gate ${ML_GATE_STRATEGY}`
       : bot === "strategy"
         ? `Бот торгует · ML gate ${ML_GATE_STRATEGY}`
-      : bot === "grid"
-        ? `Бот торгует · ML gate ${ML_GATE_STRATEGY}`
-        : "Бот торгует"
+        : bot === "grid"
+          ? `Бот торгует · ML gate ${ML_GATE_STRATEGY}`
+          : "Бот торгует"
     : "Бот остановлен — нажмите «Старт»";
+  apply(
+    running ? "RUNNING" : "STOPPED",
+    `badge ${running ? "running" : "stopped"}`,
+    title
+  );
 }
 
 async function refreshBot(bot) {
@@ -3281,10 +4356,21 @@ async function refreshBot(bot) {
   }
 
   setState(bot, running);
-  renderStats(bot, profit, balance, openCount, config?.stake_amount);
-  renderActions(bot, running);
   const enrichedTrades = await enrichTradesWithMl(bot, openTrades);
-  renderTrades(bot, enrichedTrades);
+  if (bot === "strategy") {
+    const { main, test } = splitStrategyTrades(enrichedTrades);
+    renderStatsInto($(BOTS.strategy.statsEl), bot, profit, balance, main.length, config?.stake_amount, {
+      openLabel: "Открыто (основные)",
+    });
+    renderTestStrategyStats($("test-strategy-stats"), profit, balance, test.length);
+    renderActions(bot, running);
+    renderTradesInto($(BOTS.strategy.tradesEl), bot, main);
+    renderTradesInto($("test-strategy-trades"), bot, test);
+  } else {
+    renderStats(bot, profit, balance, openCount, config?.stake_amount);
+    renderActions(bot, running);
+    renderTrades(bot, enrichedTrades);
+  }
   renderWhitelist(bot, whitelist);
   updateMaxTradesHint();
   return enrichedTrades;
@@ -3794,6 +4880,11 @@ async function refreshBybitGrid({ scan = false } = {}) {
     if (bybitGridHistoryOpen) loadBybitGridHistory();
 
     const activeBots = (data.bots || []).filter((b) => b.is_active);
+    updateTradesSectionSummary(
+      "bybitgrid-bots-summary",
+      activeBots.map((b) => ({ pair: b.pair || b.symbol })),
+      "нет ботов"
+    );
     if (!activeBots.length) {
       botsEl.innerHTML = '<p class="muted">Нет активных grid-ботов</p>';
     } else {
@@ -3920,9 +5011,10 @@ function collectBybitGridForm() {
 async function refreshAll() {
   try {
     const now = Date.now();
+    // Strategies payload first — sync max_open_trades_per_strategy before dashboard stats render.
+    await refreshStrategyEnabled();
     const tasks = [
       refreshPairlistMode(),
-      refreshStrategyEnabled(),
       refreshBotSafe("finder"),
       refreshBotSafe("strategy"),
       refreshBotSafe("grid"),
@@ -3936,7 +5028,7 @@ async function refreshAll() {
       lastBybitGridRefresh = now;
     }
     const results = await Promise.all(tasks);
-    const allTrades = results.slice(2, 5).flat();
+    const allTrades = results.slice(1, 4).flat();
     renderTradesSummary(allTrades);
     $("last-update").textContent = `Обновлено: ${new Date().toLocaleTimeString("ru-RU")}`;
   } catch (e) {
@@ -3969,6 +5061,9 @@ async function loadPairSettings() {
 
   if (finder.max_open_trades != null) BOTS.finder.maxTrades = finder.max_open_trades;
   if (strategy.max_open_trades != null) BOTS.strategy.maxTrades = strategy.max_open_trades;
+  if (strategy.max_open_trades_per_strategy != null) {
+    BOTS.strategy.maxPerStrategy = Number(strategy.max_open_trades_per_strategy);
+  }
   if (grid.max_open_trades != null) BOTS.grid.maxTrades = grid.max_open_trades;
   if (grid.stake_amount != null) BOTS.grid.stakeAmount = Number(grid.stake_amount);
   if (strategy.stake_amount != null) BOTS.strategy.stakeAmount = Number(strategy.stake_amount);
@@ -3992,6 +5087,8 @@ async function loadPairSettings() {
     `;
     bindMaxTradesInput(el.querySelector("[data-max-trades-input]"), bot);
   });
+
+  renderMaxPerStrategySettings();
 
   STAKE_EDITABLE_BOTS.forEach((bot) => {
     const stakeEl = $(BOTS[bot].stakeEl);
@@ -4046,11 +5143,7 @@ function isSettingsOpen() {
 
 function openSettings() {
   closeMobileMenu();
-  $("changelog-view")?.classList.add("hidden");
-  $("logs-view")?.classList.add("hidden");
-  $("history-view")?.classList.add("hidden");
-  $("pnl-dashboard-view")?.classList.add("hidden");
-  $("dashboard-view")?.classList.add("hidden");
+  hideMainViewsForOverlay();
   const view = $("settings-view");
   view?.classList.remove("hidden");
   view?.setAttribute("aria-hidden", "false");
@@ -4150,6 +5243,13 @@ function showSecretsMsg(text, isError = false) {
 async function loadUsersAdmin() {
   const list = $("users-list");
   if (!list || !isAdminUser()) return;
+  if (!permissionCatalog?.blocks?.length) {
+    try {
+      permissionCatalog = await pairConfigApi("/permission-catalog");
+    } catch {
+      /* ignore */
+    }
+  }
   const data = await pairConfigApi("/users");
   const users = data.users || [];
   list.innerHTML = users
@@ -4158,16 +5258,25 @@ async function loadUsersAdmin() {
       const name = escapeHtml(u.username || u.id);
       const en = u.enabled !== false;
       const isAdm = u.role === "admin" || u.id === "admin";
+      const stratN = u.allowed_strategies == null ? "все" : String(u.allowed_strategies.length);
+      const blockN = u.allowed_blocks == null ? "все" : String(u.allowed_blocks.length);
       return `<li class="users-list-item">
         <div>
           <strong>${name}</strong>
           <span class="muted"> · ${role}${en ? "" : " · выкл"}</span>
+          ${
+            isAdm
+              ? ""
+              : `<div class="muted users-perms-hint">блоки: ${blockN} · стратегии: ${stratN}</div>`
+          }
         </div>
         <div class="users-list-actions">
           ${
             isAdm
               ? ""
-              : `<button type="button" class="btn btn-sm ghost" data-user-toggle="${escapeHtml(u.id)}" data-enabled="${en ? "0" : "1"}">${en ? "Выкл" : "Вкл"}</button>
+              : `<button type="button" class="btn btn-sm ghost" data-user-impersonate="${escapeHtml(u.id)}">Войти как</button>
+                 <button type="button" class="btn btn-sm ghost" data-user-perms="${escapeHtml(u.id)}">Права</button>
+                 <button type="button" class="btn btn-sm ghost" data-user-toggle="${escapeHtml(u.id)}" data-enabled="${en ? "0" : "1"}">${en ? "Выкл" : "Вкл"}</button>
                  <button type="button" class="btn btn-sm ghost" data-user-pass="${escapeHtml(u.id)}">Пароль</button>`
           }
         </div>
@@ -4199,6 +5308,142 @@ async function loadUsersAdmin() {
       }
     });
   });
+  list.querySelectorAll("[data-user-perms]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const u = users.find((x) => String(x.id) === String(btn.dataset.userPerms));
+      if (u) openUserPermsModal(u);
+    });
+  });
+  list.querySelectorAll("[data-user-impersonate]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (!confirm("Войти в панель этого пользователя? Можно вернуться кнопкой «Вернуться в админ».")) return;
+      try {
+        await startImpersonation(btn.dataset.userImpersonate);
+      } catch (e) {
+        showUsersMsg(formatApiError(e.message), true);
+      }
+    });
+  });
+}
+
+async function startImpersonation(userId) {
+  const data = await pairConfigApi("/auth/impersonate", "POST", { user_id: userId });
+  sessionToken = data.token || "";
+  currentUser = data.user || null;
+  creds.user = currentUser?.username || "";
+  isImpersonating = true;
+  impersonatedBy = data.impersonated_by || null;
+  tokens = { finder: null, strategy: null, grid: null };
+  saveSession();
+  closeSettings();
+  await refreshAuthMe();
+  tokens = { finder: "proxy", strategy: "proxy", grid: "proxy" };
+  await refreshAll().catch(() => {});
+}
+
+async function stopImpersonation() {
+  const data = await pairConfigApi("/auth/stop-impersonate", "POST", {});
+  sessionToken = data.token || "";
+  currentUser = data.user || null;
+  creds.user = currentUser?.username || "";
+  isImpersonating = false;
+  impersonatedBy = null;
+  tokens = { finder: null, strategy: null, grid: null };
+  saveSession();
+  await refreshAuthMe();
+  tokens = { finder: "proxy", strategy: "proxy", grid: "proxy" };
+  await refreshAll().catch(() => {});
+  if (isAdminUser()) loadUsersAdmin().catch(() => {});
+}
+
+function showUserPermsMsg(text, isError = false) {
+  const el = $("user-perms-msg");
+  if (!el) return;
+  el.textContent = text;
+  el.classList.toggle("error", !!isError);
+  el.classList.remove("hidden");
+}
+
+function closeUserPermsModal() {
+  const modal = $("user-perms-modal");
+  if (!modal) return;
+  modal.classList.add("hidden");
+  modal.setAttribute("aria-hidden", "true");
+}
+
+function openUserPermsModal(user) {
+  const modal = $("user-perms-modal");
+  if (!modal) return;
+  $("user-perms-id").value = user.id || "";
+  $("user-perms-title").textContent = `Права: ${user.username || user.id}`;
+  $("user-perms-msg")?.classList.add("hidden");
+
+  const blocks = permissionCatalog.blocks || [];
+  const strategies = permissionCatalog.strategies || [];
+  const allowBlocks = user.allowed_blocks; // null = all
+  const allowStrats = user.allowed_strategies;
+
+  const blocksEl = $("user-perms-blocks");
+  if (blocksEl) {
+    blocksEl.innerHTML = blocks
+      .map((b) => {
+        const checked =
+          allowBlocks == null ? true : allowBlocks.includes(b.id);
+        return `<label class="user-perms-check">
+          <input type="checkbox" data-perm-block="${escapeHtml(b.id)}" ${checked ? "checked" : ""} />
+          <span>${escapeHtml(b.name || b.id)}</span>
+        </label>`;
+      })
+      .join("");
+  }
+
+  const stratsEl = $("user-perms-strategies");
+  if (stratsEl) {
+    stratsEl.innerHTML = strategies
+      .map((s) => {
+        const checked =
+          allowStrats == null ? true : allowStrats.includes(s.id);
+        const label = s.num != null ? `#${s.num} ${s.name || s.id}` : s.name || s.id;
+        const grp = s.test_group ? " · тест" : "";
+        return `<label class="user-perms-check">
+          <input type="checkbox" data-perm-strategy="${escapeHtml(s.id)}" ${checked ? "checked" : ""} />
+          <span>${escapeHtml(label)}${grp ? `<span class="muted">${grp}</span>` : ""}</span>
+        </label>`;
+      })
+      .join("");
+  }
+
+  modal.dataset.blocksUnrestricted = allowBlocks == null ? "1" : "0";
+  modal.dataset.stratsUnrestricted = allowStrats == null ? "1" : "0";
+  modal.classList.remove("hidden");
+  modal.setAttribute("aria-hidden", "false");
+}
+
+async function saveUserPerms() {
+  const userId = $("user-perms-id")?.value;
+  if (!userId) return;
+  const blockBoxes = [...document.querySelectorAll("#user-perms-blocks input[data-perm-block]")];
+  const stratBoxes = [...document.querySelectorAll("#user-perms-strategies input[data-perm-strategy]")];
+  const allBlocksChecked = blockBoxes.length > 0 && blockBoxes.every((b) => b.checked);
+  const allStratsChecked = stratBoxes.length > 0 && stratBoxes.every((b) => b.checked);
+  // If everything checked → unrestricted (null). Else explicit list (may be empty).
+  const allowed_blocks = allBlocksChecked
+    ? null
+    : blockBoxes.filter((b) => b.checked).map((b) => b.dataset.permBlock);
+  const allowed_strategies = allStratsChecked
+    ? null
+    : stratBoxes.filter((b) => b.checked).map((b) => b.dataset.permStrategy);
+  try {
+    await pairConfigApi(`/users/${userId}`, "PATCH", {
+      allowed_blocks,
+      allowed_strategies,
+    });
+    showUserPermsMsg("Права сохранены");
+    closeUserPermsModal();
+    await loadUsersAdmin();
+  } catch (e) {
+    showUserPermsMsg(formatApiError(e.message), true);
+  }
 }
 
 $("users-create-btn")?.addEventListener("click", async () => {
@@ -4214,6 +5459,41 @@ $("users-create-btn")?.addEventListener("click", async () => {
   } catch (e) {
     showUsersMsg(formatApiError(e.message), true);
   }
+});
+
+$("impersonate-return-btn")?.addEventListener("click", async () => {
+  try {
+    await stopImpersonation();
+  } catch (e) {
+    alert(formatApiError(e.message));
+  }
+});
+
+$("user-perms-close")?.addEventListener("click", closeUserPermsModal);
+$("user-perms-cancel")?.addEventListener("click", closeUserPermsModal);
+$("user-perms-save")?.addEventListener("click", () => {
+  saveUserPerms().catch(() => {});
+});
+document.querySelector('#user-perms-modal [data-close="user-perms"]')?.addEventListener("click", closeUserPermsModal);
+$("user-perms-blocks-all")?.addEventListener("click", () => {
+  document.querySelectorAll("#user-perms-blocks input[data-perm-block]").forEach((el) => {
+    el.checked = true;
+  });
+});
+$("user-perms-blocks-none")?.addEventListener("click", () => {
+  document.querySelectorAll("#user-perms-blocks input[data-perm-block]").forEach((el) => {
+    el.checked = false;
+  });
+});
+$("user-perms-strats-all")?.addEventListener("click", () => {
+  document.querySelectorAll("#user-perms-strategies input[data-perm-strategy]").forEach((el) => {
+    el.checked = true;
+  });
+});
+$("user-perms-strats-none")?.addEventListener("click", () => {
+  document.querySelectorAll("#user-perms-strategies input[data-perm-strategy]").forEach((el) => {
+    el.checked = false;
+  });
 });
 
 $("secrets-save-btn")?.addEventListener("click", async () => {
@@ -4355,11 +5635,7 @@ function setLogsFilter(bot) {
 
 function openLogs() {
   closeMobileMenu();
-  $("changelog-view")?.classList.add("hidden");
-  $("history-view")?.classList.add("hidden");
-  $("settings-view")?.classList.add("hidden");
-  $("pnl-dashboard-view")?.classList.add("hidden");
-  $("dashboard-view")?.classList.add("hidden");
+  hideMainViewsForOverlay();
   const view = $("logs-view");
   view?.classList.remove("hidden");
   view?.setAttribute("aria-hidden", "false");
@@ -4506,11 +5782,7 @@ async function loadChangelog() {
 function openChangelog() {
   closeMobileMenu();
   stopLogsPoll();
-  $("dashboard-view")?.classList.add("hidden");
-  $("logs-view")?.classList.add("hidden");
-  $("history-view")?.classList.add("hidden");
-  $("settings-view")?.classList.add("hidden");
-  $("pnl-dashboard-view")?.classList.add("hidden");
+  hideMainViewsForOverlay();
   const view = $("changelog-view");
   view?.classList.remove("hidden");
   view?.setAttribute("aria-hidden", "false");
@@ -4540,6 +5812,8 @@ function goHome() {
   $("settings-view")?.setAttribute("aria-hidden", "true");
   $("pnl-dashboard-view")?.classList.add("hidden");
   $("pnl-dashboard-view")?.setAttribute("aria-hidden", "true");
+  $("rating-view")?.classList.add("hidden");
+  $("rating-view")?.setAttribute("aria-hidden", "true");
   $("dashboard-view")?.classList.remove("hidden");
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
@@ -4560,6 +5834,10 @@ $("stats-btn").addEventListener("click", () => {
 $("pnl-dashboard-btn")?.addEventListener("click", () => {
   closeMobileMenu();
   openPnlDashboard();
+});
+$("rating-btn")?.addEventListener("click", () => {
+  closeMobileMenu();
+  openRating();
 });
 $("history-btn")?.addEventListener("click", () => {
   closeMobileMenu();
@@ -4625,6 +5903,10 @@ document.addEventListener("keydown", (e) => {
     }
     if ($("pnl-dashboard-view") && !$("pnl-dashboard-view").classList.contains("hidden")) {
       closePnlDashboard();
+      return;
+    }
+    if ($("rating-view") && !$("rating-view").classList.contains("hidden")) {
+      closeRating();
       return;
     }
     if ($("history-view") && !$("history-view").classList.contains("hidden")) {
@@ -4742,5 +6024,7 @@ bindPanelStatsButtons();
 bindStatsPeriodButtons();
 bindHistoryControls();
 bindPnlDashboardControls();
+bindRatingControls();
 renderStrategyRiskControls();
+renderTestStrategyRiskControls();
 renderDualHedgeControl();

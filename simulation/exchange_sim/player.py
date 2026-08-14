@@ -36,6 +36,8 @@ class ReplayPlayer:
         self._task: asyncio.Task | None = None
         self._sequential_task: asyncio.Task | None = None
         self._replay_done: asyncio.Event = asyncio.Event()
+        self._pause_gate: asyncio.Event = asyncio.Event()
+        self._pause_gate.set()
         self._listeners: list[Callable[[dict], Any]] = []
         self._sim_step_hook: Callable[[int, int], None] | None = None
 
@@ -117,11 +119,12 @@ class ReplayPlayer:
         if self.state.status == "playing":
             return
         self.state.status = "playing"
+        self._pause_gate.set()
         self._replay_done.clear()
         self._task = asyncio.create_task(self._loop())
 
     async def play_through(self) -> None:
-        """Run replay until period end or pause/stop."""
+        """Run replay until period end or stop. Pause waits; resume continues from current_ms."""
         if self._task and not self._task.done():
             self._task.cancel()
             try:
@@ -129,13 +132,31 @@ class ReplayPlayer:
             except asyncio.CancelledError:
                 pass
         self._replay_done.clear()
+        self._pause_gate.set()
         self.state.status = "playing"
         self._task = asyncio.create_task(self._loop())
-        await self._replay_done.wait()
+        while True:
+            await self._replay_done.wait()
+            self._replay_done.clear()
+            at_end = bool(
+                self.state.range_end_ms and self.state.current_ms >= self.state.range_end_ms
+            )
+            if self.state.status == "paused" and not at_end:
+                await self._pause_gate.wait()
+                if self.state.status == "stopped":
+                    return
+                if self.state.range_end_ms and self.state.current_ms >= self.state.range_end_ms:
+                    return
+                if self.state.status != "playing":
+                    continue
+                self._task = asyncio.create_task(self._loop())
+                continue
+            return
 
     def stop_replay_only(self) -> None:
-        """Stop replay loop without signalling play_through completion."""
+        """Stop replay loop without cancelling sequential walkthrough task."""
         self.state.status = "paused"
+        self._pause_gate.clear()
         if self._task and not self._task.done():
             self._task.cancel()
 
@@ -148,19 +169,45 @@ class ReplayPlayer:
         self.state.batch_run = False
 
     def pause(self) -> dict:
+        """Pause clock; sequential walkthrough stays on the current pair until resume/stop."""
         self.state.status = "paused"
+        self._pause_gate.clear()
         if self._task and not self._task.done():
             self._task.cancel()
-        self._replay_done.set()
+        else:
+            self._replay_done.set()
+        return self.snapshot()
+
+    def resume(self) -> dict:
+        """Continue after pause from current sim time."""
+        if self.state.range_end_ms and self.state.current_ms >= self.state.range_end_ms:
+            return self.snapshot()
+        if self.state.status == "playing":
+            return self.snapshot()
+        self.state.status = "playing"
+        self._pause_gate.set()
+        # Standalone play (no active walkthrough waiter): restart loop here.
+        seq_alive = self._sequential_task is not None and not self._sequential_task.done()
+        if not seq_alive and (not self._task or self._task.done()):
+            self._replay_done.clear()
+            try:
+                loop = asyncio.get_running_loop()
+                self._task = loop.create_task(self._loop())
+            except RuntimeError:
+                # Sync context without loop — caller should use async resume endpoint.
+                pass
         return self.snapshot()
 
     def stop(self) -> dict:
         self.state.status = "stopped"
+        self._pause_gate.set()
         self.cancel_sequential()
         if self._task and not self._task.done():
             self._task.cancel()
         self._replay_done.set()
-        return self.snapshot()
+        snap = self.snapshot()
+        self._broadcast({"type": "finished", **snap, "stopped": True})
+        return snap
 
     def reset_replay(self) -> dict:
         """Stop and rewind sim clock to period start."""
@@ -188,7 +235,6 @@ class ReplayPlayer:
                 if self.state.current_ms >= self.state.range_end_ms:
                     self.state.status = "paused"
                     self._broadcast({"type": "finished", **snap})
-                    self._replay_done.set()
                     break
 
                 # Wall-clock sleep ONLY for UI pacing — bot logic uses sim_ms above
@@ -196,8 +242,9 @@ class ReplayPlayer:
                 elapsed = asyncio.get_event_loop().time() - t0
                 await asyncio.sleep(max(0.001, delay - elapsed))
         except asyncio.CancelledError:
-            self._replay_done.set()
             pass
+        finally:
+            self._replay_done.set()
 
     def set_bots_status(self, running: bool, status: dict | None = None) -> None:
         self.state.bots_running = running

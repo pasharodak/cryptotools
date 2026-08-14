@@ -1,5 +1,5 @@
 {
-  "deployed_at": "2026-08-08T08:32:48.717396+00:00",
+  "deployed_at": "2026-08-14T10:04:23.021957+00:00",
   "model": "per-scenario winners from ml_param_experiments (top-30 pack)",
   "enabled_scenarios": [
     "live_grid",
@@ -33,7 +33,15 @@
     "chart_adxdi",
     "chart2_mfi",
     "new_ichimoku",
-    "combo_st_rsi_obv"
+    "combo_st_rsi_obv",
+    "trend_breakout",
+    "lite_mean_rev",
+    "trend_macd_ema",
+    "trend_supertrend",
+    "trend_ema",
+    "lite_range",
+    "lite_intraday",
+    "trend_fib"
   ],
   "ml_gate": {
     "enabled": true,

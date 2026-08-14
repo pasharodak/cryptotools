@@ -40,7 +40,24 @@ STRATEGY_IDS = [
     "AdxMomentumStrategy",
     "LiteIntradayStrategy",
     "LiteRangeStrategy",
+    # Prod pack + UI test clones (score via SCORE_AS aliases below)
+    "PsaraFlipStrategy",
+    "PsaraFlipTestStrategy",
+    "AtrChannelBreakoutStrategy",
+    "AtrChannelBreakoutTestStrategy",
+    "AdxMomentumTestStrategy",
+    "SupertrendTestStrategy",
 ]
+
+# Unknown / pack strategies reuse a known scoring profile.
+SCORE_AS: dict[str, str] = {
+    "PsaraFlipStrategy": "SupertrendStrategy",
+    "PsaraFlipTestStrategy": "SupertrendStrategy",
+    "AtrChannelBreakoutStrategy": "AdxMomentumStrategy",
+    "AtrChannelBreakoutTestStrategy": "AdxMomentumStrategy",
+    "AdxMomentumTestStrategy": "AdxMomentumStrategy",
+    "SupertrendTestStrategy": "SupertrendStrategy",
+}
 
 
 def ft_base() -> Path:
@@ -208,6 +225,8 @@ def score_strategy(strategy_id: str, metrics: dict[str, Any], profile: dict[str,
     if ratio < min_ratio:
         return None
 
+    strategy_id = SCORE_AS.get(strategy_id, strategy_id)
+
     if strategy_id == "CriptoPairsStrategy":
         rsi_min = float(profile.get("rsi_min", 28))
         rsi_max = float(profile.get("rsi_max", 72))
@@ -290,16 +309,22 @@ def score_strategy(strategy_id: str, metrics: dict[str, Any], profile: dict[str,
 
 
 def load_enabled_strategies(base: Path, cfg: dict[str, Any]) -> list[str]:
+    """Use whatever is ON in enabled_strategies.json (pack + test_group).
+
+    Falls back to CriptoPairs only when nothing is enabled.
+    """
     path = base / cfg.get("enabled_strategies_file", "user_data/enabled_strategies.json")
-    enabled_map: dict[str, bool] = {sid: sid == "CriptoPairsStrategy" for sid in STRATEGY_IDS}
     if path.is_file():
         data = json.loads(path.read_text(encoding="utf-8"))
-        stored = data.get("enabled", {})
-        for sid in STRATEGY_IDS:
-            if sid in stored:
-                enabled_map[sid] = bool(stored[sid])
-    enabled = [sid for sid, on in enabled_map.items() if on]
-    return enabled or ["CriptoPairsStrategy"]
+        stored = data.get("enabled") or {}
+        enabled = [sid for sid, on in stored.items() if on]
+        # Prefer real strategies over legacy off-by-default catalog filler.
+        non_legacy = [s for s in enabled if s != "CriptoPairsStrategy"]
+        if non_legacy:
+            return non_legacy
+        if enabled:
+            return enabled
+    return ["CriptoPairsStrategy"]
 
 
 def strategy_api_token(user: str, password: str) -> str:

@@ -7,6 +7,7 @@
   let tpLine = null;
   let currentSpeed = 2;
   let loadedCandles = [];
+  let chartTimeframe = "1s";
   let botInstances = [];
   let scenarioCatalog = [];
   let selectedBotId = null;
@@ -16,11 +17,24 @@
   let lastCurrentMs = 0;
   let playerProfile = { wallet_usdt: 100, target_monthly_pct: 30 };
   let allPoolPairs = [];
+  let preferredPairs = [];
   let selectedSimPairs = new Set();
   let mlPnl = { ready: false, model: "", byId: new Map() };
   let mlGate = { enabled: true, ready: false, model: "" };
+  let uiMode = "sim"; // sim | chart | live | grid
+  let liveEnabledSnapshot = null;
+  let livePairsSnapshot = null;
+  let selectedLiveTradeId = null;
+  let gridScan = { best: null, top5: [], reason: "", metrics: {}, scanning: false };
+  let gridSelectedSymbol = null;
 
   const PAIRS_STORAGE_KEY = "simPlayerSelectedPairs";
+  const MODE_HINTS = {
+    sim: "Мультистратегия · Play / Прогон",
+    chart: "Просмотр свечей пары за период",
+    live: "Пара + стратегия · все сделки на графике",
+    grid: "Bybit Grid · ranging-скан · график 5m",
+  };
   const $ = (id) => document.getElementById(id);
 
   function tradeArchiveId(tr) {
@@ -51,10 +65,16 @@
     try {
       const st = await api("/sim/ml/entry-gate");
       mlGate = { enabled: !!st.enabled, ready: !!st.ready, model: st.model || "" };
-      const el = $("mlGateToggle");
-      if (el) el.checked = mlGate.enabled;
+      syncMlGateCheckboxes();
     } catch (_) {
       mlGate = { enabled: true, ready: false, model: "" };
+    }
+  }
+
+  function syncMlGateCheckboxes() {
+    for (const id of ["mlGateToggle", "mlGateToggleLive"]) {
+      const el = $(id);
+      if (el) el.checked = !!mlGate.enabled;
     }
   }
 
@@ -64,7 +84,9 @@
       body: JSON.stringify({ enabled }),
     });
     mlGate = { enabled: !!st.enabled, ready: !!st.ready, model: st.model || "" };
+    syncMlGateCheckboxes();
     log(`ML gate: ${mlGate.enabled ? "вкл" : "выкл"}${mlGate.model ? ` · ${mlGate.model}` : ""}`);
+    return mlGate;
   }
 
   async function loadMlPnl() {
@@ -127,9 +149,624 @@
 
 
   function log(msg) {
-    const box = $("logBox");
     const ts = new Date().toISOString().slice(11, 19);
-    box.textContent = `[${ts}] ${msg}\n` + box.textContent.slice(0, 3000);
+    const line = `[${ts}] ${msg}\n`;
+    for (const id of ["logBox", "liveLogBox", "gridLogBox"]) {
+      const box = $(id);
+      if (!box) continue;
+      box.textContent = line + box.textContent.slice(0, 3000);
+    }
+  }
+
+  function fillLiveStrategySelect() {
+    const sel = $("liveStrategySelect");
+    if (!sel) return;
+    const prev = sel.value;
+    sel.innerHTML = "";
+    for (const sc of scenarioCatalog) {
+      const o = document.createElement("option");
+      o.value = sc.id;
+      o.textContent = sc.label || sc.id;
+      sel.appendChild(o);
+    }
+    if (prev && [...sel.options].some((o) => o.value === prev)) sel.value = prev;
+    else if (sel.options.length) sel.selectedIndex = 0;
+  }
+
+  function setMode(mode) {
+    if (!["sim", "chart", "live", "grid"].includes(mode)) return;
+    const prev = uiMode;
+    if (prev === "live" && mode !== "live") {
+      restoreLiveScenarios().catch(() => {});
+      if (livePairsSnapshot) {
+        selectedSimPairs = new Set(livePairsSnapshot);
+        livePairsSnapshot = null;
+        updatePairsButtonLabel();
+      }
+      selectedLiveTradeId = null;
+      const tip = $("chartHover");
+      if (tip) {
+        tip.classList.add("hidden");
+        tip.innerHTML = "";
+      }
+    }
+    uiMode = mode;
+    document.body.classList.remove("mode-sim", "mode-chart", "mode-live", "mode-grid");
+    document.body.classList.add("mode-" + mode);
+    document.querySelectorAll(".mode-tab").forEach((btn) => {
+      const on = btn.dataset.mode === mode;
+      btn.classList.toggle("active", on);
+      btn.setAttribute("aria-selected", on ? "true" : "false");
+    });
+    const hint = $("modeHint");
+    if (hint) hint.textContent = MODE_HINTS[mode] || "";
+    if (mode === "live") {
+      fillLiveStrategySelect();
+      syncLivePeriodLabel();
+      renderLiveTradesPanel();
+    }
+    if (mode === "chart") {
+      selectedTradeHighlight = null;
+      if (candleSeries) candleSeries.setMarkers([]);
+      const th = $("tradeHighlights");
+      if (th) th.innerHTML = "";
+      hidePriceLines();
+    }
+    if (mode === "grid") {
+      selectedTradeHighlight = null;
+      selectedLiveTradeId = null;
+      if (candleSeries) candleSeries.setMarkers([]);
+      const th = $("tradeHighlights");
+      if (th) th.innerHTML = "";
+      hidePriceLines();
+      renderGridPanel();
+      loadGridStatus().catch((e) => log(e.message));
+    }
+    drawHighlights();
+    resizeChartForMode();
+    log("Режим: " + (MODE_HINTS[mode] || mode));
+  }
+
+  function syncLivePeriodLabel() {
+    const el = $("livePeriodLabel");
+    if (!el) return;
+    const a = $("dateFrom")?.value;
+    const b = $("dateTo")?.value;
+    el.textContent = a && b ? `${a} → ${b}` : "укажите От / До слева";
+  }
+
+  function gridSymbolOf(row) {
+    if (!row) return null;
+    if (row.symbol) return String(row.symbol).replace("/", "").replace(":USDT", "").toUpperCase();
+    const p = row.pair || "";
+    return p.replace("/", "").replace(":USDT", "").toUpperCase() || null;
+  }
+
+  function fmtPct(x, digits) {
+    if (x == null || Number.isNaN(Number(x))) return "—";
+    return (Number(x) * 100).toFixed(digits ?? 1) + "%";
+  }
+
+  function fmtNum(x, digits) {
+    if (x == null || Number.isNaN(Number(x))) return "—";
+    return Number(x).toFixed(digits ?? 2);
+  }
+
+  function renderGridPanel() {
+    const reasonEl = $("gridReason");
+    const metricsEl = $("gridMetrics");
+    const topEl = $("gridTop5");
+    const badge = $("gridPairBadge");
+    const meta = $("gridMeta");
+    const st = $("gridScanStatus");
+
+    if (reasonEl) {
+      reasonEl.textContent = gridScan.reason || "Запустите скан ranging-пар (1–2 мин). Бот на бирже не создаётся.";
+      reasonEl.classList.toggle("muted", !gridScan.best);
+    }
+
+    if (metricsEl) {
+      const m = gridScan.metrics || {};
+      const cards = [
+        ["score", fmtNum(m.score, 4)],
+        ["ADX", fmtNum(m.adx, 1)],
+        ["BB width", fmtPct(m.bb_width, 2)],
+        ["ranging", fmtPct(m.ranging_ratio, 0)],
+        ["inside BB", fmtPct(m.inside_bb_ratio, 0)],
+        ["ATR ratio", fmtNum(m.atr_ratio, 2)],
+        ["HTF", m.htf_ok == null ? "—" : m.htf_ok ? "ok" : "weak"],
+      ];
+      metricsEl.innerHTML = gridScan.best
+        ? cards
+            .map(
+              ([k, v]) =>
+                `<div class="grid-metric"><span class="k">${k}</span><span class="v">${v}</span></div>`
+            )
+            .join("")
+        : "";
+    }
+
+    const top5 = gridScan.top5 || [];
+    if (topEl) {
+      if (!top5.length) {
+        topEl.className = "grid-top5 muted";
+        topEl.textContent = "—";
+      } else {
+        topEl.className = "grid-top5";
+        topEl.innerHTML = top5
+          .map((row, i) => {
+            const sym = gridSymbolOf(row);
+            const active = sym && sym === gridSelectedSymbol ? " active" : "";
+            const pair = row.pair || sym || "—";
+            const near = row.qualified === false ? " near" : "";
+            return (
+              `<div class="grid-top-row${active}${near}" data-symbol="${sym || ""}" data-idx="${i}">` +
+              `<span class="rank">#${i + 1}</span>` +
+              `<span class="pair">${pair}${row.qualified === false ? " · near" : ""}</span>` +
+              `<span class="score">${fmtNum(row.score, 4)}</span>` +
+              `<span class="adx">ADX ${fmtNum(row.adx, 1)}</span>` +
+              `</div>`
+            );
+          })
+          .join("");
+        topEl.querySelectorAll(".grid-top-row").forEach((el) => {
+          el.addEventListener("click", () => {
+            const idx = Number(el.dataset.idx);
+            const row = top5[idx];
+            if (!row) return;
+            selectGridPair(row).catch((e) => log(e.message));
+          });
+        });
+      }
+    }
+
+    const sym = gridSelectedSymbol || gridSymbolOf(gridScan.best);
+    if (badge) badge.textContent = sym ? `пара: ${sym} · 5m` : "пара: —";
+    if (meta) {
+      const parts = [];
+      if (gridScan.scanned_at) parts.push(`скан: ${gridScan.scanned_at}`);
+      if (gridScan.candidates_checked != null) parts.push(`проверено: ${gridScan.candidates_checked}`);
+      if (sym) parts.push(`график: ${sym} 5m`);
+      meta.textContent = parts.length ? parts.join(" · ") : "—";
+    }
+    if (st && !gridScan.scanning) {
+      st.textContent = gridScan.best
+        ? `Готово · ${gridScan.best.pair || gridSymbolOf(gridScan.best)}`
+        : "Ranging-пары · без создания бота на Bybit";
+    }
+  }
+
+  async function loadGridChart(symbol) {
+    const sym = String(symbol || "").toUpperCase();
+    if (!sym) throw new Error("symbol required");
+    const data = await api(`/sim/bybit-grid/chart?symbol=${encodeURIComponent(sym)}&limit=200`);
+    const candles = (data.candles || []).map((c) => ({
+      time: Number(c.time),
+      open: Number(c.open),
+      high: Number(c.high),
+      low: Number(c.low),
+      close: Number(c.close),
+    }));
+    if (!candles.length) throw new Error("пустой график 5m");
+    loadedCandles = candles;
+    chartTimeframe = "5m";
+    gridSelectedSymbol = data.symbol || sym;
+    if (candleSeries) {
+      candleSeries.setData(candles);
+      candleSeries.setMarkers([]);
+    }
+    const th = $("tradeHighlights");
+    if (th) th.innerHTML = "";
+    if (chart && candles.length) {
+      chart.timeScale().fitContent();
+    }
+    const last = candles[candles.length - 1];
+    if ($("priceLabel") && last) $("priceLabel").textContent = Number(last.close).toFixed(6);
+    if ($("statusLabel")) $("statusLabel").textContent = `grid · ${gridSelectedSymbol} 5m`;
+    renderGridPanel();
+    return data;
+  }
+
+  async function selectGridPair(row) {
+    const sym = gridSymbolOf(row);
+    if (!sym) return;
+    gridSelectedSymbol = sym;
+    const fromBest = gridScan.best && gridSymbolOf(gridScan.best) === sym;
+    if ($("gridReason") && !fromBest) {
+      const bits = [
+        `Просмотр ${row.pair || sym} (score ${fmtNum(row.score, 4)}).`,
+        row.adx != null ? `ADX ${fmtNum(row.adx, 1)}.` : "",
+        row.bb_width != null ? `BB width ${fmtPct(row.bb_width, 2)}.` : "",
+        row.ranging_ratio != null ? `ranging ${fmtPct(row.ranging_ratio, 0)}.` : "",
+      ].filter(Boolean);
+      $("gridReason").textContent = bits.join(" ");
+      $("gridReason").classList.remove("muted");
+      const m = {
+        score: row.score,
+        adx: row.adx,
+        bb_width: row.bb_width,
+        ranging_ratio: row.ranging_ratio,
+        inside_bb_ratio: row.inside_bb_ratio,
+        atr_ratio: row.atr_ratio,
+        htf_ok: row.htf_ok,
+      };
+      gridScan.metrics = m;
+    } else if (fromBest) {
+      gridScan.metrics = gridScan.metricsBest || gridScan.metrics;
+      if (gridScan.reasonBest) gridScan.reason = gridScan.reasonBest;
+      if ($("gridReason")) {
+        $("gridReason").textContent = gridScan.reason;
+        $("gridReason").classList.toggle("muted", !gridScan.best);
+      }
+    }
+    renderGridPanel();
+    await loadGridChart(sym);
+    log(`Grid chart: ${sym} 5m`);
+  }
+
+  function applyGridScanPayload(data) {
+    gridScan.best = data.best || null;
+    gridScan.top5 = data.top5 || [];
+    gridScan.reason = data.reason || data.message || "";
+    gridScan.reasonBest = gridScan.reason;
+    gridScan.metrics = data.metrics || {};
+    gridScan.metricsBest = data.metrics || {};
+    gridScan.scanned_at = data.scanned_at;
+    gridScan.candidates_checked = data.candidates_checked;
+    gridScan.qualified = data.qualified !== false;
+    gridScan.scanning = false;
+  }
+
+  async function loadGridStatus() {
+    try {
+      const data = await api("/sim/bybit-grid/status");
+      if (data && (data.best || data.scanned_at || (data.top5 && data.top5.length))) {
+        applyGridScanPayload(data);
+        renderGridPanel();
+        const sym = gridSelectedSymbol || gridSymbolOf(gridScan.best) || gridSymbolOf(gridScan.top5[0]);
+        if (sym) await loadGridChart(sym);
+      } else {
+        renderGridPanel();
+      }
+    } catch (e) {
+      renderGridPanel();
+      throw e;
+    }
+  }
+
+  async function runGridScan() {
+    if (gridScan.scanning) return;
+    gridScan.scanning = true;
+    const btn = $("btnGridScan");
+    const st = $("gridScanStatus");
+    if (btn) btn.disabled = true;
+    if (st) st.textContent = "Скан… 1–2 мин, ждите";
+    if ($("statusLabel")) $("statusLabel").textContent = "scanning…";
+    log("Bybit Grid: старт скана (без create_grid)");
+    try {
+      const data = await api("/sim/bybit-grid/scan", { method: "POST", body: "{}" });
+      applyGridScanPayload(data);
+      renderGridPanel();
+      const sym = gridSymbolOf(gridScan.best) || gridSymbolOf(gridScan.top5[0]);
+      if (sym) await loadGridChart(sym);
+      const tag = data.qualified === false ? "near-miss" : "ok";
+      log(
+        `Bybit Grid: ${tag} · ${gridScan.best?.pair || "—"} · checked=${data.candidates_checked ?? "—"} · ranging=${data.ranging_found ?? 0}`
+      );
+      if (st) {
+        st.textContent = data.qualified === false
+          ? "Нет qualifying — показаны ближайшие"
+          : `Готово · ${gridScan.best?.pair || "—"}`;
+      }
+    } catch (e) {
+      gridScan.scanning = false;
+      if (st) st.textContent = "Ошибка скана";
+      if ($("statusLabel")) $("statusLabel").textContent = "scan error";
+      throw e;
+    } finally {
+      gridScan.scanning = false;
+      if (btn) btn.disabled = false;
+      renderGridPanel();
+    }
+  }
+
+  function resizeChartForMode() {
+    const el = $("chart");
+    if (!chart || !el) return;
+    const h = uiMode === "sim" ? Math.max(420, el.clientHeight) : Math.max(560, el.clientHeight);
+    chart.applyOptions({ width: el.clientWidth, height: h });
+    drawHighlights();
+  }
+
+  async function snapshotAndEnableLiveScenario(sid) {
+    liveEnabledSnapshot = scenarioCatalog.map((sc) => ({ id: sc.id, enabled: sc.enabled !== false }));
+    for (const sc of scenarioCatalog) {
+      const want = sc.id === sid;
+      if ((sc.enabled !== false) !== want) {
+        await setScenarioEnabled(sc.id, want);
+      }
+    }
+  }
+
+  async function restoreLiveScenarios() {
+    if (!liveEnabledSnapshot) return;
+    for (const row of liveEnabledSnapshot) {
+      const sc = scenarioCatalog.find((s) => s.id === row.id);
+      if (!sc) continue;
+      if ((sc.enabled !== false) !== row.enabled) {
+        await setScenarioEnabled(row.id, row.enabled);
+      }
+    }
+    liveEnabledSnapshot = null;
+  }
+
+  function renderLiveTradesPanel() {
+    const el = $("liveTradesPanel");
+    if (!el) return;
+    const sid = ($("liveStrategySelect") && $("liveStrategySelect").value) || activeReplayScenario;
+    if (!sid) {
+      el.innerHTML = "<span class='muted'>Выберите стратегию</span>";
+      return;
+    }
+    const pair = $("pairSelect").value;
+    const trades = liveTradesList(sid).filter((t) => !pair || t.pair === pair);
+    if (!trades.length) {
+      el.innerHTML =
+        "<span class='muted'>Сделок пока нет — загрузите график и нажмите «Найти сделки»</span>";
+      return;
+    }
+    el.innerHTML = trades
+      .slice()
+      .reverse()
+      .map((t) => {
+        const open = t._closed === false;
+        const pnl =
+          t.profit_abs == null
+            ? "—"
+            : (t.profit_abs >= 0 ? "+" : "") + Number(t.profit_abs).toFixed(4);
+        const tag = open ? '<span class="tag">OPEN</span>' : "";
+        const span = open
+          ? fmtTime(t.open_ms)
+          : fmtTime(t.open_ms) + " → " + fmtTime(t.close_ms);
+        const reason = t.exit_reason || (open ? "в рынке" : "");
+        const selected = t.id && t.id === selectedLiveTradeId ? " selected" : "";
+        return (
+          '<div class="live-trade-row ' +
+          (open ? "open" : "") +
+          selected +
+          '" data-trade-id="' +
+          (t.id || "") +
+          '" title="Показать на графике">' +
+          tag +
+          "<span>" +
+          span +
+          "</span><span>" +
+          pnl +
+          ' USDT</span><span class="muted">' +
+          reason +
+          "</span></div>"
+        );
+      })
+      .join("");
+    el.querySelectorAll(".live-trade-row[data-trade-id]").forEach((row) => {
+      row.addEventListener("click", () => {
+        const tr = trades.find((t) => t.id === row.dataset.tradeId);
+        if (tr) focusLiveTrade(tr);
+      });
+    });
+  }
+
+  function fmtPrice(v) {
+    if (v == null || Number.isNaN(Number(v))) return "—";
+    const n = Number(v);
+    if (n >= 1000) return n.toFixed(2);
+    if (n >= 1) return n.toFixed(4);
+    return n.toFixed(6);
+  }
+
+  function updateChartHover(param) {
+    const tip = $("chartHover");
+    if (!tip || !candleSeries) return;
+    if (!param || param.time === undefined || param.point === undefined) {
+      tip.classList.add("hidden");
+      tip.innerHTML = "";
+      return;
+    }
+    const raw = param.seriesData?.get?.(candleSeries);
+    if (!raw || raw.close == null) {
+      tip.classList.add("hidden");
+      tip.innerHTML = "";
+      return;
+    }
+    let timeLabel = "—";
+    if (typeof param.time === "number") {
+      timeLabel = fmtTime(param.time * 1000);
+    } else if (param.time && param.time.year) {
+      const t = param.time;
+      timeLabel = `${t.year}-${String(t.month).padStart(2, "0")}-${String(t.day).padStart(2, "0")}`;
+    }
+    tip.innerHTML =
+      '<div class="ch-time">' +
+      timeLabel +
+      '</div><div class="ch-ohlc">' +
+      "<span>O <b>" +
+      fmtPrice(raw.open) +
+      "</b></span>" +
+      "<span>H <b>" +
+      fmtPrice(raw.high) +
+      "</b></span>" +
+      "<span>L <b>" +
+      fmtPrice(raw.low) +
+      "</b></span>" +
+      "<span>C <b>" +
+      fmtPrice(raw.close) +
+      "</b></span>" +
+      "</div>";
+    tip.classList.remove("hidden");
+    if ($("priceLabel")) $("priceLabel").textContent = fmtPrice(raw.close);
+  }
+
+  async function focusLiveTrade(tr) {
+    if (!tr || !tr.open_ms) return;
+    selectedLiveTradeId = tr.id || `${tr.bot_id || tr.inst_id}:${tr.open_ms}`;
+    showPriceLines(tr);
+    const openSec = Math.floor(tr.open_ms / 1000);
+    const closeSec = Math.floor((tr.close_ms || tr.open_ms) / 1000);
+    const pad = Math.max(180, Math.floor((closeSec - openSec) * 0.35) || 180);
+    try {
+      chart.timeScale().setVisibleRange({
+        from: openSec - pad,
+        to: closeSec + pad,
+      });
+    } catch (_) {}
+    renderLiveTradesPanel();
+    drawHighlights();
+    const sym = (tr.pair || "").split("/")[0] || "";
+    log(`→ сделка ${sym} ${fmtTime(tr.open_ms)}`);
+  }
+
+  function collectLiveHighlight() {
+    if (uiMode !== "live") return null;
+    const pair = $("pairSelect").value;
+    const sid = ($("liveStrategySelect") && $("liveStrategySelect").value) || activeReplayScenario;
+    if (!sid || !pair) return null;
+    const trades = liveTradesList(sid).filter((t) => t.pair === pair);
+    if (!trades.length) return null;
+    return {
+      bot_id: sid,
+      label: sid,
+      pair: pair,
+      trades: trades.map((t) => Object.assign({}, t, { _liveOpen: false, _closed: true })),
+      summary: { total_trades: trades.length },
+      _liveMode: true,
+    };
+  }
+
+  async function liveLoad() {
+    await loadChart();
+    const meta = $("chartMeta");
+    if (meta) {
+      meta.textContent =
+        $("pairSelect").value +
+        "\n" +
+        $("dateFrom").value +
+        " → " +
+        $("dateTo").value +
+        "\n" +
+        loadedCandles.length +
+        " свечей";
+    }
+    renderLiveTradesPanel();
+  }
+
+  function ingestFindTrades(sid, rows) {
+    const map = new Map();
+    for (const row of rows || []) {
+      const id = row.id || `${row.inst_id || row.bot_id || sid}:${row.open_ms}`;
+      map.set(id, {
+        id,
+        scenario_id: sid,
+        bot_id: row.inst_id || row.bot_id || sid,
+        pair: row.pair,
+        label: row.label,
+        open_ms: row.open_ms,
+        close_ms: row.close_ms,
+        open_rate: row.open_rate,
+        close_rate: row.close_rate,
+        profit_abs: row.profit_abs,
+        profit_ratio: row.profit_ratio,
+        exit_reason: row.exit_reason,
+        is_short: row.is_short,
+        stop_loss: row.stop_loss,
+        take_profit: row.take_profit,
+        _live: true,
+        _closed: true,
+      });
+    }
+    liveTradesByScenario.set(sid, map);
+  }
+
+  async function findTrades() {
+    const pair = $("pairSelect").value;
+    const sid = $("liveStrategySelect") && $("liveStrategySelect").value;
+    const start_ms = localInputToMs($("dateFrom").value);
+    const end_ms = localInputToMs($("dateTo").value);
+    if (!pair || !sid || !start_ms || !end_ms) {
+      log("Выберите пару, стратегию и период (От / До)");
+      return;
+    }
+    if (!loadedCandles.length) await loadChart();
+    await snapshotAndEnableLiveScenario(sid);
+    if (!livePairsSnapshot) {
+      livePairsSnapshot = [...getSelectedSimPairs()];
+    }
+    selectedSimPairs = new Set([pair]);
+    updatePairsButtonLabel();
+    resetBotsUi(false);
+    liveTradesByScenario.delete(sid);
+    selectedLiveTradeId = null;
+    if ($("btnLivePlay")) $("btnLivePlay").disabled = true;
+    $("statusLabel").textContent = "поиск…";
+    log("Поиск сделок ▶ " + sid + " · " + pair);
+    try {
+      const res = await api("/sim/player/find-trades", {
+        method: "POST",
+        body: JSON.stringify({
+          pair: pair,
+          pairs: [pair],
+          timeframe: chartTimeframe || "1s",
+          range_start_ms: start_ms,
+          range_end_ms: end_ms,
+        }),
+      });
+      const rows = (res.trades || []).filter((t) => !t.scenario_id || t.scenario_id === sid);
+      // group by scenario if backend returned mixed
+      const bySid = new Map();
+      for (const t of res.trades || []) {
+        const s = t.scenario_id || sid;
+        if (!bySid.has(s)) bySid.set(s, []);
+        bySid.get(s).push(t);
+      }
+      if (!bySid.size) bySid.set(sid, rows);
+      for (const [s, list] of bySid) ingestFindTrades(s, list);
+      activeReplayScenario = sid;
+      replayComplete = true;
+      sequentialReplay = false;
+      $("statusLabel").textContent = "готово";
+      renderLiveTradesPanel();
+      drawHighlights();
+      const n = liveTradesList(sid).length;
+      const cache = res.cache || {};
+      const cacheTxt =
+        cache.computed_ranges > 0
+          ? ` · кэш +${cache.computed_ranges} новых диапазонов`
+          : cache.hits
+            ? " · из кэша"
+            : "";
+      log(
+        `Найдено сделок: ${n}` +
+          (res.ml_gate ? " · ML gate вкл" : " · ML gate выкл") +
+          cacheTxt +
+          (n ? " · клик по строке — на график" : "")
+      );
+      if (n && chart) {
+        const all = liveTradesList(sid);
+        const lo = Math.min(...all.map((t) => t.open_ms));
+        const hi = Math.max(...all.map((t) => t.close_ms || t.open_ms));
+        try {
+          chart.timeScale().setVisibleRange({
+            from: Math.floor(lo / 1000) - 300,
+            to: Math.floor(hi / 1000) + 300,
+          });
+        } catch (_) {}
+      }
+      updateUI(res);
+    } catch (e) {
+      log("Ошибка поиска: " + e.message);
+      $("statusLabel").textContent = "error";
+    } finally {
+      if ($("btnLivePlay")) $("btnLivePlay").disabled = false;
+    }
   }
 
   function msToLocalInput(ms) {
@@ -192,7 +829,10 @@
       chart.applyOptions({ width: el.clientWidth, height: Math.max(480, el.clientHeight) });
       drawHighlights();
     }).observe(el);
-    chart.timeScale().subscribeVisibleLogicalRangeChange(drawHighlights);
+    chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
+      drawHighlights();
+    });
+    chart.subscribeCrosshairMove((param) => updateChartHover(param));
   }
 
   function hidePriceLines() {
@@ -213,24 +853,26 @@
       `SL ${trade.stop_loss?.toFixed(6)} · TP ${trade.take_profit?.toFixed(6)}`;
   }
 
-  function loadSelectedPairsFromStorage(pool) {
+  function loadSelectedPairsFromStorage(pool, preferred) {
+    const fallback = (preferred || []).filter((p) => pool.includes(p));
+    const defaultSet = fallback.length ? fallback : pool.slice(0, Math.min(20, pool.length));
     try {
       const raw = localStorage.getItem(PAIRS_STORAGE_KEY);
       if (!raw) {
-        selectedSimPairs = new Set(pool);
+        selectedSimPairs = new Set(defaultSet);
         return;
       }
       const saved = JSON.parse(raw);
       if (Array.isArray(saved) && saved.length) {
         selectedSimPairs = new Set(saved.filter((p) => pool.includes(p)));
       } else {
-        selectedSimPairs = new Set(pool);
+        selectedSimPairs = new Set(defaultSet);
       }
     } catch (_) {
-      selectedSimPairs = new Set(pool);
+      selectedSimPairs = new Set(defaultSet);
     }
     if (!selectedSimPairs.size && pool.length) {
-      selectedSimPairs = new Set(pool);
+      selectedSimPairs = new Set(defaultSet.length ? defaultSet : pool.slice(0, 20));
     }
   }
 
@@ -348,29 +990,40 @@
   async function loadPairs() {
     const data = await api("/sim/pairs");
     allPoolPairs = data.pairs || [];
-    loadSelectedPairsFromStorage(allPoolPairs);
+    preferredPairs = data.preferred || [];
+    loadSelectedPairsFromStorage(allPoolPairs, preferredPairs);
     updatePairsButtonLabel();
     const sel = $("pairSelect");
     sel.innerHTML = "";
-    for (const p of data.pairs) {
+    for (const p of allPoolPairs) {
       const o = document.createElement("option");
       o.value = p;
       o.textContent = p;
       sel.appendChild(o);
     }
-    if (data.pairs.length) await loadRange(data.pairs[0]);
+    log(`Пары: ${allPoolPairs.length} доступно` + (preferredPairs.length ? ` · дефолт симуляции ${preferredPairs.length}` : ""));
+    const initial =
+      (preferredPairs.find((p) => allPoolPairs.includes(p)) || allPoolPairs[0]) || "";
+    if (initial) {
+      sel.value = initial;
+      await loadRange(initial);
+    }
   }
 
   async function loadRange(pair) {
     try {
       const rng = await api(`/sim/range?pair=${encodeURIComponent(pair)}&timeframe=1s`);
+      if (rng.timeframe) chartTimeframe = rng.timeframe;
       if (rng.start_ms) $("dateFrom").value = msToLocalInput(rng.start_ms);
       if (rng.end_ms) $("dateTo").value = msToLocalInput(rng.end_ms);
+      syncLivePeriodLabel();
       if (!rng.start_ms || !rng.end_ms) {
         log(`Нет диапазона дат для ${pair}`);
+      } else if (rng.timeframe && rng.timeframe !== "1s") {
+        log(`${pair}: свечи ${rng.timeframe} (${rng.count || "?"} баров)`);
       }
     } catch (e) {
-      log(`Нет данных 1s для ${pair}`);
+      log(`Нет данных для ${pair}`);
     }
   }
 
@@ -389,14 +1042,33 @@
     const data = await api(
       `/sim/chart?pair=${encodeURIComponent(pair)}&timeframe=1s&start_ms=${start_ms}&end_ms=${end_ms}&limit=20000`
     );
+    chartTimeframe = data.timeframe || "1s";
     loadedCandles = data.candles;
     candleSeries.setData(loadedCandles);
     chart.timeScale().fitContent();
-    const cfg = { pair, timeframe: "1s", range_start_ms: start_ms, range_end_ms: end_ms };
+    const cfg = {
+      pair,
+      timeframe: chartTimeframe,
+      range_start_ms: start_ms,
+      range_end_ms: end_ms,
+    };
     if (keepTime) cfg.start_ms = localInputToMs($("clockLabel").dataset?.ms) || start_ms;
     if (rangeOverride?.seek_ms) cfg.start_ms = rangeOverride.seek_ms;
     await api("/sim/player/configure", { method: "POST", body: JSON.stringify(cfg) });
-    log(`График ${pair}: ${loadedCandles.length} свечей`);
+    log(`График ${pair}: ${loadedCandles.length} свечей ${chartTimeframe}`);
+    const meta = $("chartMeta");
+    if (meta) {
+      meta.textContent =
+        pair +
+        "\n" +
+        msToLocalInput(start_ms) +
+        " → " +
+        msToLocalInput(end_ms) +
+        "\n" +
+        loadedCandles.length +
+        " свечей " +
+        chartTimeframe;
+    }
     drawHighlights();
   }
 
@@ -711,6 +1383,10 @@
       block.classList.remove("replaying", "replay-done");
     });
     updatePortfolioSummary();
+    if (uiMode === "live") {
+      renderLiveTradesPanel();
+      drawHighlights();
+    }
   }
 
   function liveTradesList(scenarioId) {
@@ -752,6 +1428,10 @@
     ensureStrategyCard(sid);
     refreshStrategyCard(sid);
     markReplayStrategyCards();
+    if (uiMode === "live") {
+      renderLiveTradesPanel();
+      drawHighlights();
+    }
   }
 
   function ensureStrategyCard(scenarioId) {
@@ -789,6 +1469,10 @@
       const tr = map.get(id);
       scoreOpenTrade(tr, sid).then(() => refreshStrategyCard(sid)).catch(() => {});
       log(`▸ ${msg.label} ${msg.pair.split("/")[0]} вход ${fmtTime(msg.trade.open_ms)}`);
+    }
+    if (uiMode === "live") {
+      renderLiveTradesPanel();
+      drawHighlights();
     }
   }
 
@@ -1100,7 +1784,16 @@
       { key: "live", title: "Live боты" },
       { key: "trend", title: "Тренд-стратегии" },
       { key: "lite", title: "LiteFinance" },
+      { key: "scalp", title: "Scalp" },
+      { key: "scalp_liq", title: "Liquidity / Alt breakout" },
+      { key: "newset", title: "New set" },
+      { key: "chart", title: "Chart TA" },
+      { key: "chart2", title: "Chart TA · wave 2" },
+      { key: "chart3", title: "Chart TA · wave 3" },
+      { key: "chart4", title: "Chart TA · wave 4" },
+      { key: "combo", title: "Combo" },
     ];
+    const known = new Set(groups.map((g) => g.key));
     for (const g of groups) {
       const items = catalog.filter((sc) => (sc.group || "lite") === g.key);
       if (!items.length) continue;
@@ -1108,7 +1801,7 @@
       groupWrap.className = "strategy-group";
       const h = document.createElement("h3");
       h.className = "strategy-group-title";
-      h.textContent = g.title;
+      h.textContent = `${g.title} (${items.length})`;
       groupWrap.appendChild(h);
       const cards = document.createElement("div");
       cards.className = "strategy-group-cards";
@@ -1118,14 +1811,13 @@
       groupWrap.appendChild(cards);
       root.appendChild(groupWrap);
     }
-    const known = new Set(groups.map((g) => g.key));
     const other = catalog.filter((sc) => sc.group && !known.has(sc.group));
     if (other.length) {
       const groupWrap = document.createElement("div");
       groupWrap.className = "strategy-group";
       const h = document.createElement("h3");
       h.className = "strategy-group-title";
-      h.textContent = "Прочие";
+      h.textContent = `Прочие (${other.length})`;
       groupWrap.appendChild(h);
       const cards = document.createElement("div");
       cards.className = "strategy-group-cards";
@@ -1289,23 +1981,63 @@
 
   function drawHighlights() {
     const container = $("tradeHighlights");
+    if (!container) return;
     container.innerHTML = "";
-    const hl = selectedTradeHighlight || botsRuntime.highlight;
+    const liveHl = collectLiveHighlight();
+    const hl = liveHl || selectedTradeHighlight || botsRuntime.highlight;
     if (!hl || !chart || !loadedCandles.length) {
-      if (!hl) candleSeries.setMarkers([]);
+      if (!hl && candleSeries) candleSeries.setMarkers([]);
       return;
     }
     const ts = chart.timeScale();
     const trades = hl.trades || [];
+    const isLive = !!hl._liveMode || uiMode === "live";
     for (const tr of trades) {
+      const endMs = tr._liveOpen
+        ? Math.max(lastCurrentMs || tr.open_ms, tr.open_ms)
+        : tr.close_ms;
       const x1 = ts.timeToCoordinate(Math.floor(tr.open_ms / 1000));
-      const x2 = ts.timeToCoordinate(Math.floor(tr.close_ms / 1000));
+      const x2 = ts.timeToCoordinate(Math.floor(endMs / 1000));
       if (x1 == null || x2 == null) continue;
       const div = document.createElement("div");
-      div.className = `trade-zone ${tr.profit_abs >= 0 ? "win" : "loss"} selected`;
-      div.style.left = `${Math.min(x1, x2)}px`;
-      div.style.width = `${Math.max(Math.abs(x2 - x1), 4)}px`;
+      const tid = tr.id || `${tr.bot_id || ""}:${tr.open_ms}`;
+      const isSelected = isLive && selectedLiveTradeId && tid === selectedLiveTradeId;
+      if (isLive) {
+        div.className =
+          "trade-zone " +
+          (tr._liveOpen ? "live-open" : "live-closed") +
+          (isSelected ? " live-selected" : "");
+      } else {
+        div.className = "trade-zone " + (tr.profit_abs >= 0 ? "win" : "loss") + " selected";
+      }
+      div.style.left = Math.min(x1, x2) + "px";
+      div.style.width = Math.max(Math.abs(x2 - x1), 4) + "px";
       container.appendChild(div);
+    }
+    if (isLive) {
+      const markers = trades.flatMap((t) => {
+        const m = [
+          {
+            time: Math.floor(t.open_ms / 1000),
+            position: "belowBar",
+            color: "#d29922",
+            shape: "arrowUp",
+            text: "In",
+          },
+        ];
+        if (!t._liveOpen && t.close_ms) {
+          m.push({
+            time: Math.floor(t.close_ms / 1000),
+            position: "aboveBar",
+            color: t.profit_abs >= 0 ? "#3fb950" : "#f85149",
+            shape: "circle",
+            text: (t.profit_abs >= 0 ? "+" : "") + Number(t.profit_abs || 0).toFixed(3),
+          });
+        }
+        return m;
+      });
+      candleSeries.setMarkers(markers);
+      return;
     }
     const markers = trades.flatMap((t) => [
       {
@@ -1320,7 +2052,7 @@
         position: "aboveBar",
         color: t.profit_abs >= 0 ? "#3fb950" : "#f85149",
         shape: "circle",
-        text: `${t.profit_abs >= 0 ? "+" : ""}${t.profit_abs.toFixed(3)}`,
+        text: (t.profit_abs >= 0 ? "+" : "") + Number(t.profit_abs || 0).toFixed(3),
       },
     ]);
     candleSeries.setMarkers(markers);
@@ -1352,16 +2084,20 @@
   }
 
   function updateUI(snap) {
+    if (snap.type === "finished" && (snap.stopped || snap.status === "stopped")) {
+      setSimRunning(false);
+    }
     if (snap.type === "scan_tick") {
       $("statusLabel").textContent = "scanning";
       if (snap.current_iso) $("clockLabel").textContent = snap.current_iso + " (сканер)";
-    } else {
+    } else if (snap.status) {
       $("statusLabel").textContent = snap.status || "—";
       $("clockLabel").textContent = snap.current_iso || "—";
     }
     if (snap.current_ms) {
       $("clockLabel").dataset.ms = snap.current_ms;
       lastCurrentMs = snap.current_ms;
+      if (uiMode === "live") drawHighlights();
     }
     if (snap.candle) $("priceLabel").textContent = snap.candle.close?.toFixed(6) ?? "—";
     if (snap.engine) $("equityLabel").textContent = `${snap.engine.equity} USDT`;
@@ -1622,7 +2358,8 @@
 
   async function setSpeed(speed) {
     currentSpeed = speed;
-    $("speedLabel").textContent = `${speed} sim-с/с`;
+    const label = `${speed} sim-с/с`;
+    if ($("speedLabel")) $("speedLabel").textContent = label;
     document.querySelectorAll(".btn.speed").forEach((b) => {
       b.classList.toggle("active", Number(b.dataset.speed) === speed);
     });
@@ -1666,6 +2403,19 @@
     drawHighlights();
   });
   $("btnLoad")?.addEventListener("click", () => loadChart().catch((e) => log(e.message)));
+  $("btnChartOpen")?.addEventListener("click", () => loadChart().catch((e) => log(e.message)));
+  $("btnLiveLoad")?.addEventListener("click", () => liveLoad().catch((e) => log(e.message)));
+  $("btnLivePlay")?.addEventListener("click", () => findTrades().catch((e) => log(e.message)));
+  $("btnGridScan")?.addEventListener("click", () => runGridScan().catch((e) => log(e.message)));
+  $("liveStrategySelect")?.addEventListener("change", () => {
+    renderLiveTradesPanel();
+    drawHighlights();
+  });
+  document.querySelectorAll(".mode-tab").forEach((btn) => {
+    btn.addEventListener("click", () => setMode(btn.dataset.mode));
+  });
+  $("dateFrom")?.addEventListener("change", syncLivePeriodLabel);
+  $("dateTo")?.addEventListener("change", syncLivePeriodLabel);
   $("btnStakeApply")?.addEventListener("click", () => saveProfileStake().catch((e) => log(e.message)));
   $("stakeModeSelect")?.addEventListener("change", () => {
     $("stakeAmountWrap")?.classList.toggle("hidden", $("stakeModeSelect").value === "scenario");
@@ -1676,9 +2426,24 @@
   if (mlGateEl) {
     mlGateEl.addEventListener("change", () => {
       setMlGateEnabled(mlGateEl.checked)
-        .then(() => log("Запустите Play или Прогон заново, чтобы применить ML gate"))
+        .then(() => log("Запустите Play / Прогон / «Найти сделки» заново"))
         .catch((e) => {
           mlGateEl.checked = !mlGateEl.checked;
+          log(e.message);
+        });
+    });
+  }
+  const mlGateLiveEl = $("mlGateToggleLive");
+  if (mlGateLiveEl) {
+    mlGateLiveEl.addEventListener("change", () => {
+      setMlGateEnabled(mlGateLiveEl.checked)
+        .then(() => {
+          if (uiMode === "live" && liveTradesByScenario.size) {
+            log("ML gate изменён — нажмите «Найти сделки» ещё раз (кэш переиспользуется)");
+          }
+        })
+        .catch((e) => {
+          mlGateLiveEl.checked = !mlGateLiveEl.checked;
           log(e.message);
         });
     });
@@ -1719,6 +2484,7 @@
       const data = await api("/sim/scenarios");
       scenarioCatalog = data.scenarios || [];
       renderStrategyPanels();
+      fillLiveStrategySelect();
     } catch (_) {
       scenarioCatalog = [];
     }
@@ -1735,6 +2501,7 @@
   }
 
   initChart();
+  setMode("sim");
   loadProfile().catch(() => {});
   loadMlGate().catch(() => {});
   loadMlPnl()

@@ -305,8 +305,120 @@ def is_admin(user: Optional[dict[str, Any]]) -> bool:
     return bool(user) and str(user.get("role", "")).lower() == "admin"
 
 
+def is_impersonating(user: Optional[dict[str, Any]]) -> bool:
+    return bool(user and user.get("_imp_by"))
+
+
+def real_admin_id(user: Optional[dict[str, Any]]) -> Optional[str]:
+    """Admin id when impersonating; else None."""
+    if not user:
+        return None
+    imp = user.get("_imp_by")
+    return str(imp) if imp else None
+
+
+# UI / bot blocks that admin can grant to a user. Missing allowlist = all.
+UI_BLOCKS: list[dict[str, str]] = [
+    {"id": "test_strategies", "name": "Тестовые стратегии"},
+    {"id": "strategy", "name": "Стратегии"},
+    {"id": "grid", "name": "Grid"},
+    {"id": "bybitgrid", "name": "Bybit Grid"},
+    {"id": "finder", "name": "ML Finder"},
+    {"id": "history", "name": "История сделок"},
+    {"id": "dashboard", "name": "Дашборд PnL"},
+    {"id": "rating", "name": "Рейтинг"},
+]
+UI_BLOCK_IDS: frozenset[str] = frozenset(b["id"] for b in UI_BLOCKS)
+
+
+def _normalize_id_list(value: Any, valid_ids: set[str] | frozenset[str]) -> Optional[list[str]]:
+    """None / omit → unrestricted. List (incl. empty) → only those ids."""
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        raise ValueError("allowlist must be a list or null")
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        sid = str(item or "").strip()
+        if not sid or sid in seen:
+            continue
+        if sid not in valid_ids:
+            raise ValueError(f"unknown id: {sid}")
+        out.append(sid)
+        seen.add(sid)
+    return out
+
+
+def normalize_allowed_strategies(
+    value: Any, *, valid_ids: set[str] | frozenset[str]
+) -> Optional[list[str]]:
+    return _normalize_id_list(value, valid_ids)
+
+
+def normalize_allowed_blocks(value: Any) -> Optional[list[str]]:
+    return _normalize_id_list(value, UI_BLOCK_IDS)
+
+
+def user_allowed_strategies(user: Optional[dict[str, Any]]) -> Optional[list[str]]:
+    """None = unrestricted. Admin (not impersonating) always unrestricted."""
+    if not user:
+        return None
+    if is_admin(user) and not is_impersonating(user):
+        return None
+    raw = user.get("allowed_strategies")
+    if raw is None:
+        return None
+    if not isinstance(raw, list):
+        return None
+    return [str(x) for x in raw if str(x or "").strip()]
+
+
+def user_allowed_blocks(user: Optional[dict[str, Any]]) -> Optional[list[str]]:
+    if not user:
+        return None
+    if is_admin(user) and not is_impersonating(user):
+        return None
+    raw = user.get("allowed_blocks")
+    if raw is None:
+        return None
+    if not isinstance(raw, list):
+        return None
+    return [str(x) for x in raw if str(x or "").strip()]
+
+
+def user_may_use_strategy(user: Optional[dict[str, Any]], strategy_id: str) -> bool:
+    allow = user_allowed_strategies(user)
+    if allow is None:
+        return True
+    return str(strategy_id) in allow
+
+
+def user_may_use_block(user: Optional[dict[str, Any]], block_id: str) -> bool:
+    allow = user_allowed_blocks(user)
+    if allow is None:
+        return True
+    return str(block_id) in allow
+
+
+def user_may_use_bot(user: Optional[dict[str, Any]], bot: str) -> bool:
+    bot = str(bot or "")
+    if bot == "strategy":
+        return user_may_use_block(user, "strategy") or user_may_use_block(
+            user, "test_strategies"
+        )
+    if bot in ("grid", "finder"):
+        return user_may_use_block(user, bot)
+    return True
+
+
 def _public_user(user: dict[str, Any]) -> dict[str, Any]:
-    out = {k: v for k, v in user.items() if k != "password_hash"}
+    out = {k: v for k, v in user.items() if k not in ("password_hash", "_imp_by")}
+    # Normalize allowlists for clients (omit means all).
+    if "allowed_strategies" in user:
+        out["allowed_strategies"] = user.get("allowed_strategies")
+    if "allowed_blocks" in user:
+        out["allowed_blocks"] = user.get("allowed_blocks")
     return out
 
 
@@ -314,6 +426,21 @@ def list_users_public() -> list[dict[str, Any]]:
     """All users without password_hash."""
     ensure_users_migrated()
     return [_public_user(u) for u in load_users()]
+
+
+def permission_catalog(strategy_rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Catalog for admin permission editor."""
+    strategies = [
+        {
+            "id": s["id"],
+            "name": s.get("name") or s["id"],
+            "num": s.get("num"),
+            "test_group": bool(s.get("test_group")),
+        }
+        for s in strategy_rows
+        if isinstance(s, dict) and s.get("id")
+    ]
+    return {"blocks": list(UI_BLOCKS), "strategies": strategies}
 
 
 def _allocate_ports(users: list[dict[str, Any]]) -> dict[str, int]:
@@ -386,6 +513,9 @@ def create_user(username: str, password: str) -> dict[str, Any]:
             "enabled": True,
             "ports": ports,
             "created_at": _utc_now_iso(),
+            # null / omitted = все стратегии и блоки; admin сужает через PATCH
+            "allowed_strategies": None,
+            "allowed_blocks": None,
         }
         provision_tenant(user_id, ports)
         users.append(user)
@@ -403,6 +533,77 @@ def set_user_enabled(user_id: str, enabled: bool) -> dict[str, Any]:
                 user["enabled"] = bool(enabled)
                 save_users(users)
                 return _public_user(user)
+        raise KeyError(f"user not found: {user_id}")
+
+
+def set_user_permissions(
+    user_id: str,
+    *,
+    allowed_strategies: Any = ...,
+    allowed_blocks: Any = ...,
+    valid_strategy_ids: set[str] | frozenset[str] | None = None,
+) -> dict[str, Any]:
+    """Update allowlists. Pass ``...`` to leave a field unchanged. ``None`` = unrestricted."""
+    if allowed_strategies is ... and allowed_blocks is ...:
+        raise ValueError("nothing to update")
+    with _USERS_LOCK:
+        users = ensure_users_migrated()
+        for user in users:
+            if str(user.get("id")) != str(user_id):
+                continue
+            if is_admin(user):
+                raise ValueError("cannot set permissions on admin")
+            if allowed_strategies is not ...:
+                if valid_strategy_ids is None:
+                    raise ValueError("valid_strategy_ids required")
+                user["allowed_strategies"] = normalize_allowed_strategies(
+                    allowed_strategies, valid_ids=valid_strategy_ids
+                )
+            if allowed_blocks is not ...:
+                user["allowed_blocks"] = normalize_allowed_blocks(allowed_blocks)
+            save_users(users)
+            return _public_user(user)
+        raise KeyError(f"user not found: {user_id}")
+
+
+def patch_user(
+    user_id: str,
+    data: dict[str, Any],
+    *,
+    valid_strategy_ids: set[str] | frozenset[str] | None = None,
+) -> dict[str, Any]:
+    """Patch enabled and/or permission allowlists."""
+    if not isinstance(data, dict) or not data:
+        raise ValueError("empty patch")
+    keys = set(data.keys())
+    allowed_keys = {"enabled", "allowed_strategies", "allowed_blocks"}
+    unknown = keys - allowed_keys
+    if unknown:
+        raise ValueError(f"unknown fields: {', '.join(sorted(unknown))}")
+
+    with _USERS_LOCK:
+        users = ensure_users_migrated()
+        for user in users:
+            if str(user.get("id")) != str(user_id):
+                continue
+            if "enabled" in data:
+                enabled = bool(data["enabled"])
+                if is_admin(user) and not enabled:
+                    raise ValueError("cannot disable admin")
+                user["enabled"] = enabled
+            if "allowed_strategies" in data or "allowed_blocks" in data:
+                if is_admin(user):
+                    raise ValueError("cannot set permissions on admin")
+                if "allowed_strategies" in data:
+                    if valid_strategy_ids is None:
+                        raise ValueError("valid_strategy_ids required")
+                    user["allowed_strategies"] = normalize_allowed_strategies(
+                        data["allowed_strategies"], valid_ids=valid_strategy_ids
+                    )
+                if "allowed_blocks" in data:
+                    user["allowed_blocks"] = normalize_allowed_blocks(data["allowed_blocks"])
+            save_users(users)
+            return _public_user(user)
         raise KeyError(f"user not found: {user_id}")
 
 
@@ -440,18 +641,25 @@ def _jwt_secret() -> bytes:
     return get_master_key().encode("utf-8")
 
 
-def issue_token(user: dict[str, Any], *, ttl_seconds: int = SESSION_TTL_SECONDS) -> str:
-    """Issue session JWT with payload ``{sub, role, exp}``."""
+def issue_token(
+    user: dict[str, Any],
+    *,
+    ttl_seconds: int = SESSION_TTL_SECONDS,
+    impersonated_by: Optional[str] = None,
+) -> str:
+    """Issue session JWT with payload ``{sub, role, exp[, imp_by]}``."""
     if not user or not user.get("id"):
         raise ValueError("user required")
     header = _b64url_encode(
         json.dumps({"alg": "HS256", "typ": "JWT"}, separators=(",", ":")).encode()
     )
-    payload_obj = {
+    payload_obj: dict[str, Any] = {
         "sub": str(user["id"]),
         "role": str(user.get("role", "user")),
         "exp": int(time.time()) + int(ttl_seconds),
     }
+    if impersonated_by:
+        payload_obj["imp_by"] = str(impersonated_by)
     payload = _b64url_encode(
         json.dumps(payload_obj, separators=(",", ":")).encode("utf-8")
     )
@@ -491,6 +699,48 @@ def verify_token(token: str) -> Optional[dict[str, Any]]:
     if "sub" not in payload or "role" not in payload:
         return None
     return payload
+
+
+def session_user_from_payload(payload: dict[str, Any]) -> Optional[dict[str, Any]]:
+    """Resolve JWT payload to a user dict; attach ``_imp_by`` when impersonating."""
+    user = get_user_by_id(str(payload.get("sub", "")))
+    if not user or not user.get("enabled", True):
+        return None
+    out = dict(user)
+    imp_by = payload.get("imp_by")
+    if imp_by:
+        admin = get_user_by_id(str(imp_by))
+        if not admin or not is_admin(admin) or not admin.get("enabled", True):
+            return None
+        out["_imp_by"] = str(admin["id"])
+    return out
+
+
+def issue_impersonation_token(admin: dict[str, Any], target_user_id: str) -> tuple[str, dict[str, Any]]:
+    """Admin-only: mint token as target user. Returns (token, public target)."""
+    if not is_admin(admin) or is_impersonating(admin):
+        raise PermissionError("admin required")
+    target = get_user_by_id(str(target_user_id))
+    if not target:
+        raise KeyError(f"user not found: {target_user_id}")
+    if is_admin(target):
+        raise ValueError("cannot impersonate admin")
+    if not target.get("enabled", True):
+        raise ValueError("user is disabled")
+    token = issue_token(target, impersonated_by=str(admin["id"]))
+    return token, _public_user(target)
+
+
+def stop_impersonation_token(session_user: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    """Return to admin from an impersonation session."""
+    admin_id = real_admin_id(session_user)
+    if not admin_id:
+        raise PermissionError("not impersonating")
+    admin = get_user_by_id(admin_id)
+    if not admin or not is_admin(admin) or not admin.get("enabled", True):
+        raise PermissionError("admin session invalid")
+    token = issue_token(admin)
+    return token, _public_user(admin)
 
 
 # ---------------------------------------------------------------------------
@@ -753,8 +1003,10 @@ def provision_tenant(user_id: str, ports: dict[str, int]) -> Path:
     bot_limits = {
         "max_open_trades": dict(DEFAULT_TENANT_LIMITS),
         "stake_amount": dict(DEFAULT_TENANT_STAKES),
+        "max_open_trades_per_strategy": 0,
     }
     _atomic_write_json(td / "bot_limits.json", bot_limits, mode=0o644)
+    _atomic_write_json(td / "max_open_trades_per_strategy.json", {"value": 0}, mode=0o644)
 
     enabled_src = global_ud / "enabled_strategies.json"
     if enabled_src.is_file():
