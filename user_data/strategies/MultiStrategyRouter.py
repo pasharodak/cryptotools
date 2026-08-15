@@ -24,18 +24,25 @@ from AdxMacdVolComboStrategy import AdxMacdVolComboStrategy
 from AdxMomentumStrategy import AdxMomentumStrategy
 from AdxMomentumTestStrategy import AdxMomentumTestStrategy
 from AltVolumeBreakoutStrategy import AltVolumeBreakoutStrategy
+from AltVolumeBreakoutTestStrategy import AltVolumeBreakoutTestStrategy
 from AroonCrossStrategy import AroonCrossStrategy
 from AtrChannelBreakoutStrategy import AtrChannelBreakoutStrategy
 from AtrChannelBreakoutTestStrategy import AtrChannelBreakoutTestStrategy
 from AwesomeOscStrategy import AwesomeOscStrategy
 from BbSqueezeBreakoutStrategy import BbSqueezeBreakoutStrategy
 from BollingerRsiStrategy import BollingerRsiStrategy
+from BollingerRsiTestStrategy import BollingerRsiTestStrategy
 from ChaikinOscStrategy import ChaikinOscStrategy
+from ChaikinOscTestStrategy import ChaikinOscTestStrategy
 from CmfZeroCrossStrategy import CmfZeroCrossStrategy
+from CmfZeroCrossTestStrategy import CmfZeroCrossTestStrategy
 from CriptoPairsStrategy import CriptoPairsStrategy
 from DonchianAdxVolComboStrategy import DonchianAdxVolComboStrategy
+from DonchianAdxVolComboTestStrategy import DonchianAdxVolComboTestStrategy
 from DonchianBreakoutStrategy import DonchianBreakoutStrategy
+from DonchianBreakoutTestStrategy import DonchianBreakoutTestStrategy
 from ElderRayStrategy import ElderRayStrategy
+from ElderRayTestStrategy import ElderRayTestStrategy
 from EmaRsiAtrComboStrategy import EmaRsiAtrComboStrategy
 from EngulfingTrendStrategy import EngulfingTrendStrategy
 from FibPullbackStrategy import FibPullbackStrategy
@@ -47,13 +54,17 @@ from KeltnerStochVolComboStrategy import KeltnerStochVolComboStrategy
 from LiteIntradayStrategy import LiteIntradayStrategy
 from LiteRangeStrategy import LiteRangeStrategy
 from MacdEmaStrategy import MacdEmaStrategy
+from MacdEmaTestStrategy import MacdEmaTestStrategy
 from MfiReclaimStrategy import MfiReclaimStrategy
 from ObvEmaCrossStrategy import ObvEmaCrossStrategy
+from ObvEmaCrossTestStrategy import ObvEmaCrossTestStrategy
 from PpoSignalStrategy import PpoSignalStrategy
+from PpoSignalTestStrategy import PpoSignalTestStrategy
 from PsaraFlipStrategy import PsaraFlipStrategy
 from PsaraFlipTestStrategy import PsaraFlipTestStrategy
 from RocMomentumStrategy import RocMomentumStrategy
 from ScalpEmaCrossStrategy import ScalpEmaCrossStrategy
+from ScalpEmaCrossTestStrategy import ScalpEmaCrossTestStrategy
 from ScalpMacdHistStrategy import ScalpMacdHistStrategy
 from SupertrendRsiObvComboStrategy import SupertrendRsiObvComboStrategy
 from SupertrendStrategy import SupertrendStrategy
@@ -95,6 +106,12 @@ TEST_SETTINGS_FILE = Path(
         str(_USER_DATA_DIR / "test_strategy_settings.json"),
     )
 )
+PLACEMENT_FILE = Path(
+    os.environ.get(
+        "CT_STRATEGY_UI_PLACEMENT",
+        str(_USER_DATA_DIR / "strategy_ui_placement.json"),
+    )
+)
 HEDGE_TAG_SUFFIX = ":hedge"
 INV_TAG_SUFFIX = ":inv"
 
@@ -106,40 +123,80 @@ DEFAULT_TEST_SETTINGS: dict = {
     "take_profit": 0.012,
 }
 
-TEST_STRATEGY_TAGS = frozenset(
+# Birth-test catalog ids (fallback when placement file missing).
+_FALLBACK_TEST_STRATEGY_TAGS = frozenset(
     {
         "PsaraFlipTestStrategy",
         "AtrChannelBreakoutTestStrategy",
         "AdxMomentumTestStrategy",
         "SupertrendTestStrategy",
+        "CmfZeroCrossTestStrategy",
+        "ScalpEmaCrossTestStrategy",
+        "ChaikinOscTestStrategy",
+        "DonchianBreakoutTestStrategy",
+        "PpoSignalTestStrategy",
+        "DonchianAdxVolComboTestStrategy",
+        "ObvEmaCrossTestStrategy",
+        "ElderRayTestStrategy",
+        "AltVolumeBreakoutTestStrategy",
+        "BollingerRsiTestStrategy",
+        "MacdEmaTestStrategy",
     }
 )
+
+
+def load_test_strategy_tags() -> frozenset[str]:
+    """Strategies currently in the Тестовые panel (not promoted to main)."""
+    if not PLACEMENT_FILE.is_file():
+        return _FALLBACK_TEST_STRATEGY_TAGS
+    try:
+        data = json.loads(PLACEMENT_FILE.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return _FALLBACK_TEST_STRATEGY_TAGS
+    main = {str(x) for x in (data.get("main") or [])}
+    # Birth-test ids that are not in main stay in the test panel.
+    return frozenset(sid for sid in _FALLBACK_TEST_STRATEGY_TAGS if sid not in main)
+
+
+# Deprecated name kept for imports; prefer load_test_strategy_tags().
+TEST_STRATEGY_TAGS = _FALLBACK_TEST_STRATEGY_TAGS
 
 STRATEGY_REGISTRY: dict[str, type[IStrategy]] = {
     "CriptoPairsStrategy": CriptoPairsStrategy,
     "SupertrendStrategy": SupertrendStrategy,
     "SupertrendTestStrategy": SupertrendTestStrategy,
     "MacdEmaStrategy": MacdEmaStrategy,
+    "MacdEmaTestStrategy": MacdEmaTestStrategy,
     "FibPullbackStrategy": FibPullbackStrategy,
     "TripleEmaStrategy": TripleEmaStrategy,
     "BollingerRsiStrategy": BollingerRsiStrategy,
+    "BollingerRsiTestStrategy": BollingerRsiTestStrategy,
     "AdxMomentumStrategy": AdxMomentumStrategy,
     "AdxMomentumTestStrategy": AdxMomentumTestStrategy,
     "LiteIntradayStrategy": LiteIntradayStrategy,
     "LiteRangeStrategy": LiteRangeStrategy,
     "AltVolumeBreakoutStrategy": AltVolumeBreakoutStrategy,
+    "AltVolumeBreakoutTestStrategy": AltVolumeBreakoutTestStrategy,
     "PsaraFlipStrategy": PsaraFlipStrategy,
     "PsaraFlipTestStrategy": PsaraFlipTestStrategy,
     "AtrChannelBreakoutStrategy": AtrChannelBreakoutStrategy,
     "AtrChannelBreakoutTestStrategy": AtrChannelBreakoutTestStrategy,
     "CmfZeroCrossStrategy": CmfZeroCrossStrategy,
+    "CmfZeroCrossTestStrategy": CmfZeroCrossTestStrategy,
     "ScalpEmaCrossStrategy": ScalpEmaCrossStrategy,
+    "ScalpEmaCrossTestStrategy": ScalpEmaCrossTestStrategy,
     "ChaikinOscStrategy": ChaikinOscStrategy,
+    "ChaikinOscTestStrategy": ChaikinOscTestStrategy,
     "DonchianBreakoutStrategy": DonchianBreakoutStrategy,
+    "DonchianBreakoutTestStrategy": DonchianBreakoutTestStrategy,
     "PpoSignalStrategy": PpoSignalStrategy,
+    "PpoSignalTestStrategy": PpoSignalTestStrategy,
     "DonchianAdxVolComboStrategy": DonchianAdxVolComboStrategy,
+    "DonchianAdxVolComboTestStrategy": DonchianAdxVolComboTestStrategy,
     "ObvEmaCrossStrategy": ObvEmaCrossStrategy,
+    "ObvEmaCrossTestStrategy": ObvEmaCrossTestStrategy,
     "ElderRayStrategy": ElderRayStrategy,
+    "ElderRayTestStrategy": ElderRayTestStrategy,
     "ScalpMacdHistStrategy": ScalpMacdHistStrategy,
     "KeltnerBreakoutStrategy": KeltnerBreakoutStrategy,
     "HeikinAshiFlipStrategy": HeikinAshiFlipStrategy,
@@ -168,6 +225,11 @@ TAG_RISK: dict[str, dict] = {
         "stoploss": -0.015,
         "tp": 0.012,
         "minimal_roi": {"0": 0.012, "25": 0.006, "75": 0.0},
+    "AltVolumeBreakoutTestStrategy": {
+        "stoploss": -0.03,
+        "tp": 0.012,
+        "minimal_roi": {"0": 0.012, "60": 0.008, "180": 0.005, "480": 0.0},
+    },
     },
     "PsaraFlipStrategy": {
         "stoploss": -0.02,
@@ -186,13 +248,53 @@ TAG_RISK: dict[str, dict] = {
         "minimal_roi": {"0": 0.012, "45": 0.007, "120": 0.0},
     },
     "CmfZeroCrossStrategy": {"stoploss": -0.017, "tp": 0.011, "minimal_roi": {"0": 0.011, "45": 0.0055, "130": 0.0}},
+    "CmfZeroCrossTestStrategy": {
+        "stoploss": -0.03,
+        "tp": 0.012,
+        "minimal_roi": {"0": 0.012, "60": 0.008, "180": 0.005, "480": 0.0},
+    },
     "ScalpEmaCrossStrategy": {"stoploss": -0.01, "tp": 0.008, "minimal_roi": {"0": 0.008, "20": 0.004, "60": 0.0}},
+    "ScalpEmaCrossTestStrategy": {
+        "stoploss": -0.03,
+        "tp": 0.012,
+        "minimal_roi": {"0": 0.012, "60": 0.008, "180": 0.005, "480": 0.0},
+    },
     "ChaikinOscStrategy": {"stoploss": -0.017, "tp": 0.011, "minimal_roi": {"0": 0.011, "45": 0.0055, "130": 0.0}},
+    "ChaikinOscTestStrategy": {
+        "stoploss": -0.03,
+        "tp": 0.012,
+        "minimal_roi": {"0": 0.012, "60": 0.008, "180": 0.005, "480": 0.0},
+    },
     "DonchianBreakoutStrategy": {"stoploss": -0.025, "tp": 0.018, "minimal_roi": {"0": 0.018, "90": 0.009, "240": 0.0}},
+    "DonchianBreakoutTestStrategy": {
+        "stoploss": -0.03,
+        "tp": 0.012,
+        "minimal_roi": {"0": 0.012, "60": 0.008, "180": 0.005, "480": 0.0},
+    },
     "PpoSignalStrategy": {"stoploss": -0.016, "tp": 0.01, "minimal_roi": {"0": 0.01, "40": 0.005, "120": 0.0}},
+    "PpoSignalTestStrategy": {
+        "stoploss": -0.03,
+        "tp": 0.012,
+        "minimal_roi": {"0": 0.012, "60": 0.008, "180": 0.005, "480": 0.0},
+    },
     "DonchianAdxVolComboStrategy": {"stoploss": -0.022, "tp": 0.018, "minimal_roi": {"0": 0.018, "70": 0.009, "200": 0.0}},
+    "DonchianAdxVolComboTestStrategy": {
+        "stoploss": -0.03,
+        "tp": 0.012,
+        "minimal_roi": {"0": 0.012, "60": 0.008, "180": 0.005, "480": 0.0},
+    },
     "ObvEmaCrossStrategy": {"stoploss": -0.018, "tp": 0.012, "minimal_roi": {"0": 0.012, "55": 0.006, "160": 0.0}},
+    "ObvEmaCrossTestStrategy": {
+        "stoploss": -0.03,
+        "tp": 0.012,
+        "minimal_roi": {"0": 0.012, "60": 0.008, "180": 0.005, "480": 0.0},
+    },
     "ElderRayStrategy": {"stoploss": -0.017, "tp": 0.011, "minimal_roi": {"0": 0.011, "45": 0.0055, "130": 0.0}},
+    "ElderRayTestStrategy": {
+        "stoploss": -0.03,
+        "tp": 0.012,
+        "minimal_roi": {"0": 0.012, "60": 0.008, "180": 0.005, "480": 0.0},
+    },
     "ScalpMacdHistStrategy": {"stoploss": -0.012, "tp": 0.009, "minimal_roi": {"0": 0.009, "30": 0.0045, "90": 0.0}},
     "KeltnerBreakoutStrategy": {"stoploss": -0.02, "tp": 0.015, "minimal_roi": {"0": 0.015, "60": 0.008, "180": 0.0}},
     "HeikinAshiFlipStrategy": {"stoploss": -0.016, "tp": 0.011, "minimal_roi": {"0": 0.011, "45": 0.0055, "120": 0.0}},
@@ -228,11 +330,21 @@ TAG_RISK: dict[str, dict] = {
         "stoploss": -0.02,
         "tp": 0.025,
         "minimal_roi": {"0": 0.025, "60": 0.015, "180": 0.008, "720": 0},
+    "BollingerRsiTestStrategy": {
+        "stoploss": -0.03,
+        "tp": 0.012,
+        "minimal_roi": {"0": 0.012, "60": 0.008, "180": 0.005, "480": 0.0},
+    },
     },
     "MacdEmaStrategy": {
         "stoploss": -0.025,
         "tp": 0.03,
         "minimal_roi": {"0": 0.03, "180": 0.015, "480": 0.008, "960": 0},
+    "MacdEmaTestStrategy": {
+        "stoploss": -0.03,
+        "tp": 0.012,
+        "minimal_roi": {"0": 0.012, "60": 0.008, "180": 0.005, "480": 0.0},
+    },
     },
     "SupertrendStrategy": {
         "stoploss": -0.025,
@@ -266,7 +378,7 @@ TAG_RISK: dict[str, dict] = {
     },
 }
 
-MEAN_REV_ADX_TAGS = frozenset({"BollingerRsiStrategy", "LiteRangeStrategy", "CriptoPairsStrategy"})
+MEAN_REV_ADX_TAGS = frozenset({"BollingerRsiStrategy", "BollingerRsiTestStrategy", "LiteRangeStrategy", "CriptoPairsStrategy"})
 
 SCENARIO_BY_TAG: dict[str, dict[str, str]] = {
     "TripleEmaStrategy": {
@@ -282,6 +394,13 @@ SCENARIO_BY_TAG: dict[str, dict[str, str]] = {
         "group": "lite",
         "strategy": "BollingerRsiStrategy",
         "label": "Mean-reversion (BB)",
+    },
+    "BollingerRsiTestStrategy": {
+        "scenario_id": "lite_mean_rev_test",
+        "scan_type": "strategy",
+        "group": "lite_test",
+        "strategy": "BollingerRsiTestStrategy",
+        "label": "Mean-reversion (BB) (test) wide",
     },
     "AdxMomentumStrategy": {
         "scenario_id": "trend_breakout",
@@ -332,6 +451,13 @@ SCENARIO_BY_TAG: dict[str, dict[str, str]] = {
         "strategy": "MacdEmaStrategy",
         "label": "MACD + EMA200 (ML Gate)",
     },
+    "MacdEmaTestStrategy": {
+        "scenario_id": "trend_macd_ema_test",
+        "scan_type": "strategy",
+        "group": "trend_test",
+        "strategy": "MacdEmaTestStrategy",
+        "label": "MACD + EMA200 (test) wide",
+    },
     "FibPullbackStrategy": {
         "scenario_id": "trend_fib",
         "scan_type": "strategy",
@@ -345,6 +471,13 @@ SCENARIO_BY_TAG: dict[str, dict[str, str]] = {
         "group": "scalp_liq",
         "strategy": "AltVolumeBreakoutStrategy",
         "label": "Alt volume breakout",
+    },
+    "AltVolumeBreakoutTestStrategy": {
+        "scenario_id": "scalp_liq_breakout_test",
+        "scan_type": "strategy",
+        "group": "scalp_liq_test",
+        "strategy": "AltVolumeBreakoutTestStrategy",
+        "label": "Alt volume breakout (test) wide",
     },
     "PsaraFlipStrategy": {
         "scenario_id": "new_psar",
@@ -381,12 +514,26 @@ SCENARIO_BY_TAG: dict[str, dict[str, str]] = {
         "strategy": "CmfZeroCrossStrategy",
         "label": "CMF zero cross",
     },
+    "CmfZeroCrossTestStrategy": {
+        "scenario_id": "chart2_cmf_test",
+        "scan_type": "strategy",
+        "group": "chart2_test",
+        "strategy": "CmfZeroCrossTestStrategy",
+        "label": "CMF zero cross (test wide)",
+    },
     "ScalpEmaCrossStrategy": {
         "scenario_id": "scalp_ema",
         "scan_type": "strategy",
         "group": "scalp",
         "strategy": "ScalpEmaCrossStrategy",
         "label": "Scalp EMA 8/21",
+    },
+    "ScalpEmaCrossTestStrategy": {
+        "scenario_id": "scalp_ema_test",
+        "scan_type": "strategy",
+        "group": "scalp_test",
+        "strategy": "ScalpEmaCrossTestStrategy",
+        "label": "Scalp EMA 8/21 (test) wide",
     },
     "ChaikinOscStrategy": {
         "scenario_id": "chart3_adosc",
@@ -395,12 +542,26 @@ SCENARIO_BY_TAG: dict[str, dict[str, str]] = {
         "strategy": "ChaikinOscStrategy",
         "label": "Chaikin Oscillator",
     },
+    "ChaikinOscTestStrategy": {
+        "scenario_id": "chart3_adosc_test",
+        "scan_type": "strategy",
+        "group": "chart3_test",
+        "strategy": "ChaikinOscTestStrategy",
+        "label": "Chaikin Oscillator (test) wide",
+    },
     "DonchianBreakoutStrategy": {
         "scenario_id": "new_donchian",
         "scan_type": "strategy",
         "group": "newset",
         "strategy": "DonchianBreakoutStrategy",
         "label": "Donchian / Turtle",
+    },
+    "DonchianBreakoutTestStrategy": {
+        "scenario_id": "new_donchian_test",
+        "scan_type": "strategy",
+        "group": "newset_test",
+        "strategy": "DonchianBreakoutTestStrategy",
+        "label": "Donchian / Turtle (test) wide",
     },
     "PpoSignalStrategy": {
         "scenario_id": "chart3_ppo",
@@ -409,12 +570,26 @@ SCENARIO_BY_TAG: dict[str, dict[str, str]] = {
         "strategy": "PpoSignalStrategy",
         "label": "PPO signal cross",
     },
+    "PpoSignalTestStrategy": {
+        "scenario_id": "chart3_ppo_test",
+        "scan_type": "strategy",
+        "group": "chart3_test",
+        "strategy": "PpoSignalTestStrategy",
+        "label": "PPO signal cross (test) wide",
+    },
     "DonchianAdxVolComboStrategy": {
         "scenario_id": "combo_don_adx_vol",
         "scan_type": "strategy",
         "group": "combo",
         "strategy": "DonchianAdxVolComboStrategy",
         "label": "Donchian+ADX+Vol",
+    },
+    "DonchianAdxVolComboTestStrategy": {
+        "scenario_id": "combo_don_adx_vol_test",
+        "scan_type": "strategy",
+        "group": "combo_test",
+        "strategy": "DonchianAdxVolComboTestStrategy",
+        "label": "Donchian+ADX+Vol (test) wide",
     },
     "ObvEmaCrossStrategy": {
         "scenario_id": "chart2_obv",
@@ -423,12 +598,26 @@ SCENARIO_BY_TAG: dict[str, dict[str, str]] = {
         "strategy": "ObvEmaCrossStrategy",
         "label": "OBV EMA cross",
     },
+    "ObvEmaCrossTestStrategy": {
+        "scenario_id": "chart2_obv_test",
+        "scan_type": "strategy",
+        "group": "chart2_test",
+        "strategy": "ObvEmaCrossTestStrategy",
+        "label": "OBV EMA cross (test) wide",
+    },
     "ElderRayStrategy": {
         "scenario_id": "chart3_elder",
         "scan_type": "strategy",
         "group": "chart3",
         "strategy": "ElderRayStrategy",
         "label": "Elder Ray Bull/Bear",
+    },
+    "ElderRayTestStrategy": {
+        "scenario_id": "chart3_elder_test",
+        "scan_type": "strategy",
+        "group": "chart3_test",
+        "strategy": "ElderRayTestStrategy",
+        "label": "Elder Ray Bull/Bear (test) wide",
     },
     "ScalpMacdHistStrategy": {
         "scenario_id": "scalp_macd",
@@ -667,7 +856,7 @@ def load_test_strategy_settings() -> dict:
 
 
 def is_test_strategy_tag(tag: str | None) -> bool:
-    return bool(tag) and str(tag) in TEST_STRATEGY_TAGS
+    return bool(tag) and str(tag) in load_test_strategy_tags()
 
 
 def count_open_trades_for_tag(tag: str) -> int:

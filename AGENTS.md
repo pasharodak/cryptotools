@@ -177,11 +177,23 @@ UI: `#num` стабильный; сверху по `ui_order=0` — **`AltVolume
 - #39 `FibPullbackStrategy` (`trend_fib`) — 15 · 45%
 - … полный top-31 см. `simulation/config/prod_top30_pack.json`
 
-UI **«Тестовые стратегии»** (`test_group`, nums 101+; **первый** блок панели; отдельные `enter_tag` / scenario, не live #1/#2/#32/#35):
-- #101 `PsaraFlipTestStrategy` (`new_psar_test`)
-- #102 `AtrChannelBreakoutTestStrategy` (`chart3_atrch_test`)
-- #103 `AdxMomentumTestStrategy` (`trend_breakout_test`)
-- #104 `SupertrendTestStrategy` (`trend_supertrend_test`) — 1x · SL −3% · без chase · выход `st_flip`
+UI **«Тестовые стратегии»** (`test_group` / effective `ui_panel`, nums 101–115; **первый** блок панели). Основной блок **«Стратегии»** по умолчанию **пустой**: бывший live-набор (#1–39) скрыт (`strategy_ui_placement.json` → `hidden`), в sim/истории остаётся. Админ: **Настройки → Размещение стратегий** — promote тест→основной / demote обратно; после переноса `enabled=false`. Роутер читает placement: только panel=`test` живёт по `test_strategy_settings`.
+
+- #101 `PsaraFlipTestStrategy` (`new_psar_test`) — live #1
+- #102 `AtrChannelBreakoutTestStrategy` (`chart3_atrch_test`) — live #2
+- #103 `AdxMomentumTestStrategy` (`trend_breakout_test`) — live #32
+- #104 `SupertrendTestStrategy` (`trend_supertrend_test`) — live #35 · 1x · SL −3% · без chase · выход `st_flip`
+- #105 `CmfZeroCrossTestStrategy` (`chart2_cmf_test`) — live #3 · 1x · SL −3% · без chase · выход `cmf_flip`
+- #106 `ScalpEmaCrossTestStrategy` (`scalp_ema_test`) — clone live #4 · 1x · SL −3% · без chase · выход `ema_flip`
+- #107 `ChaikinOscTestStrategy` (`chart3_adosc_test`) — clone live #5 · 1x · SL −3% · без chase · выход `adosc_flip`
+- #108 `DonchianBreakoutTestStrategy` (`new_donchian_test`) — clone live #6 · 1x · SL −3% · без chase · выход `don_mid`
+- #109 `PpoSignalTestStrategy` (`chart3_ppo_test`) — clone live #7 · 1x · SL −3% · без chase · выход `ppo_flip`
+- #110 `DonchianAdxVolComboTestStrategy` (`combo_don_adx_vol_test`) — clone live #8 · 1x · SL −3% · без chase · выход `don_mid`
+- #111 `ObvEmaCrossTestStrategy` (`chart2_obv_test`) — clone live #9 · 1x · SL −3% · без chase · выход `obv_flip`
+- #112 `ElderRayTestStrategy` (`chart3_elder_test`) — clone live #10 · 1x · SL −3% · без chase · выход `elder_flip`
+- #113 `AltVolumeBreakoutTestStrategy` (`scalp_liq_breakout_test`) — clone live #31 · 1x · SL −3% · без chase · выход `don_mid`
+- #114 `BollingerRsiTestStrategy` (`lite_mean_rev_test`) — clone live #33 · 1x · SL −3% · без chase · выход `bb_mid`
+- #115 `MacdEmaTestStrategy` (`trend_macd_ema_test`) — clone live #34 · 1x · SL −3% · без chase · выход `macd_flip`
 
 Порядок панели: Тестовые → Стратегии → Grid → Bybit Grid → ML Finder (внизу, обычно disabled).
 

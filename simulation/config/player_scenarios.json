@@ -113,6 +113,25 @@
         "settings": "ADX<25 · BB 4% · exit mid · 3x"
     },
     {
+        "id": "lite_mean_rev_test",
+        "label": "Mean-reversion (BB) (test)",
+        "enabled": false,
+        "strategy": "BollingerRsiTestStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "lite_test",
+        "stake_usdt": 15,
+        "stoploss": -0.03,
+        "minimal_roi": {
+            "0": 0.012,
+            "60": 0.008,
+            "180": 0.005,
+            "480": 0.0
+        },
+        "settings": "Тест · #33 · без chase RSI/1h · 1x · SL −3% · TP 1.2% · выход bb_mid"
+    },
+    {
         "id": "trend_ema",
         "label": "EMA 50/200 (4H)",
         "enabled": true,
@@ -257,6 +276,25 @@
         "settings": "MACD cross · EMA200 filter · RSI exit · 3x · prod ML gate"
     },
     {
+        "id": "trend_macd_ema_test",
+        "label": "MACD + EMA200 (test)",
+        "enabled": false,
+        "strategy": "MacdEmaTestStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "trend_test",
+        "stake_usdt": 15,
+        "stoploss": -0.03,
+        "minimal_roi": {
+            "0": 0.012,
+            "60": 0.008,
+            "180": 0.005,
+            "480": 0.0
+        },
+        "settings": "Тест · #34 · без chase RSI/1h · 1x · SL −3% · TP 1.2% · выход macd_flip"
+    },
+    {
         "id": "lite_rsi_ema",
         "label": "RSI + EMA cross",
         "enabled": false,
@@ -285,6 +323,25 @@
             "60": 0
         },
         "settings": "EMA8/21 · SL −1% · TP 0.8%"
+    },
+    {
+        "id": "scalp_ema_test",
+        "label": "Scalp EMA 8/21 (test)",
+        "enabled": false,
+        "strategy": "ScalpEmaCrossTestStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "scalp_test",
+        "stake_usdt": 15,
+        "stoploss": -0.03,
+        "minimal_roi": {
+            "0": 0.012,
+            "60": 0.008,
+            "180": 0.005,
+            "480": 0.0
+        },
+        "settings": "Тест · #4 · без chase RSI/1h · 1x · SL −3% · TP 1.2% · выход ema_flip"
     },
     {
         "id": "scalp_rsi",
@@ -393,6 +450,25 @@
             "240": 0
         },
         "settings": "Donchian · SL −2.5% · TP 1.8%"
+    },
+    {
+        "id": "new_donchian_test",
+        "label": "Donchian / Turtle (test)",
+        "enabled": false,
+        "strategy": "DonchianBreakoutTestStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "newset_test",
+        "stake_usdt": 15,
+        "stoploss": -0.03,
+        "minimal_roi": {
+            "0": 0.012,
+            "60": 0.008,
+            "180": 0.005,
+            "480": 0.0
+        },
+        "settings": "Тест · #6 · без chase RSI/1h · 1x · SL −3% · TP 1.2% · выход don_mid"
     },
     {
         "id": "new_cci",
@@ -648,6 +724,25 @@
         "settings": "OBV · SL −1.8% · TP 1.2%"
     },
     {
+        "id": "chart2_obv_test",
+        "label": "OBV EMA cross (test)",
+        "enabled": false,
+        "strategy": "ObvEmaCrossTestStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "chart2_test",
+        "stake_usdt": 15,
+        "stoploss": -0.03,
+        "minimal_roi": {
+            "0": 0.012,
+            "60": 0.008,
+            "180": 0.005,
+            "480": 0.0
+        },
+        "settings": "Тест · #9 · без chase RSI/1h · 1x · SL −3% · TP 1.2% · выход obv_flip"
+    },
+    {
         "id": "chart2_engulf",
         "label": "Engulfing + EMA",
         "enabled": true,
@@ -700,6 +795,25 @@
             "130": 0
         },
         "settings": "CMF · SL −1.7% · TP 1.1%"
+    },
+    {
+        "id": "chart2_cmf_test",
+        "label": "CMF zero cross (test)",
+        "enabled": false,
+        "strategy": "CmfZeroCrossTestStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "chart2_test",
+        "stake_usdt": 15,
+        "stoploss": -0.03,
+        "minimal_roi": {
+            "0": 0.012,
+            "60": 0.008,
+            "180": 0.005,
+            "480": 0.0
+        },
+        "settings": "Тест · CMF zero cross · без chase RSI/1h · 1x · SL −3% · TP 1.2% · выход cmf_flip"
     },
     {
         "id": "chart2_kama",
@@ -756,6 +870,25 @@
         "settings": "PPO · SL −1.6% · TP 1.0%"
     },
     {
+        "id": "chart3_ppo_test",
+        "label": "PPO signal cross (test)",
+        "enabled": false,
+        "strategy": "PpoSignalTestStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "chart3_test",
+        "stake_usdt": 15,
+        "stoploss": -0.03,
+        "minimal_roi": {
+            "0": 0.012,
+            "60": 0.008,
+            "180": 0.005,
+            "480": 0.0
+        },
+        "settings": "Тест · #7 · без chase RSI/1h · 1x · SL −3% · TP 1.2% · выход ppo_flip"
+    },
+    {
         "id": "chart3_cmo",
         "label": "CMO reclaim",
         "enabled": false,
@@ -810,6 +943,25 @@
         "settings": "ADOSC · SL −1.7% · TP 1.1%"
     },
     {
+        "id": "chart3_adosc_test",
+        "label": "Chaikin Oscillator (test)",
+        "enabled": false,
+        "strategy": "ChaikinOscTestStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "chart3_test",
+        "stake_usdt": 15,
+        "stoploss": -0.03,
+        "minimal_roi": {
+            "0": 0.012,
+            "60": 0.008,
+            "180": 0.005,
+            "480": 0.0
+        },
+        "settings": "Тест · #5 · без chase RSI/1h · 1x · SL −3% · TP 1.2% · выход adosc_flip"
+    },
+    {
         "id": "chart3_roc",
         "label": "ROC momentum",
         "enabled": true,
@@ -844,6 +996,25 @@
             "130": 0
         },
         "settings": "Elder Ray · SL −1.7% · TP 1.1%"
+    },
+    {
+        "id": "chart3_elder_test",
+        "label": "Elder Ray Bull/Bear (test)",
+        "enabled": false,
+        "strategy": "ElderRayTestStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "chart3_test",
+        "stake_usdt": 15,
+        "stoploss": -0.03,
+        "minimal_roi": {
+            "0": 0.012,
+            "60": 0.008,
+            "180": 0.005,
+            "480": 0.0
+        },
+        "settings": "Тест · #10 · без chase RSI/1h · 1x · SL −3% · TP 1.2% · выход elder_flip"
     },
     {
         "id": "chart3_hma",
@@ -990,6 +1161,25 @@
         "settings": "Don/ADX/Vol · SL −2.2% · TP 1.8%"
     },
     {
+        "id": "combo_don_adx_vol_test",
+        "label": "Donchian+ADX+Vol (test)",
+        "enabled": false,
+        "strategy": "DonchianAdxVolComboTestStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "combo_test",
+        "stake_usdt": 15,
+        "stoploss": -0.03,
+        "minimal_roi": {
+            "0": 0.012,
+            "60": 0.008,
+            "180": 0.005,
+            "480": 0.0
+        },
+        "settings": "Тест · #8 · без chase RSI/1h · 1x · SL −3% · TP 1.2% · выход don_mid"
+    },
+    {
         "id": "combo_stoch_cmf_ema",
         "label": "Stoch+CMF+EMA",
         "enabled": false,
@@ -1060,6 +1250,25 @@
             "75": 0
         },
         "settings": "Don12+vol/ATR pulse · SL −1.5% · TP 1.2% · HashHedge-style breakout proxy"
+    },
+    {
+        "id": "scalp_liq_breakout_test",
+        "label": "Alt volume breakout (test)",
+        "enabled": false,
+        "strategy": "AltVolumeBreakoutTestStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "scalp_liq_test",
+        "stake_usdt": 15,
+        "stoploss": -0.03,
+        "minimal_roi": {
+            "0": 0.012,
+            "60": 0.008,
+            "180": 0.005,
+            "480": 0.0
+        },
+        "settings": "Тест · #31 · без chase RSI/1h · 1x · SL −3% · TP 1.2% · выход don_mid"
     },
     {
         "id": "scalp_liq_sweep",

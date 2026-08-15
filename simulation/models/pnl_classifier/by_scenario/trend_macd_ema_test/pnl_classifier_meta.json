@@ -1,0 +1,61 @@
+{
+  "scenario_id": "trend_macd_ema_test",
+  "model": "lightgbm + sigmoid",
+  "calibrate_method": "sigmoid",
+  "trained_at": "2026-08-09T12:43:02.677220+00:00",
+  "train_range": "20250101-20260331",
+  "test_range": "20260401-20260625",
+  "fit_mode": "all_cached",
+  "n_train": 11046,
+  "n_test": 11079,
+  "n_train_trades": 11046,
+  "n_test_trades": 11079,
+  "min_profit_proba": 0.45,
+  "source": "legacy_april_cut_retrain",
+  "accuracy": 0.708,
+  "roc_auc": 0.7816,
+  "loss_recall": 0.7547,
+  "loss_precision": 0.7,
+  "profit_recall": 0.6587,
+  "profit_precision": 0.718,
+  "macro_f1": 0.7067,
+  "confusion_matrix": [
+    [
+      4293,
+      1395
+    ],
+    [
+      1840,
+      3551
+    ]
+  ],
+  "classification_report": {
+    "loss": {
+      "precision": 0.6999836947660198,
+      "recall": 0.754746835443038,
+      "f1-score": 0.7263344894678961,
+      "support": 5688.0
+    },
+    "profit": {
+      "precision": 0.717953902143146,
+      "recall": 0.6586904099424967,
+      "f1-score": 0.687046531875786,
+      "support": 5391.0
+    },
+    "accuracy": 0.708006137738063,
+    "macro avg": {
+      "precision": 0.7089687984545829,
+      "recall": 0.7067186226927673,
+      "f1-score": 0.7066905106718411,
+      "support": 11079.0
+    },
+    "weighted avg": {
+      "precision": 0.7087279305246702,
+      "recall": 0.708006137738063,
+      "f1-score": 0.7072171161147897,
+      "support": 11079.0
+    }
+  },
+  "strategy": "MacdEmaTestStrategy",
+  "note": "bootstrapped from trend_macd_ema; retrain via train_test_block_3scen_ml.py"
+}

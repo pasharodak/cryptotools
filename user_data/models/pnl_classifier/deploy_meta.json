@@ -1,5 +1,5 @@
 {
-  "deployed_at": "2026-08-14T10:04:23.021957+00:00",
+  "deployed_at": "2026-08-15T11:35:15.728765+00:00",
   "model": "per-scenario winners from ml_param_experiments (top-30 pack)",
   "enabled_scenarios": [
     "live_grid",

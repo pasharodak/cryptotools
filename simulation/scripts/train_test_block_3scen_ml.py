@@ -9,6 +9,7 @@ Source scenarios → test scenario dirs / strategy class names:
   chart3_atrch      → chart3_atrch_test      / AtrChannelBreakoutTestStrategy
   trend_breakout    → trend_breakout_test    / AdxMomentumTestStrategy
   trend_supertrend  → trend_supertrend_test  / SupertrendTestStrategy
+  chart2_cmf        → chart2_cmf_test        / CmfZeroCrossTestStrategy
 """
 from __future__ import annotations
 
@@ -80,6 +81,94 @@ SPECS = [
         "class_name": "SupertrendTestStrategy",
         "label": "Supertrend (ATR) (test wide)",
         "default_gate": 0.70,
+    },
+    {
+        "source_scenario": "chart2_cmf",
+        "source": "cache",
+        "scenario_id": "chart2_cmf_test",
+        "class_name": "CmfZeroCrossTestStrategy",
+        "label": "CMF zero cross (test wide)",
+        "default_gate": 0.55,
+    },
+    {
+        "source_scenario": "scalp_ema",
+        "source": "cache",
+        "scenario_id": "scalp_ema_test",
+        "class_name": "ScalpEmaCrossTestStrategy",
+        "label": "Scalp EMA 8/21 (test) wide",
+        "default_gate": 0.55,
+    },
+    {
+        "source_scenario": "chart3_adosc",
+        "source": "cache",
+        "scenario_id": "chart3_adosc_test",
+        "class_name": "ChaikinOscTestStrategy",
+        "label": "Chaikin Oscillator (test) wide",
+        "default_gate": 0.45,
+    },
+    {
+        "source_scenario": "new_donchian",
+        "source": "cache",
+        "scenario_id": "new_donchian_test",
+        "class_name": "DonchianBreakoutTestStrategy",
+        "label": "Donchian / Turtle (test) wide",
+        "default_gate": 0.45,
+    },
+    {
+        "source_scenario": "chart3_ppo",
+        "source": "cache",
+        "scenario_id": "chart3_ppo_test",
+        "class_name": "PpoSignalTestStrategy",
+        "label": "PPO signal cross (test) wide",
+        "default_gate": 0.55,
+    },
+    {
+        "source_scenario": "combo_don_adx_vol",
+        "source": "cache",
+        "scenario_id": "combo_don_adx_vol_test",
+        "class_name": "DonchianAdxVolComboTestStrategy",
+        "label": "Donchian+ADX+Vol (test) wide",
+        "default_gate": 0.65,
+    },
+    {
+        "source_scenario": "chart2_obv",
+        "source": "cache",
+        "scenario_id": "chart2_obv_test",
+        "class_name": "ObvEmaCrossTestStrategy",
+        "label": "OBV EMA cross (test) wide",
+        "default_gate": 0.45,
+    },
+    {
+        "source_scenario": "chart3_elder",
+        "source": "cache",
+        "scenario_id": "chart3_elder_test",
+        "class_name": "ElderRayTestStrategy",
+        "label": "Elder Ray Bull/Bear (test) wide",
+        "default_gate": 0.45,
+    },
+    {
+        "source_scenario": "scalp_liq_breakout",
+        "source": "cache",
+        "scenario_id": "scalp_liq_breakout_test",
+        "class_name": "AltVolumeBreakoutTestStrategy",
+        "label": "Alt volume breakout (test) wide",
+        "default_gate": 0.55,
+    },
+    {
+        "source_scenario": "lite_mean_rev",
+        "source": "trade_db",
+        "scenario_id": "lite_mean_rev_test",
+        "class_name": "BollingerRsiTestStrategy",
+        "label": "Mean-reversion (BB) (test) wide",
+        "default_gate": 0.7,
+    },
+    {
+        "source_scenario": "trend_macd_ema",
+        "source": "trade_db",
+        "scenario_id": "trend_macd_ema_test",
+        "class_name": "MacdEmaTestStrategy",
+        "label": "MACD + EMA200 (test) wide",
+        "default_gate": 0.45,
     },
 ]
 

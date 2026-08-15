@@ -69,6 +69,27 @@ const SESSION_ROLE_KEY = "ct_role";
 const SESSION_PASS_KEY = "ct_pass"; // legacy — cleared on login
 const SESSION_IMPERSONATING_KEY = "ct_impersonating";
 
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/** Compact tip behind «i» — keeps panels clean. `text` may include trusted HTML. */
+function uiHintHtml(text, { summary = "i", block = false } = {}) {
+  const body = String(text ?? "").trim();
+  if (!body) return "";
+  const cls = block ? "ui-hint ui-hint-block" : "ui-hint";
+  return `<details class="${cls}"><summary class="ui-hint-btn" aria-label="Подсказка">${escapeHtml(summary)}</summary><div class="ui-hint-body">${body}</div></details>`;
+}
+
+/** Display & calendar day boundaries for the whole panel (Moscow / no DST). */
+const APP_TIMEZONE = "Europe/Moscow";
+const APP_TZ_OFFSET_MS = 3 * 60 * 60 * 1000;
+const APP_TZ_LABEL = "UTC+3";
+
 let strategyCatalog = [];
 let enabledStrategies = {};
 let invertedStrategies = {};
@@ -147,6 +168,96 @@ function humanizeApiError(err) {
     return humanizeApiError(err.split(": ").slice(1).join(": "));
   }
   return err;
+}
+
+/** Parse bot/API timestamps: naive datetime → UTC instant. */
+function parseAppInstant(raw) {
+  if (raw == null || raw === "") return null;
+  if (raw instanceof Date) return Number.isNaN(raw.getTime()) ? null : raw;
+  if (typeof raw === "number") {
+    const ms = raw < 1e12 ? raw * 1000 : raw;
+    const d = new Date(ms);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  let s = String(raw).trim();
+  if (!s) return null;
+  if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/.test(s) && !/[zZ]|[+-]\d{2}:?\d{2}$/.test(s)) {
+    s = s.replace(" ", "T");
+    if (!/[zZ]$/.test(s)) s += "Z";
+  }
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function fmtAppDateTime(raw, options = {}) {
+  const d = parseAppInstant(raw);
+  if (!d) return raw == null || raw === "" ? "—" : String(raw);
+  return d.toLocaleString("ru-RU", { timeZone: APP_TIMEZONE, ...options });
+}
+
+function fmtAppTime(raw, options = {}) {
+  return fmtAppDateTime(raw, {
+    hour: "2-digit",
+    minute: "2-digit",
+    ...options,
+  });
+}
+
+function fmtAppDateShort(raw) {
+  return fmtAppDateTime(raw, {
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function fmtAppDayLabel(raw) {
+  return fmtAppDateTime(raw, {
+    day: "2-digit",
+    month: "long",
+    year: "numeric",
+  });
+}
+
+/** Midnight of the calendar day in APP_TIMEZONE that contains `ms` (default: now). */
+function appStartOfDayMs(ms = Date.now()) {
+  const wall = new Date(ms + APP_TZ_OFFSET_MS);
+  return Date.UTC(wall.getUTCFullYear(), wall.getUTCMonth(), wall.getUTCDate()) - APP_TZ_OFFSET_MS;
+}
+
+function appEndOfDayMs(ms = Date.now()) {
+  return appStartOfDayMs(ms) + 86400000 - 1;
+}
+
+/** Interpret YYYY-MM-DD from date inputs as a calendar day in UTC+3. */
+function appDateInputBoundsMs(dateFrom, dateTo) {
+  let fromMs = 0;
+  let toMs = Infinity;
+  if (dateFrom) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateFrom).trim());
+    if (m) {
+      fromMs =
+        Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])) - APP_TZ_OFFSET_MS;
+    }
+  }
+  if (dateTo) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateTo).trim());
+    if (m) {
+      toMs =
+        Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])) -
+        APP_TZ_OFFSET_MS +
+        86400000 -
+        1;
+    }
+  }
+  return { fromMs, toMs };
+}
+
+function isTodayMs(tsMs) {
+  if (!tsMs) return false;
+  const start = appStartOfDayMs();
+  return tsMs >= start && tsMs <= appEndOfDayMs();
 }
 
 async function readApiErrorResponse(res) {
@@ -535,14 +646,9 @@ function exitReasonLabel(reason) {
 function fmtTradeDate(trade) {
   const raw = trade.close_date || trade.close_fill_date;
   if (!raw) return "—";
-  const d = new Date(raw);
-  if (Number.isNaN(d.getTime())) return raw.slice(0, 16);
-  return d.toLocaleString("ru-RU", {
-    day: "2-digit",
-    month: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  const d = parseAppInstant(raw);
+  if (!d) return String(raw).slice(0, 16);
+  return fmtAppDateShort(d);
 }
 
 function closedTradePnl(trade) {
@@ -651,7 +757,7 @@ const STATS_SCOPE_META = {
   },
   test_strategy: {
     title: "Статистика — тестовые стратегии",
-    note: "Только тестовый блок (Psara / ATR channel / Breakout-Retest / Supertrend и др. с test_group). Тот же strategy-бот.",
+    note: "Только тестовый блок (#101–115: top-10 + #31/#32–35 клоны). Тот же strategy-бот.",
   },
   grid: {
     title: "Статистика — Grid + ML gate",
@@ -753,25 +859,14 @@ function tradeCloseMs(trade) {
   }
   const raw = trade.close_date || trade.close_fill_date;
   if (!raw) return 0;
-  const ms = new Date(raw).getTime();
-  return Number.isNaN(ms) ? 0 : ms;
+  const d = parseAppInstant(raw);
+  return d ? d.getTime() : 0;
 }
 
 function bybitCloseMs(item) {
   if (!item?.closed_at) return 0;
-  const ms = new Date(item.closed_at).getTime();
-  return Number.isNaN(ms) ? 0 : ms;
-}
-
-function isTodayMs(tsMs) {
-  if (!tsMs) return false;
-  const d = new Date(tsMs);
-  const now = new Date();
-  return (
-    d.getFullYear() === now.getFullYear() &&
-    d.getMonth() === now.getMonth() &&
-    d.getDate() === now.getDate()
-  );
+  const d = parseAppInstant(item.closed_at);
+  return d ? d.getTime() : 0;
 }
 
 function tradeSourceId(trade, bot) {
@@ -804,13 +899,11 @@ function normalizeStatsPeriod(period) {
 
 function periodBounds(period, dateFrom, dateTo) {
   if (dateFrom || dateTo) {
-    const fromMs = dateFrom ? new Date(`${dateFrom}T00:00:00`).getTime() : 0;
-    const toMs = dateTo ? new Date(`${dateTo}T23:59:59.999`).getTime() : Infinity;
-    return { fromMs, toMs };
+    return appDateInputBoundsMs(dateFrom, dateTo);
   }
-  const now = new Date();
-  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-  const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999).getTime();
+  const nowMs = Date.now();
+  const startOfToday = appStartOfDayMs(nowMs);
+  const endOfToday = appEndOfDayMs(nowMs);
   switch (period) {
     case "today":
       return { fromMs: startOfToday, toMs: endOfToday };
@@ -820,9 +913,9 @@ function periodBounds(period, dateFrom, dateTo) {
         toMs: startOfToday - 1,
       };
     case "7d":
-      return { fromMs: now.getTime() - 7 * 86400000, toMs: Infinity };
+      return { fromMs: nowMs - 7 * 86400000, toMs: Infinity };
     case "30d":
-      return { fromMs: now.getTime() - 30 * 86400000, toMs: Infinity };
+      return { fromMs: nowMs - 30 * 86400000, toMs: Infinity };
     default:
       return { fromMs: 0, toMs: Infinity };
   }
@@ -883,7 +976,9 @@ function isBotStatsLabel(name) {
 }
 
 function isTestCatalogEntry(s) {
-  return !!(s && (s.test_group || s.testGroup));
+  if (!s) return false;
+  if (s.ui_panel) return s.ui_panel === "test";
+  return !!(s.test_group || s.testGroup);
 }
 
 function isTestStatsRow(row, catalog = strategyCatalog) {
@@ -1043,14 +1138,9 @@ function buildHistoryEntries(
 
 function fmtBybitHistoryDate(item) {
   if (!item?.closed_at) return "—";
-  const d = new Date(item.closed_at);
-  if (Number.isNaN(d.getTime())) return item.closed_at.slice(0, 16);
-  return d.toLocaleString("ru-RU", {
-    day: "2-digit",
-    month: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  const d = parseAppInstant(item.closed_at);
+  if (!d) return String(item.closed_at).slice(0, 16);
+  return fmtAppDateShort(d);
 }
 
 function bybitExitLabel(item) {
@@ -1077,9 +1167,9 @@ function historyEntryOpenDateRaw(entry) {
 
 function fmtHistoryDateRaw(raw) {
   if (!raw) return "";
-  const d = new Date(raw);
-  if (Number.isNaN(d.getTime())) return String(raw);
-  return d.toLocaleString("ru-RU");
+  const d = parseAppInstant(raw);
+  if (!d) return String(raw);
+  return fmtAppDateTime(d);
 }
 
 function historyEntryExportRow(entry) {
@@ -2463,35 +2553,46 @@ async function fetchBotClosedTrades(bot, limit = 5000) {
   }
 }
 
-async function fetchStatsData(tradeLimit = CLOSED_TRADES_FETCH_LIMIT) {
-  const loadErrors = [];
-  let closedData = {};
-  try {
-    closedData = await fetchClosedTradesFromDb(tradeLimit);
-  } catch (e) {
-    loadErrors.push(`История сделок: ${formatApiError(e.message)}`);
-  }
-
-  // Merge bot RPC trades so stopped/disabled bots still contribute when DB dump is thin.
-  const botLimit = tradeLimit <= 0 ? 5000 : Math.min(Math.max(tradeLimit, 500), 5000);
-  const [finderRpc, stratRpc, gridRpc] = await Promise.all([
-    fetchBotClosedTrades("finder", botLimit),
-    fetchBotClosedTrades("strategy", botLimit),
-    fetchBotClosedTrades("grid", botLimit),
-  ]);
-
-  const [catalogData, bybitData] = await Promise.all([
-    pairConfigApi("/strategies").catch(() => ({ strategies: strategyCatalog })),
-    pairConfigApi("/bybit-grid/history").catch(() => ({ history: [] })),
-  ]);
+/** Server keeps a warm /stats-bundle cache; client only renders it. */
+async function fetchStatsData(_tradeLimit = CLOSED_TRADES_FETCH_LIMIT, { force = false } = {}) {
+  const qs = force ? "?force=1" : "";
+  const data = await pairConfigApi(`/stats-bundle${qs}`);
   return {
-    finderTrades: mergeClosedTradeLists(closedData.finder, finderRpc),
-    stratTrades: mergeClosedTradeLists(closedData.strategy, stratRpc),
-    gridTrades: mergeClosedTradeLists(closedData.grid, gridRpc),
-    bybitHistory: bybitData?.history || [],
-    catalog: catalogData.strategies || strategyCatalog,
-    loadErrors,
+    finderTrades: data.finder || [],
+    stratTrades: data.strategy || [],
+    gridTrades: data.grid || [],
+    bybitHistory: data.bybit_history || [],
+    catalog: data.strategies || strategyCatalog,
+    loadErrors: [],
+    builtAt: data.built_at || null,
+    cached: !!data.cached,
+    ageSec: data.age_sec,
   };
+}
+
+let statsPrefetchInFlight = null;
+let lastStatsPrefetchAt = 0;
+const STATS_PREFETCH_MS = 25000;
+
+async function prefetchStatsBundle({ force = false } = {}) {
+  const now = Date.now();
+  if (!force && statsDataCache && now - lastStatsPrefetchAt < STATS_PREFETCH_MS) {
+    return statsDataCache;
+  }
+  if (statsPrefetchInFlight) return statsPrefetchInFlight;
+  statsPrefetchInFlight = (async () => {
+    try {
+      const data = await fetchStatsData(CLOSED_TRADES_FETCH_LIMIT, { force });
+      statsDataCache = data;
+      lastStatsPrefetchAt = Date.now();
+      if (!historyDataCache) historyDataCache = data;
+      if (!pnlDashDataCache) pnlDashDataCache = data;
+      return data;
+    } finally {
+      statsPrefetchInFlight = null;
+    }
+  })();
+  return statsPrefetchInFlight;
 }
 
 async function loadStatistics() {
@@ -2499,15 +2600,19 @@ async function loadStatistics() {
   const bodyEl = $("stats-table-body");
   if (!bodyEl) return;
 
-  summaryEl.innerHTML = '<p class="muted">Загрузка…</p>';
-  bodyEl.innerHTML = "";
+  if (statsDataCache) {
+    renderStatsModal(statsDataCache);
+  } else {
+    summaryEl.innerHTML = '<p class="muted">Загрузка…</p>';
+    bodyEl.innerHTML = "";
+  }
 
   try {
-    statsDataCache = await fetchStatsData(CLOSED_TRADES_FETCH_LIMIT);
+    statsDataCache = await prefetchStatsBundle();
     renderStatsModal(statsDataCache);
   } catch (e) {
     if (e.message === "auth") logout();
-    else {
+    else if (!statsDataCache) {
       summaryEl.innerHTML = `<p class="error">${escapeHtml(formatApiError(e.message))}</p>`;
       const footEl = $("stats-footnote");
       if (footEl) footEl.textContent = "";
@@ -2527,6 +2632,7 @@ function openStats(scope = "all", period = null) {
   if (period) statsPeriod = normalizeStatsPeriod(period);
   $("stats-modal").classList.remove("hidden");
   $("stats-modal").setAttribute("aria-hidden", "false");
+  if (statsDataCache) renderStatsModal(statsDataCache);
   loadStatistics();
 }
 
@@ -2632,6 +2738,75 @@ function syncEnabledFromPayload(data) {
     BOTS.strategy.maxPerStrategy = Number(data.max_open_trades_per_strategy);
     updateMaxTradesHint();
   }
+  if (isSettingsOpen() && isAdminUser()) {
+    renderPlacementAdmin(data);
+  }
+}
+
+function showPlacementMsg(text, isError = false) {
+  const el = $("placement-msg");
+  if (!el) return;
+  el.textContent = text;
+  el.classList.toggle("hidden", !text);
+  el.classList.toggle("error", !!isError);
+}
+
+function renderPlacementAdmin(data) {
+  if (!isAdminUser()) return;
+  const testList = $("placement-test-list");
+  const mainList = $("placement-main-list");
+  if (!testList || !mainList) return;
+  const catalog = data?.strategies || strategyCatalog;
+  const testRows = (catalog || []).filter((s) => strategyUiPanel(s) === "test");
+  const mainRows = (catalog || []).filter((s) => strategyUiPanel(s) === "main");
+
+  const rowHtml = (s, action, label) => `
+    <li class="placement-list-item">
+      <span class="placement-list-name">${escapeHtml(strategyCatalogLabel(s))}</span>
+      <button type="button" class="btn btn-sm primary" data-placement-action="${action}" data-strategy="${escapeHtml(s.id)}">${label}</button>
+    </li>`;
+
+  testList.innerHTML = testRows.length
+    ? testRows.map((s) => rowHtml(s, "promote", "В основной")).join("")
+    : `<li class="placement-list-empty muted">Пусто</li>`;
+  mainList.innerHTML = mainRows.length
+    ? mainRows.map((s) => rowHtml(s, "demote", "В тестовые")).join("")
+    : `<li class="placement-list-empty muted">Пусто — перенесите из тестовых</li>`;
+
+  const bind = (root) => {
+    root.querySelectorAll("[data-placement-action]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const id = btn.getAttribute("data-strategy");
+        const action = btn.getAttribute("data-placement-action");
+        if (!id || !action) return;
+        btn.disabled = true;
+        try {
+          const apiAction =
+            action === "promote" ? "promote_strategy_to_main" : "demote_strategy_to_test";
+          const res = await pairConfigApi("/pairs", "POST", {
+            action: apiAction,
+            strategy: id,
+          });
+          syncEnabledFromPayload(res);
+          renderStrategyToggles();
+          updateStrategyDisplay();
+          renderPlacementAdmin(res);
+          const name = strategyLabel(id);
+          showPlacementMsg(
+            action === "promote"
+              ? `${name} → основной блок (выкл)`
+              : `${name} → тестовые (выкл)`
+          );
+        } catch (e) {
+          showPlacementMsg(e.message || String(e), true);
+        } finally {
+          btn.disabled = false;
+        }
+      });
+    });
+  };
+  bind(testList);
+  bind(mainList);
 }
 
 function syncStrategyRiskFromPayload(data) {
@@ -2661,6 +2836,42 @@ function strategyRiskSummaryText() {
   return `SL −${sl}% · TP +${tp}%${hedge}`;
 }
 
+function setSettingsSummary(id, text) {
+  const el = $(id);
+  if (el) el.textContent = text || "развернуть";
+}
+
+function updateBotSettingsSummaries() {
+  const strat = BOTS.strategy;
+  const risk = strategyRiskSummaryText();
+  setSettingsSummary(
+    "strategy-settings-summary",
+    `макс ${strat.maxTrades} · stake ${strat.stakeAmount} USDT${risk ? ` · ${risk}` : ""} · развернуть`
+  );
+  const tSl = Number(testSettings.stoploss_pct);
+  const tTp = Number(testSettings.take_profit_pct);
+  const tRisk =
+    Number.isFinite(tSl) && Number.isFinite(tTp) ? `SL −${tSl}% · TP +${tTp}%` : "";
+  setSettingsSummary(
+    "test-strategy-settings-summary",
+    `макс ${testSettings.max_open_trades} · stake ${testSettings.stake_amount} USDT${tRisk ? ` · ${tRisk}` : ""} · развернуть`
+  );
+  const grid = BOTS.grid;
+  setSettingsSummary(
+    "grid-settings-summary",
+    `макс ${grid.maxTrades} · stake ${grid.stakeAmount} USDT · развернуть`
+  );
+  setSettingsSummary(
+    "bybitgrid-settings-summary",
+    `лимит ${bybitGridMaxBots} · invest ${bybitGridInvest} USDT · развернуть`
+  );
+  const finder = BOTS.finder;
+  setSettingsSummary(
+    "finder-settings-summary",
+    `макс ${finder.maxTrades} · развернуть`
+  );
+}
+
 async function setDualHedge(enabled) {
   const data = await pairConfigApi("/pairs", "POST", {
     action: "set_dual_hedge",
@@ -2669,19 +2880,22 @@ async function setDualHedge(enabled) {
   syncEnabledFromPayload(data);
   updateStrategyDisplay();
   showReloadWarning(data);
+  updateBotSettingsSummaries();
   return data;
 }
 
 function renderDualHedgeControl() {
+  const hint = uiHintHtml(
+    "Bybit hedge mode · 1 пара = 2 слота max_open_trades · ML gate на обе ноги · общий флаг для strategy-бота. На каждый сигнал сразу long + short (2 позиции, 2× stake · max_open_trades ≥ 4)."
+  );
   const html = `
-    <label class="strategy-dual-hedge-label">
-      <input type="checkbox" class="strategy-dual-hedge-cb" ${dualHedgeEnabled ? "checked" : ""} />
-      <span>
+    <div class="strategy-dual-hedge-row">
+      <label class="strategy-dual-hedge-label">
+        <input type="checkbox" class="strategy-dual-hedge-cb" ${dualHedgeEnabled ? "checked" : ""} />
         <strong>Dual hedge</strong>
-        <span class="muted"> — на каждый сигнал сразу long + short (2 позиции, 2× stake · max_open_trades ≥ 4)</span>
-      </span>
-    </label>
-    <p class="muted strategy-dual-hedge-hint">Bybit hedge mode · 1 пара = 2 слота max_open_trades · ML gate на обе ноги · общий флаг для strategy-бота</p>
+      </label>
+      ${hint}
+    </div>
   `;
   for (const id of ["strategy-dual-hedge"]) {
     const el = $(id);
@@ -2729,11 +2943,23 @@ function renderDualHedgeControl() {
 }
 
 function isTestStrategy(s) {
-  return !!(s && (s.test_group || s.testGroup));
+  if (!s) return false;
+  if (s.ui_panel) return s.ui_panel === "test";
+  return !!(s.test_group || s.testGroup);
+}
+
+function strategyUiPanel(s) {
+  if (!s) return "hidden";
+  if (s.ui_panel) return s.ui_panel;
+  return isTestStrategy(s) ? "test" : "main";
 }
 
 function catalogByGroup(testGroup = false) {
-  return strategyCatalog.filter((s) => isTestStrategy(s) === !!testGroup);
+  return strategyCatalog.filter((s) => {
+    const panel = strategyUiPanel(s);
+    if (panel === "hidden") return false;
+    return testGroup ? panel === "test" : panel === "main";
+  });
 }
 
 function updateStrategyDisplay() {
@@ -2838,6 +3064,54 @@ function bindCollapsibleSections() {
   });
 }
 
+/** Keep floating tip bubbles inside the viewport (esp. mobile). */
+function positionUiHintBody(details) {
+  if (!details || details.classList.contains("ui-hint-block") || !details.open) return;
+  const body = details.querySelector(":scope > .ui-hint-body");
+  if (!body) return;
+  body.style.transform = "";
+  const pad = 10;
+  const rect = body.getBoundingClientRect();
+  const viewW = window.innerWidth || document.documentElement.clientWidth;
+  let dx = 0;
+  if (rect.left < pad) dx += pad - rect.left;
+  if (rect.right + dx > viewW - pad) dx -= rect.right + dx - (viewW - pad);
+  if (rect.left + dx < pad) dx = pad - rect.left;
+  if (Math.abs(dx) > 0.5) body.style.transform = `translateX(${Math.round(dx)}px)`;
+}
+
+function resetUiHintBody(details) {
+  const body = details?.querySelector?.(":scope > .ui-hint-body");
+  if (body) body.style.transform = "";
+}
+
+function bindUiHints() {
+  if (document.body.dataset.uiHintsBound) return;
+  document.body.dataset.uiHintsBound = "1";
+  document.addEventListener("toggle", (e) => {
+    const details = e.target;
+    if (!(details instanceof HTMLDetailsElement) || !details.classList.contains("ui-hint")) return;
+    if (details.open) {
+      document.querySelectorAll("details.ui-hint[open]").forEach((other) => {
+        if (other !== details && !other.classList.contains("ui-hint-block")) {
+          other.open = false;
+          resetUiHintBody(other);
+        }
+      });
+      requestAnimationFrame(() => positionUiHintBody(details));
+    } else {
+      resetUiHintBody(details);
+    }
+  }, true);
+  window.addEventListener(
+    "resize",
+    () => {
+      document.querySelectorAll("details.ui-hint[open]").forEach((d) => positionUiHintBody(d));
+    },
+    { passive: true }
+  );
+}
+
 function whitelistSummaryText(pairs) {
   if (isAllVolumePairlist()) return "top-200 по объёму · развернуть";
   if (!pairs.length) return "пусто · развернуть";
@@ -2922,13 +3196,13 @@ function renderBulkEnableControlsFor(ids, { group = "main", label = "Страт�
   const html = `
     <div class="strategy-enable-bulk-inner">
       <span class="strategy-enable-bulk-label">${label}</span>
+      ${hint ? uiHintHtml(hint) : ""}
       <span class="muted strategy-enable-bulk-count">${activeCount} / ${total} вкл</span>
       <div class="strategy-enable-bulk-actions">
         <button type="button" class="btn btn-sm primary" data-strategy-enable-all>Включить все</button>
         <button type="button" class="btn btn-sm ghost" data-strategy-disable-all>Выключить все</button>
       </div>
     </div>
-    <p class="muted strategy-enable-bulk-hint">${hint}</p>
   `;
   for (const id of ids) {
     const el = $(id);
@@ -3024,12 +3298,12 @@ function renderBulkMlConfidenceControlsFor(ids, { group = "main" } = {}) {
           ${options}
         </select>
       </label>
+      ${uiHintHtml(`Только ${scopeLabel} · без рестарта · «Стандарт» = дефолт из pack`)}
       <div class="strategy-ml-conf-bulk-actions">
         <button type="button" class="btn btn-sm primary" data-ml-conf-bulk-apply>Применить</button>
         <button type="button" class="btn btn-sm ghost" data-ml-conf-bulk-reset title="Вернуть порог из обучения (pack)">Стандарт</button>
       </div>
     </div>
-    <p class="muted strategy-ml-conf-bulk-hint">Только ${scopeLabel} · без рестарта · «Стандарт» = дефолт из pack</p>
   `;
   for (const id of ids) {
     const el = $(id);
@@ -3116,13 +3390,31 @@ function renderMlConfidenceControl(id) {
     </div>`;
 }
 
+function positionMlConfidenceMenu(wrap, menu) {
+  if (!wrap || !menu) return;
+  menu.classList.remove("opens-up");
+  // Measure after visible: prefer opening upward when near the bottom of the viewport / panel.
+  const btn = wrap.querySelector("[data-strategy-ml-confidence-btn]");
+  const anchor = btn || wrap;
+  const rect = anchor.getBoundingClientRect();
+  const menuH = Math.min(menu.scrollHeight || 224, window.innerHeight * 0.45, 224);
+  const spaceBelow = window.innerHeight - rect.bottom;
+  const spaceAbove = rect.top;
+  if (spaceBelow < menuH + 12 && spaceAbove > spaceBelow) {
+    menu.classList.add("opens-up");
+  }
+}
+
 function closeAllMlConfidenceMenus(exceptId) {
   document.querySelectorAll("[data-strategy-ml-confidence-wrap]").forEach((wrap) => {
     const id = wrap.getAttribute("data-strategy-ml-confidence-wrap");
     if (exceptId && id === exceptId) return;
     const menu = wrap.querySelector("[data-strategy-ml-confidence-menu]");
     const btn = wrap.querySelector("[data-strategy-ml-confidence-btn]");
-    if (menu) menu.hidden = true;
+    if (menu) {
+      menu.hidden = true;
+      menu.classList.remove("opens-up");
+    }
     if (btn) btn.setAttribute("aria-expanded", "false");
     wrap.classList.remove("is-open");
   });
@@ -3146,6 +3438,12 @@ function renderStrategyTogglesInto(container, { testGroup = false } = {}) {
   if (!container) return;
   bindMlConfidenceMenusOnce();
   const catalog = catalogByGroup(testGroup);
+  if (!catalog.length) {
+    container.innerHTML = testGroup
+      ? `<li class="strategy-toggle-item strategy-panel-empty"><span class="muted">Нет стратегий в тестовом блоке</span></li>`
+      : `<li class="strategy-toggle-item strategy-panel-empty"><span class="muted">Нет стратегий в основном блоке — админ может перенести из «Тестовые» в Настройках</span></li>`;
+    return;
+  }
   container.innerHTML = catalog
     .map((s) => {
       const hasTrain = !!trainedRiskAvailable[s.id] || !!trainedRiskSpecs[s.id];
@@ -3159,15 +3457,18 @@ function renderStrategyTogglesInto(container, { testGroup = false } = {}) {
         <span class="strategy-invert-slider" aria-hidden="true"></span>
       </label>`
         : "";
+      const descHint = s.desc ? uiHintHtml(escapeHtml(s.desc)) : "";
       return `
     <li class="strategy-toggle-item${invertedStrategies[s.id] ? " is-inverted" : ""}${trainOn ? " is-trained-risk" : ""}">
-      <label class="strategy-toggle-label">
-        <input type="checkbox" data-strategy="${s.id}" ${enabledStrategies[s.id] ? "checked" : ""} />
-        <span class="strategy-toggle-text">
-          <strong>${strategyCatalogLabel(s)}${invertedStrategies[s.id] ? ' <span class="strategy-inv-badge">инв</span>' : ""}${trainOn ? ' <span class="strategy-train-badge">train SL/TP</span>' : ""} <span class="strategy-ml-badge">ML ${mlConfidencePct(s.id)}%</span></strong>
-          <span class="muted strategy-toggle-desc">${s.desc}</span>
-        </span>
-      </label>
+      <div class="strategy-toggle-main">
+        <label class="strategy-toggle-label">
+          <input type="checkbox" data-strategy="${s.id}" ${enabledStrategies[s.id] ? "checked" : ""} />
+          <span class="strategy-toggle-text">
+            <strong>${strategyCatalogLabel(s)}${invertedStrategies[s.id] ? ' <span class="strategy-inv-badge">инв</span>' : ""}${trainOn ? ' <span class="strategy-train-badge">train SL/TP</span>' : ""} <span class="strategy-ml-badge">ML ${mlConfidencePct(s.id)}%</span></strong>
+          </span>
+        </label>
+        ${descHint}
+      </div>
       <label class="strategy-invert-switch" title="Инвертировать: long↔short">
         <span class="strategy-invert-text">Инвертировать</span>
         <input type="checkbox" data-strategy-invert="${s.id}" ${invertedStrategies[s.id] ? "checked" : ""} />
@@ -3295,6 +3596,12 @@ function renderStrategyTogglesInto(container, { testGroup = false } = {}) {
       menu.hidden = !willOpen;
       btn.setAttribute("aria-expanded", willOpen ? "true" : "false");
       wrap?.classList.toggle("is-open", willOpen);
+      if (willOpen) {
+        // Next frame so layout/overflow:visible is applied before measuring.
+        requestAnimationFrame(() => positionMlConfidenceMenu(wrap, menu));
+      } else {
+        menu.classList.remove("opens-up");
+      }
     });
   });
 
@@ -3367,9 +3674,12 @@ async function setStrategyRisk(stoplossPct, takeProfitPct) {
 function renderStrategyRiskInputHtml() {
   const sl = Number(strategyRisk.stoploss_pct);
   const tp = Number(strategyRisk.take_profit_pct);
+  const hint = uiHintHtml(
+    `Глобальные SL/TP (если у стратегии выкл. «SL/TP из обучения»). Диапазон: SL ${STRATEGY_SL_MIN}–${STRATEGY_SL_MAX}% · TP ${STRATEGY_TP_MIN}–${STRATEGY_TP_MAX}%.`
+  );
   return `
     <div class="strategy-risk-bar-inner">
-      <span class="strategy-risk-title">Стоп / тейк</span>
+      <span class="strategy-risk-title">Стоп / тейк ${hint}</span>
       <div class="numeric-setting strategy-risk-setting" data-strategy-risk-input>
         <label class="strategy-risk-field">
           <span class="muted">SL</span>
@@ -3383,7 +3693,6 @@ function renderStrategyRiskInputHtml() {
         </label>
         <button type="button" class="btn btn-sm primary numeric-setting-save">Сохранить</button>
       </div>
-      <span class="muted strategy-risk-hint">глобальные (если у стратегии выкл. «SL/TP из обучения») · SL ${STRATEGY_SL_MIN}–${STRATEGY_SL_MAX}% · TP ${STRATEGY_TP_MIN}–${STRATEGY_TP_MAX}%</span>
     </div>
   `;
 }
@@ -3396,14 +3705,18 @@ function renderStrategyRiskControls() {
     el.innerHTML = renderStrategyRiskInputHtml();
     bindStrategyRiskInput(el.querySelector("[data-strategy-risk-input]"));
   }
+  updateBotSettingsSummaries();
 }
 
 function renderTestStrategyRiskInputHtml() {
   const sl = Number(testSettings.stoploss_pct);
   const tp = Number(testSettings.take_profit_pct);
+  const hint = uiHintHtml(
+    "Только тестовый блок. Если у стратегии выкл. «SL/TP из обучения» — эти значения; иначе TAG_RISK из обучения."
+  );
   return `
     <div class="strategy-risk-bar-inner">
-      <span class="strategy-risk-title">Стоп / тейк (тест)</span>
+      <span class="strategy-risk-title">Стоп / тейк (тест) ${hint}</span>
       <div class="numeric-setting strategy-risk-setting" data-test-strategy-risk-input>
         <label class="strategy-risk-field">
           <span class="muted">SL</span>
@@ -3417,7 +3730,6 @@ function renderTestStrategyRiskInputHtml() {
         </label>
         <button type="button" class="btn btn-sm primary numeric-setting-save">Сохранить</button>
       </div>
-      <span class="muted strategy-risk-hint">только тестовый блок · если у стратегии выкл. «SL/TP из обучения» · иначе TAG_RISK</span>
     </div>
   `;
 }
@@ -3427,6 +3739,7 @@ function renderTestStrategyRiskControls() {
   if (!el) return;
   el.innerHTML = renderTestStrategyRiskInputHtml();
   bindTestStrategyRiskInput(el.querySelector("[data-test-strategy-risk-input]"));
+  updateBotSettingsSummaries();
 }
 
 async function setTestStrategySettings(patch) {
@@ -3818,6 +4131,7 @@ function renderTestStrategyStats(el, profit, balance, openCount) {
       await setTestStrategySettings({ stake_amount: value });
     },
   });
+  updateBotSettingsSummaries();
 }
 
 function renderTestStrategyLimits() {
@@ -3884,6 +4198,7 @@ function renderStatsInto(el, bot, profit, balance, openCount, stakeAmount, { ope
   if (STAKE_EDITABLE_BOTS.has(bot)) {
     bindStakeInput(el.querySelector("[data-stake-input]"), bot);
   }
+  updateBotSettingsSummaries();
 }
 
 function renderStats(bot, profit, balance, openCount, stakeAmount) {
@@ -3906,7 +4221,7 @@ function tradeDetailRows(t) {
     ["Стратегия", t.strategy || "—"],
     ["Тег входа", t.enter_tag || "—"],
     ["ML уверенность", fmtMlConfidenceDetail(t)],
-    ["Открыта", t.open_date || "—"],
+    ["Открыта", t.open_date ? fmtAppDateTime(t.open_date) : "—"],
     ["Цена входа", fmtRate(t.open_rate)],
     ["Текущая цена", fmtRate(t.current_rate)],
     ["Объём", `${t.amount ?? "—"} (${fmtUsd(t.stake_amount)})`],
@@ -4196,12 +4511,7 @@ async function loadGridScanInfo() {
       el.textContent = "Скан боковика ещё не запускался";
       return;
     }
-    const t = new Date(d.scanned_at).toLocaleString("ru-RU", {
-      day: "2-digit",
-      month: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
+    const t = fmtAppDateShort(d.scanned_at);
     const n = d.selected_count ?? d.ranging_found ?? 0;
     const checked = d.candidates_checked ?? "?";
     el.textContent = `Боковик: ${n} пар (из ${checked} проверенных) · ${t}`;
@@ -4244,12 +4554,7 @@ async function loadStrategyScanInfo() {
       setText("Скан пар ещё не запускался");
       return;
     }
-    const t = new Date(d.scanned_at).toLocaleString("ru-RU", {
-      day: "2-digit",
-      month: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
+    const t = fmtAppDateShort(d.scanned_at);
     const n = d.selected_count ?? 0;
     const checked = d.candidates_checked ?? "?";
     const by = d.by_strategy || {};
@@ -4572,16 +4877,9 @@ function toggleBybitGridHistory() {
 
 function formatBybitGridDate(iso) {
   if (!iso) return "—";
-  try {
-    return new Date(iso).toLocaleString("ru-RU", {
-      day: "2-digit",
-      month: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  } catch {
-    return iso;
-  }
+  const d = parseAppInstant(iso);
+  if (!d) return String(iso);
+  return fmtAppDateShort(d);
 }
 
 function renderBybitGridHistoryCard(b) {
@@ -4714,12 +5012,7 @@ async function loadBybitGridScanInfo() {
       el.textContent = `Авто: скан боковика → grid ${bybitGridInvest} USDT · выключение в один клик`;
       return;
     }
-    const t = new Date(d.scanned_at).toLocaleString("ru-RU", {
-      day: "2-digit",
-      month: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
+    const t = fmtAppDateShort(d.scanned_at);
     const b = d.best;
     const overall = d.best_overall;
     let line = `Для запуска: ${b.pair} (ADX ${b.adx}, ATR×${b.atr_ratio ?? "—"}, score ${b.score})`;
@@ -4788,6 +5081,7 @@ async function refreshBybitGrid({ scan = false } = {}) {
       <div class="stat"><span class="muted">Funding</span><strong class="${funding.ok === false ? "loss" : ""}">${funding.fund_usdt != null ? Number(funding.fund_usdt).toFixed(1) : "—"}</strong></div>
       <div class="stat"><span class="muted">Лимит</span><strong>${maxBots}</strong></div>
     `;
+    updateBotSettingsSummaries();
 
     const canDeployMore = active.length < maxBots;
 
@@ -4944,14 +5238,6 @@ async function refreshBybitGrid({ scan = false } = {}) {
   }
 }
 
-function escapeHtml(s) {
-  return String(s)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
 function showBybitGridFormMsg(text, isError = false) {
   const el = $("bybitgrid-form-msg");
   if (!el) return;
@@ -5030,7 +5316,9 @@ async function refreshAll() {
     const results = await Promise.all(tasks);
     const allTrades = results.slice(1, 4).flat();
     renderTradesSummary(allTrades);
-    $("last-update").textContent = `Обновлено: ${new Date().toLocaleTimeString("ru-RU")}`;
+    $("last-update").textContent = `Обновлено: ${fmtAppTime(new Date())} ${APP_TZ_LABEL}`;
+    // Keep stats warm in the background (server also caches).
+    prefetchStatsBundle().catch(() => {});
   } catch (e) {
     if (e.message === "auth") logout();
     else console.error(e);
@@ -5152,7 +5440,10 @@ function openSettings() {
     else showPairMsg(e.message, true);
   });
   refreshAuthMe().catch(() => {});
-  if (isAdminUser()) loadUsersAdmin().catch(() => {});
+  if (isAdminUser()) {
+    loadUsersAdmin().catch(() => {});
+    renderPlacementAdmin({ strategies: strategyCatalog });
+  }
 }
 
 function closeSettings() {
@@ -5582,13 +5873,6 @@ function appendLogEntries(entries) {
   }
 }
 
-function escapeHtml(s) {
-  return String(s)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-}
-
 async function pollLogs() {
   const status = $("logs-status");
   if ($("logs-pause")?.checked) return;
@@ -5602,7 +5886,7 @@ async function pollLogs() {
     if (data.positions) logsPositions = data.positions;
     appendLogEntries(data.entries || []);
     if (status) {
-      status.textContent = `Обновлено: ${new Date().toLocaleTimeString("ru-RU")} · ${(data.entries || []).length} новых строк`;
+      status.textContent = `Обновлено: ${fmtAppTime(new Date())} ${APP_TZ_LABEL} · ${(data.entries || []).length} новых строк`;
     }
   } catch (e) {
     if (e.message === "auth") logout();
@@ -5680,21 +5964,11 @@ function formatChangelogPeriod(field, periods, entryAt) {
   if (!field || field === "_note" || !periods?.[field]) return "";
   const row = periods[field].find((p) => p.from === entryAt);
   if (!row) return "";
-  const from = new Date(row.from).toLocaleString("ru-RU", {
-    day: "2-digit",
-    month: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  const from = fmtAppDateShort(row.from);
   if (!row.until) {
     return `Действует с ${from} — по сейчас`;
   }
-  const until = new Date(row.until).toLocaleString("ru-RU", {
-    day: "2-digit",
-    month: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  const until = fmtAppDateShort(row.until);
   return `Период: ${from} — ${until} · значение: ${row.value_fmt}`;
 }
 
@@ -5716,8 +5990,8 @@ function renderChangelog(data) {
   }
   const byDay = new Map();
   for (const e of entries) {
-    const d = e.at ? new Date(e.at) : new Date();
-    const key = d.toLocaleDateString("ru-RU", { day: "2-digit", month: "long", year: "numeric" });
+    const d = e.at ? parseAppInstant(e.at) || new Date() : new Date();
+    const key = fmtAppDayLabel(d);
     if (!byDay.has(key)) byDay.set(key, []);
     byDay.get(key).push(e);
   }
@@ -5742,9 +6016,7 @@ function renderChangelog(data) {
                     : cat === "ranging_scanner" || cat === "strategy_scanner"
                       ? "is-scanner"
                       : "";
-      const time = e.at
-        ? new Date(e.at).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })
-        : "—";
+      const time = e.at ? fmtAppTime(e.at) : "—";
       const period = formatChangelogPeriod(e.field, periods, e.at);
       const note = e.note ? `<p class="changelog-period">${escapeHtml(e.note)}</p>` : "";
       const periodLine = period ? `<p class="changelog-period">${escapeHtml(period)}</p>` : "";
@@ -5762,7 +6034,7 @@ function renderChangelog(data) {
     html += "</section>";
   }
   out.innerHTML = html;
-  if (status) status.textContent = `${entries.length} записей · обновлено ${new Date().toLocaleTimeString("ru-RU")}`;
+  if (status) status.textContent = `${entries.length} записей · обновлено ${fmtAppTime(new Date())} ${APP_TZ_LABEL}`;
 }
 
 async function loadChangelog() {
@@ -6019,6 +6291,8 @@ setInterval(() => {
 }, 10 * 60 * 1000);
 
 bindCollapsibleSections();
+bindUiHints();
+updateBotSettingsSummaries();
 bindTradeLists();
 bindPanelStatsButtons();
 bindStatsPeriodButtons();
