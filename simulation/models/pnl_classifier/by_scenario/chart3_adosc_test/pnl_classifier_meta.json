@@ -1,0 +1,101 @@
+{
+  "scenario_id": "chart3_adosc_test",
+  "experiment_id": "exp14_lgbm_gate045",
+  "model": "lightgbm + sigmoid",
+  "model_key": "lightgbm",
+  "calibrate": true,
+  "calibrate_method": "sigmoid",
+  "min_profit_proba": 0.45,
+  "params": {
+    "n_estimators": 400,
+    "learning_rate": 0.05,
+    "max_depth": 8,
+    "num_leaves": 63,
+    "min_child_samples": 25,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "class_weight": "balanced"
+  },
+  "trained_at": "2026-08-08T08:24:54.433407+00:00",
+  "train_range": "20250101-20260331",
+  "test_range": "20260401-20260625",
+  "fit_mode": "all_cached",
+  "n_train_trades": 11446,
+  "n_test_trades": 5381,
+  "n_train": 11446,
+  "n_test": 5381,
+  "features": [
+    "scenario_id",
+    "pair_base",
+    "scan_type",
+    "group",
+    "strategy",
+    "is_short",
+    "stake_usdt",
+    "stoploss",
+    "roi_at_entry",
+    "hour_utc",
+    "dow_utc",
+    "mins_since_armed",
+    "log_open_rate",
+    "rsi_14",
+    "atr_pct_14",
+    "adx_14",
+    "vol_ratio_20",
+    "ret_1",
+    "ret_4",
+    "ret_12",
+    "trend_12h",
+    "ema_spread_pct",
+    "range_pct",
+    "dist_high_20_pct",
+    "dist_low_20_pct"
+  ],
+  "source": "ml_param_experiments_per_scenario",
+  "accuracy": 0.7067,
+  "roc_auc": 0.7244,
+  "loss_recall": 0.8828,
+  "loss_precision": 0.7176,
+  "profit_recall": 0.4052,
+  "profit_precision": 0.6689,
+  "macro_f1": 0.6482,
+  "confusion_matrix": [
+    [
+      2999,
+      398
+    ],
+    [
+      1180,
+      804
+    ]
+  ],
+  "classification_report": {
+    "loss": {
+      "precision": 0.7176357980378081,
+      "recall": 0.8828377980571093,
+      "f1-score": 0.7917106652587117,
+      "support": 3397.0
+    },
+    "profit": {
+      "precision": 0.6688851913477537,
+      "recall": 0.40524193548387094,
+      "f1-score": 0.504708097928437,
+      "support": 1984.0
+    },
+    "accuracy": 0.7067459580003717,
+    "macro avg": {
+      "precision": 0.693260494692781,
+      "recall": 0.6440398667704901,
+      "f1-score": 0.6482093815935743,
+      "support": 5381.0
+    },
+    "weighted avg": {
+      "precision": 0.6996612201390778,
+      "recall": 0.7067459580003717,
+      "f1-score": 0.6858914692759455,
+      "support": 5381.0
+    }
+  },
+  "strategy": "ChaikinOscTestStrategy",
+  "note": "bootstrapped from chart3_adosc; retrain via train_test_block_3scen_ml.py"
+}

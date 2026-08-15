@@ -1,0 +1,101 @@
+{
+  "scenario_id": "scalp_liq_breakout_test",
+  "experiment_id": "exp31_mlp",
+  "model": "mlp + sigmoid",
+  "model_key": "mlp",
+  "calibrate": true,
+  "calibrate_method": "sigmoid",
+  "min_profit_proba": 0.55,
+  "params": {
+    "hidden_layer_sizes": [
+      64,
+      32
+    ],
+    "alpha": 0.001,
+    "learning_rate_init": 0.001,
+    "early_stopping": true,
+    "validation_fraction": 0.1
+  },
+  "trained_at": "2026-08-08T08:23:37.399790+00:00",
+  "train_range": "20250101-20260331",
+  "test_range": "20260401-20260625",
+  "fit_mode": "all_cached",
+  "n_train_trades": 10826,
+  "n_test_trades": 6264,
+  "n_train": 10826,
+  "n_test": 6264,
+  "features": [
+    "scenario_id",
+    "pair_base",
+    "scan_type",
+    "group",
+    "strategy",
+    "is_short",
+    "stake_usdt",
+    "stoploss",
+    "roi_at_entry",
+    "hour_utc",
+    "dow_utc",
+    "mins_since_armed",
+    "log_open_rate",
+    "rsi_14",
+    "atr_pct_14",
+    "adx_14",
+    "vol_ratio_20",
+    "ret_1",
+    "ret_4",
+    "ret_12",
+    "trend_12h",
+    "ema_spread_pct",
+    "range_pct",
+    "dist_high_20_pct",
+    "dist_low_20_pct"
+  ],
+  "source": "ml_param_experiments_per_scenario",
+  "accuracy": 0.6743,
+  "roc_auc": 0.7383,
+  "loss_recall": 0.777,
+  "loss_precision": 0.6668,
+  "profit_recall": 0.5572,
+  "profit_precision": 0.6867,
+  "macro_f1": 0.6665,
+  "confusion_matrix": [
+    [
+      2593,
+      744
+    ],
+    [
+      1296,
+      1631
+    ]
+  ],
+  "classification_report": {
+    "loss": {
+      "precision": 0.6667523785034714,
+      "recall": 0.7770452502247528,
+      "f1-score": 0.7176861334071408,
+      "support": 3337.0
+    },
+    "profit": {
+      "precision": 0.6867368421052632,
+      "recall": 0.5572258284933379,
+      "f1-score": 0.6152395322519804,
+      "support": 2927.0
+    },
+    "accuracy": 0.6743295019157088,
+    "macro avg": {
+      "precision": 0.6767446103043673,
+      "recall": 0.6671355393590453,
+      "f1-score": 0.6664628328295605,
+      "support": 6264.0
+    },
+    "weighted avg": {
+      "precision": 0.6760905849151004,
+      "recall": 0.6743295019157088,
+      "f1-score": 0.6698155712134698,
+      "support": 6264.0
+    }
+  },
+  "strategy": "AltVolumeBreakoutTestStrategy",
+  "note": "bootstrapped from scalp_liq_breakout; retrain via train_test_block_3scen_ml.py"
+}

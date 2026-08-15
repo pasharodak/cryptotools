@@ -411,3 +411,158 @@ class AtrChannelBreakoutTestStrategy(AtrChannelBreakoutStrategy):
         if (not trade.is_short) and close < ema20:
             return "atr_fail"
         return None
+
+
+class ChaikinOscTestStrategy(ChaikinOscStrategy):
+    """UI test clone of #5: 1x, SL -3%, no RSI/range chase, custom exit."""
+
+    stoploss = -0.03
+    minimal_roi = {'0': 0.012, '60': 0.008, '180': 0.005, '480': 0.0}
+    pair_cooldown_minutes = 180
+    sim_leverage = 1.0
+    rsi_long_max = 65
+    rsi_short_min = 35
+    range_lookback_1h = 12
+    max_long_range_pos = 0.75
+    min_short_range_pos = 0.25
+
+    def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+        dataframe = super().populate_indicators(dataframe, metadata)
+        dataframe["rsi_14"] = ta.RSI(dataframe, timeperiod=14)
+        hi = dataframe["high"].rolling(self.range_lookback_1h).max()
+        lo = dataframe["low"].rolling(self.range_lookback_1h).min()
+        span = (hi - lo).where((hi - lo) > 0)
+        dataframe["range_pos_1h"] = (dataframe["close"] - lo) / span
+        return dataframe
+
+    def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+        dataframe = super().populate_entry_trend(dataframe, metadata)
+        rsi = dataframe["rsi_14"]
+        pos = dataframe["range_pos_1h"]
+        late_long = (rsi >= self.rsi_long_max) | (pos >= self.max_long_range_pos)
+        late_short = (rsi <= self.rsi_short_min) | (pos <= self.min_short_range_pos)
+        dataframe.loc[late_long, "enter_long"] = 0
+        dataframe.loc[late_short, "enter_short"] = 0
+        return dataframe
+
+    def leverage(self, pair, current_time, current_rate, proposed_leverage, max_leverage, entry_tag, side, **kwargs):
+        return min(self.sim_leverage, max_leverage)
+
+    def exit_reason_from_ohlcv(self, dataframe: DataFrame, trade, current_rate: float) -> str | None:
+        if dataframe is None or len(dataframe) < 30:
+            return None
+        df = self.populate_indicators(dataframe.copy(), {"pair": getattr(trade, "pair", "")})
+        last = df.iloc[-1]
+        v = last.get("adosc")
+        if v is None:
+            return None
+        v = float(v)
+        if trade.is_short and v > 0:
+            return "adosc_flip"
+        if (not trade.is_short) and v < 0:
+            return "adosc_flip"
+        return None
+
+
+class PpoSignalTestStrategy(PpoSignalStrategy):
+    """UI test clone of #7: 1x, SL -3%, no RSI/range chase, custom exit."""
+
+    stoploss = -0.03
+    minimal_roi = {'0': 0.012, '60': 0.008, '180': 0.005, '480': 0.0}
+    pair_cooldown_minutes = 180
+    sim_leverage = 1.0
+    rsi_long_max = 65
+    rsi_short_min = 35
+    range_lookback_1h = 12
+    max_long_range_pos = 0.75
+    min_short_range_pos = 0.25
+
+    def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+        dataframe = super().populate_indicators(dataframe, metadata)
+        dataframe["rsi_14"] = ta.RSI(dataframe, timeperiod=14)
+        hi = dataframe["high"].rolling(self.range_lookback_1h).max()
+        lo = dataframe["low"].rolling(self.range_lookback_1h).min()
+        span = (hi - lo).where((hi - lo) > 0)
+        dataframe["range_pos_1h"] = (dataframe["close"] - lo) / span
+        return dataframe
+
+    def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+        dataframe = super().populate_entry_trend(dataframe, metadata)
+        rsi = dataframe["rsi_14"]
+        pos = dataframe["range_pos_1h"]
+        late_long = (rsi >= self.rsi_long_max) | (pos >= self.max_long_range_pos)
+        late_short = (rsi <= self.rsi_short_min) | (pos <= self.min_short_range_pos)
+        dataframe.loc[late_long, "enter_long"] = 0
+        dataframe.loc[late_short, "enter_short"] = 0
+        return dataframe
+
+    def leverage(self, pair, current_time, current_rate, proposed_leverage, max_leverage, entry_tag, side, **kwargs):
+        return min(self.sim_leverage, max_leverage)
+
+    def exit_reason_from_ohlcv(self, dataframe: DataFrame, trade, current_rate: float) -> str | None:
+        if dataframe is None or len(dataframe) < 30:
+            return None
+        df = self.populate_indicators(dataframe.copy(), {"pair": getattr(trade, "pair", "")})
+        last = df.iloc[-1]
+        ppo = last.get("ppo")
+        sig = last.get("ppo_sig")
+        if ppo is None or sig is None:
+            return None
+        ppo, sig = float(ppo), float(sig)
+        if trade.is_short and ppo > sig:
+            return "ppo_flip"
+        if (not trade.is_short) and ppo < sig:
+            return "ppo_flip"
+        return None
+
+
+class ElderRayTestStrategy(ElderRayStrategy):
+    """UI test clone of #10: 1x, SL -3%, no RSI/range chase, custom exit."""
+
+    stoploss = -0.03
+    minimal_roi = {'0': 0.012, '60': 0.008, '180': 0.005, '480': 0.0}
+    pair_cooldown_minutes = 180
+    sim_leverage = 1.0
+    rsi_long_max = 65
+    rsi_short_min = 35
+    range_lookback_1h = 12
+    max_long_range_pos = 0.75
+    min_short_range_pos = 0.25
+
+    def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+        dataframe = super().populate_indicators(dataframe, metadata)
+        dataframe["rsi_14"] = ta.RSI(dataframe, timeperiod=14)
+        hi = dataframe["high"].rolling(self.range_lookback_1h).max()
+        lo = dataframe["low"].rolling(self.range_lookback_1h).min()
+        span = (hi - lo).where((hi - lo) > 0)
+        dataframe["range_pos_1h"] = (dataframe["close"] - lo) / span
+        return dataframe
+
+    def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+        dataframe = super().populate_entry_trend(dataframe, metadata)
+        rsi = dataframe["rsi_14"]
+        pos = dataframe["range_pos_1h"]
+        late_long = (rsi >= self.rsi_long_max) | (pos >= self.max_long_range_pos)
+        late_short = (rsi <= self.rsi_short_min) | (pos <= self.min_short_range_pos)
+        dataframe.loc[late_long, "enter_long"] = 0
+        dataframe.loc[late_short, "enter_short"] = 0
+        return dataframe
+
+    def leverage(self, pair, current_time, current_rate, proposed_leverage, max_leverage, entry_tag, side, **kwargs):
+        return min(self.sim_leverage, max_leverage)
+
+    def exit_reason_from_ohlcv(self, dataframe: DataFrame, trade, current_rate: float) -> str | None:
+        if dataframe is None or len(dataframe) < 30:
+            return None
+        df = self.populate_indicators(dataframe.copy(), {"pair": getattr(trade, "pair", "")})
+        last = df.iloc[-1]
+        bear = last.get("bear_power")
+        bull = last.get("bull_power")
+        if bear is None or bull is None:
+            return None
+        bear, bull = float(bear), float(bull)
+        if trade.is_short and bull > 0:
+            return "elder_flip"
+        if (not trade.is_short) and bear < 0:
+            return "elder_flip"
+        return None

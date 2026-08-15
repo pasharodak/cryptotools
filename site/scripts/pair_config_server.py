@@ -12,12 +12,14 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Mapping
-from datetime import datetime
+from copy import deepcopy
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from socketserver import ThreadingMixIn
@@ -109,6 +111,10 @@ def max_open_trades_per_strategy_file() -> Path:
 
 def test_strategy_settings_file() -> Path:
     return tc.user_data_dir(BASE) / "test_strategy_settings.json"
+
+
+def strategy_ui_placement_file() -> Path:
+    return tc.user_data_dir(BASE) / "strategy_ui_placement.json"
 
 
 DEFAULT_TEST_STRATEGY_SETTINGS: dict[str, Any] = {
@@ -464,6 +470,94 @@ AVAILABLE_STRATEGIES = [
         "desc": "Тест · wide XGB · 1x · SL -3% · без chase (RSI/1h range) · выход по Supertrend-флипу · gate из meta",
     },
     {
+        "id": "CmfZeroCrossTestStrategy",
+        "num": 105,
+        "ui_order": 105,
+        "name": "CMF zero cross (test)",
+        "test_group": True,
+        "desc": "Тест · wide XGB · ML PnL ~78 · 1x · SL -3% · без chase (RSI/1h range) · выход cmf_flip · gate>=55%",
+    },
+    {
+        "id": "ScalpEmaCrossTestStrategy",
+        "num": 106,
+        "ui_order": 106,
+        "name": "Scalp EMA 8/21 (test)",
+        "test_group": True,
+        "desc": "Тест · wide XGB · 1x · SL -3% · без chase · выход ema_flip · live #4 · gate>=55%",
+    },
+    {
+        "id": "ChaikinOscTestStrategy",
+        "num": 107,
+        "ui_order": 107,
+        "name": "Chaikin Oscillator (test)",
+        "test_group": True,
+        "desc": "Тест · wide XGB · 1x · SL -3% · без chase · выход adosc_flip · live #5 · gate>=45%",
+    },
+    {
+        "id": "DonchianBreakoutTestStrategy",
+        "num": 108,
+        "ui_order": 108,
+        "name": "Donchian / Turtle (test)",
+        "test_group": True,
+        "desc": "Тест · wide XGB · 1x · SL -3% · без chase · выход don_mid · live #6 · gate>=45%",
+    },
+    {
+        "id": "PpoSignalTestStrategy",
+        "num": 109,
+        "ui_order": 109,
+        "name": "PPO signal cross (test)",
+        "test_group": True,
+        "desc": "Тест · wide XGB · 1x · SL -3% · без chase · выход ppo_flip · live #7 · gate>=55%",
+    },
+    {
+        "id": "DonchianAdxVolComboTestStrategy",
+        "num": 110,
+        "ui_order": 110,
+        "name": "Donchian+ADX+Vol (test)",
+        "test_group": True,
+        "desc": "Тест · wide XGB · 1x · SL -3% · без chase · выход don_mid · live #8 · gate>=65%",
+    },
+    {
+        "id": "ObvEmaCrossTestStrategy",
+        "num": 111,
+        "ui_order": 111,
+        "name": "OBV EMA cross (test)",
+        "test_group": True,
+        "desc": "Тест · wide XGB · 1x · SL -3% · без chase · выход obv_flip · live #9 · gate>=45%",
+    },
+    {
+        "id": "ElderRayTestStrategy",
+        "num": 112,
+        "ui_order": 112,
+        "name": "Elder Ray Bull/Bear (test)",
+        "test_group": True,
+        "desc": "Тест · wide XGB · 1x · SL -3% · без chase · выход elder_flip · live #10 · gate>=45%",
+    },
+    {
+        "id": "AltVolumeBreakoutTestStrategy",
+        "num": 113,
+        "ui_order": 113,
+        "name": "Alt volume breakout (test)",
+        "test_group": True,
+        "desc": "Тест · wide XGB · 1x · SL -3% · без chase · выход don_mid · live #31 · gate>=55%",
+    },
+    {
+        "id": "BollingerRsiTestStrategy",
+        "num": 114,
+        "ui_order": 114,
+        "name": "Mean-reversion (BB) (test)",
+        "test_group": True,
+        "desc": "Тест · wide XGB · 1x · SL -3% · без chase · выход bb_mid · live #33 · gate>=70%",
+    },
+    {
+        "id": "MacdEmaTestStrategy",
+        "num": 115,
+        "ui_order": 115,
+        "name": "MACD + EMA200 (test)",
+        "test_group": True,
+        "desc": "Тест · wide XGB · 1x · SL -3% · без chase · выход macd_flip · live #34 · gate>=45%",
+    },
+    {
         "id": "BollingerRsiStrategy",
         "num": 33,
         "ui_order": 32,
@@ -522,9 +616,140 @@ AVAILABLE_STRATEGIES = [
 ]
 
 
-TEST_STRATEGY_IDS = frozenset(
+# Birth group from catalog (static). Runtime panel may differ via strategy_ui_placement.json.
+CATALOG_TEST_IDS = frozenset(
     s["id"] for s in AVAILABLE_STRATEGIES if s.get("test_group")
 )
+# Backward-compat alias; prefer effective_ui_panel() / is_effective_test_strategy().
+TEST_STRATEGY_IDS = CATALOG_TEST_IDS
+
+_PLACEMENT_NOTE = (
+    "main = Strategies panel; catalog test_group and not in main = Тестовые; "
+    "hidden = neither (former live pack kept for history labels / sim)."
+)
+
+
+def _catalog_birth_test(sid: str) -> bool:
+    return sid in CATALOG_TEST_IDS
+
+
+def _default_hidden_ids() -> list[str]:
+    return [s["id"] for s in AVAILABLE_STRATEGIES if not s.get("test_group")]
+
+
+def _normalize_placement(data: dict[str, Any] | None) -> dict[str, Any]:
+    raw = data if isinstance(data, dict) else {}
+    main: list[str] = []
+    seen_main: set[str] = set()
+    for x in raw.get("main") or []:
+        sid = str(x).strip()
+        if sid and sid not in seen_main:
+            main.append(sid)
+            seen_main.add(sid)
+    hidden: list[str] = []
+    seen_hidden: set[str] = set()
+    for x in raw.get("hidden") or []:
+        sid = str(x).strip()
+        if sid and sid not in seen_hidden and sid not in seen_main:
+            hidden.append(sid)
+            seen_hidden.add(sid)
+    # New catalog ids: non-test → hidden; test stay out of both (panel=test).
+    catalog_ids = {s["id"] for s in AVAILABLE_STRATEGIES}
+    known = seen_main | seen_hidden
+    for sid in catalog_ids:
+        if sid in known:
+            continue
+        if _catalog_birth_test(sid):
+            continue
+        hidden.append(sid)
+        seen_hidden.add(sid)
+    out = {
+        "main": main,
+        "hidden": hidden,
+        "_note": str(raw.get("_note") or _PLACEMENT_NOTE),
+    }
+    if "_hidden_disabled" in raw:
+        out["_hidden_disabled"] = bool(raw.get("_hidden_disabled"))
+    return out
+
+
+def save_strategy_ui_placement(data: dict[str, Any]) -> dict[str, Any]:
+    normalized = _normalize_placement(data)
+    if "_hidden_disabled" in data:
+        normalized["_hidden_disabled"] = bool(data.get("_hidden_disabled"))
+    path = strategy_ui_placement_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with tmp.open("w", encoding="utf-8") as fh:
+        json.dump(normalized, fh, indent=2, ensure_ascii=False)
+        fh.write("\n")
+    tmp.replace(path)
+    return normalized
+
+
+def ensure_strategy_ui_placement() -> dict[str, Any]:
+    """Load placement; create defaults (empty main, hide former live) once."""
+    path = strategy_ui_placement_file()
+    existed = path.is_file()
+    raw: dict[str, Any] | None = None
+    if existed:
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            raw = None
+    if not existed or raw is None:
+        return save_strategy_ui_placement(
+            {
+                "main": [],
+                "hidden": _default_hidden_ids(),
+                "_note": _PLACEMENT_NOTE,
+                "_hidden_disabled": False,
+            }
+        )
+    normalized = _normalize_placement(raw)
+    normalized["_hidden_disabled"] = bool(raw.get("_hidden_disabled"))
+    # Persist if merge added new hidden ids.
+    if set(normalized.get("main") or []) != set(raw.get("main") or []) or set(
+        normalized.get("hidden") or []
+    ) != set(raw.get("hidden") or []):
+        normalized["_hidden_disabled"] = bool(raw.get("_hidden_disabled"))
+        return save_strategy_ui_placement(normalized)
+    return normalized
+
+
+def effective_ui_panel(sid: str, placement: dict[str, Any] | None = None) -> str:
+    """Return 'main' | 'test' | 'hidden' for a strategy id."""
+    p = placement if placement is not None else ensure_strategy_ui_placement()
+    main = set(p.get("main") or [])
+    hidden = set(p.get("hidden") or [])
+    if sid in main:
+        return "main"
+    if sid in hidden:
+        return "hidden"
+    if _catalog_birth_test(sid):
+        return "test"
+    return "hidden"
+
+
+def is_effective_test_strategy(sid: str, placement: dict[str, Any] | None = None) -> bool:
+    return effective_ui_panel(sid, placement) == "test"
+
+
+def ui_placement_payload(placement: dict[str, Any] | None = None) -> dict[str, Any]:
+    p = placement if placement is not None else ensure_strategy_ui_placement()
+    catalog_ids = {s["id"] for s in AVAILABLE_STRATEGIES}
+    test_ids = [
+        s["id"]
+        for s in AVAILABLE_STRATEGIES
+        if effective_ui_panel(s["id"], p) == "test"
+    ]
+    main_ids = [sid for sid in (p.get("main") or []) if sid in catalog_ids]
+    return {
+        "main": main_ids,
+        "test": test_ids,
+        "hidden": list(p.get("hidden") or []),
+        "hidden_count": len(p.get("hidden") or []),
+    }
 
 
 def normalize_pair(pair: str) -> str:
@@ -691,6 +916,188 @@ def get_closed_trades_payload(limit: int = 500, bot: str | None = None) -> dict[
     return {name: load_closed_trades_from_db(name, limit) for name in CONFIGS}
 
 
+# --- Precomputed stats bundle (warm cache for UI) ---
+STATS_CACHE_TTL_SEC = 60.0
+STATS_CACHE_REFRESH_SEC = 30.0
+_stats_cache_lock = threading.RLock()
+# key -> {payload, built_at, building, user_id}
+_stats_cache: dict[str, dict[str, Any]] = {}
+
+
+def _stats_tenant_key(user: dict[str, Any] | None = None) -> str:
+    u = user if user is not None else (tc.current_user() or {})
+    if tm.is_admin(u) and not tm.is_impersonating(u):
+        return "admin"
+    uid = str(u.get("id") or "anon")
+    return f"user:{uid}"
+
+
+def build_stats_bundle(limit: int = 0) -> dict[str, Any]:
+    """Assemble closed trades + Bybit history for the current tenant context."""
+    t0 = time.monotonic()
+    closed = get_closed_trades_payload(limit)
+    bybit_history: list[Any] = []
+    try:
+        ud, env = tc.bybit_context_paths(BASE)
+        with tenant_bybit_context(ud, env):
+            bybit_history = list(get_history_payload().get("history") or [])
+    except Exception as exc:  # noqa: BLE001
+        _server_log.warning("stats-bundle bybit history: %s", exc)
+    try:
+        strategies = get_strategy_catalog()
+    except Exception:  # noqa: BLE001
+        strategies = [dict(s) for s in AVAILABLE_STRATEGIES]
+    return {
+        "finder": closed.get("finder") or [],
+        "strategy": closed.get("strategy") or [],
+        "grid": closed.get("grid") or [],
+        "bybit_history": bybit_history,
+        "strategies": strategies,
+        "built_at": int(time.time() * 1000),
+        "build_ms": int((time.monotonic() - t0) * 1000),
+        "cached": False,
+    }
+
+
+def _store_stats_bundle(key: str, payload: dict[str, Any], *, user_id: str | None = None) -> None:
+    with _stats_cache_lock:
+        _stats_cache[key] = {
+            "payload": payload,
+            "built_at": time.time(),
+            "building": False,
+            "user_id": user_id,
+        }
+
+
+def _build_and_store_stats(
+    key: str,
+    user: dict[str, Any] | None,
+    limit: int = 0,
+) -> dict[str, Any]:
+    token = None
+    try:
+        if user is not None:
+            token = tc.set_request_user(user)
+        payload = build_stats_bundle(limit)
+        uid = str((user or {}).get("id") or "") or None
+        _store_stats_bundle(key, payload, user_id=uid)
+        return payload
+    except Exception:
+        with _stats_cache_lock:
+            entry = _stats_cache.get(key)
+            if entry is not None:
+                entry["building"] = False
+        raise
+    finally:
+        if token is not None:
+            tc.reset_request_user(token)
+
+
+def _schedule_stats_rebuild(key: str, user: dict[str, Any] | None) -> None:
+    with _stats_cache_lock:
+        entry = _stats_cache.setdefault(
+            key, {"payload": None, "built_at": 0.0, "building": False, "user_id": None}
+        )
+        if entry.get("building"):
+            return
+        entry["building"] = True
+    user_snap = dict(user) if user else None
+
+    def _run() -> None:
+        try:
+            _build_and_store_stats(key, user_snap, 0)
+        except Exception as exc:  # noqa: BLE001
+            _server_log.warning("stats-bundle rebuild %s: %s", key, exc)
+            with _stats_cache_lock:
+                entry = _stats_cache.get(key)
+                if entry is not None:
+                    entry["building"] = False
+
+    threading.Thread(target=_run, name=f"stats-cache-{key}", daemon=True).start()
+
+
+def get_stats_bundle(*, force: bool = False, max_age: float | None = None) -> dict[str, Any]:
+    """Return warm stats payload; rebuild in background when stale."""
+    if max_age is None:
+        max_age = STATS_CACHE_TTL_SEC
+    key = _stats_tenant_key()
+    user = tc.current_user()
+    now = time.time()
+
+    with _stats_cache_lock:
+        entry = _stats_cache.get(key)
+        payload = entry.get("payload") if entry else None
+        age = now - float(entry.get("built_at") or 0) if entry else 1e9
+        fresh = bool(payload) and age <= max_age and not force
+
+    if payload and (fresh or (not force and age < max_age * 3)):
+        out = deepcopy(payload)
+        out["cached"] = True
+        out["age_sec"] = round(age, 2)
+        out["stale"] = not fresh
+        if force or age > max_age * 0.35:
+            _schedule_stats_rebuild(key, user)
+        return out
+
+    # Cold start: build once in this request, then keep warm.
+    with _stats_cache_lock:
+        entry = _stats_cache.setdefault(
+            key, {"payload": None, "built_at": 0.0, "building": False, "user_id": None}
+        )
+        already = bool(entry.get("building"))
+        entry["building"] = True
+    if already and payload:
+        out = deepcopy(payload)
+        out["cached"] = True
+        out["age_sec"] = round(age, 2)
+        out["stale"] = True
+        return out
+    try:
+        built = build_stats_bundle(0)
+        uid = str((user or {}).get("id") or "") or None
+        _store_stats_bundle(key, built, user_id=uid)
+        out = deepcopy(built)
+        out["cached"] = False
+        return out
+    finally:
+        with _stats_cache_lock:
+            if key in _stats_cache:
+                _stats_cache[key]["building"] = False
+
+
+def start_stats_cache_scheduler() -> None:
+    """Keep admin (+ recently used tenant) stats bundles warm."""
+
+    def _loop() -> None:
+        time.sleep(3)
+        while True:
+            try:
+                admin_user = {"id": "admin", "role": "admin", "username": "admin"}
+                _build_and_store_stats("admin", admin_user, 0)
+                with _stats_cache_lock:
+                    others = [
+                        (k, e.get("user_id"))
+                        for k, e in _stats_cache.items()
+                        if k != "admin" and e.get("payload") is not None
+                    ]
+                for key, uid in others:
+                    if not uid:
+                        continue
+                    u = tm.get_user_by_id(str(uid))
+                    if u:
+                        _build_and_store_stats(key, u, 0)
+            except Exception as exc:  # noqa: BLE001
+                _server_log.warning("stats cache warmer: %s", exc)
+            time.sleep(STATS_CACHE_REFRESH_SEC)
+
+    threading.Thread(target=_loop, name="stats-cache-warmer", daemon=True).start()
+    _server_log.info(
+        "stats-bundle cache warmer started (ttl=%ss refresh=%ss)",
+        int(STATS_CACHE_TTL_SEC),
+        int(STATS_CACHE_REFRESH_SEC),
+    )
+
+
 def _strip_enter_tag(tag: str | None) -> str:
     if not tag:
         return ""
@@ -705,6 +1112,9 @@ def _strip_enter_tag(tag: str | None) -> str:
     return t
 
 
+APP_TZ = timezone(timedelta(hours=3))  # UTC+3 (Moscow, no DST)
+
+
 def _parse_close_date_ms(value: Any) -> float | None:
     if value is None:
         return None
@@ -717,14 +1127,16 @@ def _parse_close_date_ms(value: Any) -> float | None:
         return None
     for fmt, cut in (("%Y-%m-%d %H:%M:%S.%f", 26), ("%Y-%m-%d %H:%M:%S", 19)):
         try:
-            return datetime.strptime(s[:cut], fmt).timestamp() * 1000.0
+            # Engine stores naive UTC timestamps
+            dt = datetime.strptime(s[:cut], fmt).replace(tzinfo=timezone.utc)
+            return dt.timestamp() * 1000.0
         except ValueError:
             continue
     return None
 
 
 def _rating_period_bounds_ms(period: str) -> tuple[float, float]:
-    now = datetime.now()
+    now = datetime.now(APP_TZ)
     start_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
     end_today = now.replace(hour=23, minute=59, second=59, microsecond=999999)
     if period == "today":
@@ -1564,8 +1976,22 @@ def _strategy_ids() -> set[str]:
 
 
 def get_strategy_catalog() -> list[dict]:
-    """Catalog for UI. Sorted by num ascending; strategies without num go last."""
-    rows = list(AVAILABLE_STRATEGIES)
+    """Catalog for UI. Sorted by num ascending; strategies without num go last.
+
+    Effective test_group / ui_panel come from strategy_ui_placement.json so promote/demote
+    move rows between Тестовые and Стратегии without deleting catalog entries.
+    """
+    apply_hidden_disable_once()
+    placement = ensure_strategy_ui_placement()
+    rows: list[dict] = []
+    for s in AVAILABLE_STRATEGIES:
+        row = dict(s)
+        panel = effective_ui_panel(s["id"], placement)
+        row["ui_panel"] = panel
+        row["catalog_test_group"] = bool(s.get("test_group"))
+        # UI uses test_group for catalogByGroup — effective panel wins.
+        row["test_group"] = panel == "test"
+        rows.append(row)
     user = tc.current_user()
     allow = tm.user_allowed_strategies(user) if user else None
     if allow is not None:
@@ -1832,6 +2258,95 @@ def save_enabled_map(
         trained_risk=data["trained_risk"],
         ml_confidence=data["ml_confidence"],
     )
+
+
+def apply_hidden_disable_once() -> dict[str, Any]:
+    """On first placement use: turn off all hidden strategies so they cannot trade without UI."""
+    placement = ensure_strategy_ui_placement()
+    if placement.get("_hidden_disabled"):
+        return placement
+    enabled = load_enabled_map()
+    changed = False
+    for sid in placement.get("hidden") or []:
+        if enabled.get(sid):
+            enabled[sid] = False
+            changed = True
+    if changed:
+        save_enabled_map(enabled)
+    placement = save_strategy_ui_placement(
+        {
+            **placement,
+            "_hidden_disabled": True,
+        }
+    )
+    return placement
+
+
+def promote_strategy_to_main(strategy_id: str) -> dict[str, Any]:
+    """Admin: move birth-test strategy from Тестовые → Стратегии (enabled=false)."""
+    apply_hidden_disable_once()
+    strategy_id = validate_strategy(strategy_id)
+    placement = ensure_strategy_ui_placement()
+    panel = effective_ui_panel(strategy_id, placement)
+    if panel != "test":
+        raise ValueError(f"strategy is not in test panel (panel={panel})")
+    if not _catalog_birth_test(strategy_id):
+        raise ValueError("only catalog test strategies can be promoted")
+    main = [sid for sid in (placement.get("main") or []) if sid != strategy_id]
+    main.append(strategy_id)
+    hidden = [sid for sid in (placement.get("hidden") or []) if sid != strategy_id]
+    placement = save_strategy_ui_placement(
+        {
+            "main": main,
+            "hidden": hidden,
+            "_note": placement.get("_note") or _PLACEMENT_NOTE,
+            "_hidden_disabled": True,
+        }
+    )
+    enabled = load_enabled_map()
+    enabled[strategy_id] = False
+    save_enabled_map(enabled)
+    ensure_router_config()
+    return {
+        "strategy": strategy_id,
+        "ui_panel": "main",
+        "enabled": False,
+        "ui_placement": ui_placement_payload(placement),
+        **get_strategies_payload(),
+    }
+
+
+def demote_strategy_to_test(strategy_id: str) -> dict[str, Any]:
+    """Admin: move promoted strategy from Стратегии → Тестовые (enabled=false)."""
+    apply_hidden_disable_once()
+    strategy_id = validate_strategy(strategy_id)
+    placement = ensure_strategy_ui_placement()
+    panel = effective_ui_panel(strategy_id, placement)
+    if panel != "main":
+        raise ValueError(f"strategy is not in main panel (panel={panel})")
+    if not _catalog_birth_test(strategy_id):
+        raise ValueError("only catalog test strategies can be demoted to test")
+    main = [sid for sid in (placement.get("main") or []) if sid != strategy_id]
+    hidden = [sid for sid in (placement.get("hidden") or []) if sid != strategy_id]
+    placement = save_strategy_ui_placement(
+        {
+            "main": main,
+            "hidden": hidden,
+            "_note": placement.get("_note") or _PLACEMENT_NOTE,
+            "_hidden_disabled": True,
+        }
+    )
+    enabled = load_enabled_map()
+    enabled[strategy_id] = False
+    save_enabled_map(enabled)
+    ensure_router_config()
+    return {
+        "strategy": strategy_id,
+        "ui_panel": "test",
+        "enabled": False,
+        "ui_placement": ui_placement_payload(placement),
+        **get_strategies_payload(),
+    }
 
 
 def save_strategies_prefs(
@@ -2167,6 +2682,7 @@ def set_dual_hedge(enabled: bool) -> dict[str, Any]:
 
 
 def get_strategies_payload() -> dict[str, Any]:
+    apply_hidden_disable_once()
     enabled = load_enabled_map()
     enabled_ids = [sid for sid, on in enabled.items() if on]
     dual_hedge = load_dual_hedge_enabled()
@@ -2175,6 +2691,7 @@ def get_strategies_payload() -> dict[str, Any]:
     catalog = _trained_risk_catalog()
     ml_confidence = load_ml_confidence_map()
     ml_defaults = _ml_confidence_defaults()
+    placement = ensure_strategy_ui_placement()
     return {
         "router": ROUTER_STRATEGY,
         "enabled": enabled,
@@ -2192,6 +2709,7 @@ def get_strategies_payload() -> dict[str, Any]:
         "ml_confidence": ml_confidence,
         "ml_confidence_defaults": ml_defaults,
         "ml_confidence_choices": list(ML_CONFIDENCE_CHOICES),
+        "ui_placement": ui_placement_payload(placement),
     }
 
 
@@ -2200,6 +2718,10 @@ def toggle_strategy(strategy_id: str, enabled: bool) -> dict[str, Any]:
         strategy_id = validate_strategy(strategy_id)
     except PermissionError as exc:
         raise ValueError(str(exc)) from exc
+    apply_hidden_disable_once()
+    panel = effective_ui_panel(strategy_id)
+    if panel == "hidden":
+        raise ValueError("strategy is hidden from UI panels")
     state = load_enabled_map()
     if not enabled:
         active = sum(1 for on in state.values() if on)
@@ -2224,10 +2746,12 @@ def set_all_strategies_enabled(enabled: bool, *, group: str | None = None) -> di
     """Enable or disable strategies in bulk.
 
     group:
-      None / "all" — disable-all pauses everything; enable-all = pack minus test_group + legacy off
-      "main" — only non-test strategies
-      "test" — only test_group strategies
+      None / "all" — disable-all pauses everything; enable-all = main panel pack (not test/hidden)
+      "main" — only strategies currently in Strategies panel
+      "test" — only strategies currently in Тестовые
     """
+    apply_hidden_disable_once()
+    placement = ensure_strategy_ui_placement()
     prev = load_enabled_map()
     pack_ids: set[str] = set()
     legacy_ids: set[str] = set()
@@ -2262,8 +2786,15 @@ def set_all_strategies_enabled(enabled: bool, *, group: str | None = None) -> di
         if user and not tm.user_may_use_strategy(user, sid):
             next_state[sid] = False
             continue
-        is_test = bool(s.get("test_group")) or sid in TEST_STRATEGY_IDS
-        if scope == "main" and is_test:
+        panel = effective_ui_panel(sid, placement)
+        is_test = panel == "test"
+        is_main = panel == "main"
+        if panel == "hidden":
+            # Hidden never participate in enable-all; stay off when disabling all.
+            if not enabled and scope == "all":
+                next_state[sid] = False
+            continue
+        if scope == "main" and not is_main:
             continue
         if scope == "test" and not is_test:
             continue
@@ -2272,15 +2803,19 @@ def set_all_strategies_enabled(enabled: bool, *, group: str | None = None) -> di
         elif sid in legacy_ids:
             next_state[sid] = False
         elif is_test:
-            # Explicit test enable-all
+            next_state[sid] = True
+        elif is_main:
             next_state[sid] = True
         elif pack_ids:
             next_state[sid] = sid in pack_ids and not is_test
         else:
             next_state[sid] = not is_test
-    # Preserve: when enabling main pack, do not force-enable test strategies
+    # Preserve: when enabling main panel, do not force-enable test strategies
     if enabled and scope == "main":
-        for sid in TEST_STRATEGY_IDS:
+        for s in AVAILABLE_STRATEGIES:
+            sid = s["id"]
+            if effective_ui_panel(sid, placement) != "test":
+                continue
             if user and not tm.user_may_use_strategy(user, sid):
                 next_state[sid] = False
                 continue
@@ -2367,12 +2902,13 @@ def set_all_strategies_ml_confidence(
         scope = "all"
 
     def _in_scope(sid: str) -> bool:
-        is_test = sid in TEST_STRATEGY_IDS
+        panel = effective_ui_panel(sid)
         if scope == "main":
-            return not is_test
+            return panel == "main"
         if scope == "test":
-            return is_test
-        return True
+            return panel == "test"
+        # all: visible panels only (never bulk-set hidden)
+        return panel in ("main", "test")
 
     if reset:
         state = dict(prev)
@@ -3187,6 +3723,14 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._json(200, payload)
             return
+        if path == "/stats-bundle":
+            qs = parse_qs(parsed.query)
+            force = str((qs.get("force") or [""])[0]).lower() in ("1", "true", "yes")
+            try:
+                self._json(200, get_stats_bundle(force=force))
+            except Exception as exc:  # noqa: BLE001
+                self._json(500, {"error": str(exc)})
+            return
         if path == "/strategy-rating":
             qs = parse_qs(parsed.query)
             period = (qs.get("period") or ["all"])[0]
@@ -3487,6 +4031,22 @@ class Handler(BaseHTTPRequestHandler):
                         group=str(group) if group is not None else None,
                     ),
                 )
+            elif action == "promote_strategy_to_main":
+                if not self._require_admin():
+                    return
+                strategy_id = data.get("strategy", "")
+                if not strategy_id:
+                    self._json(400, {"error": "strategy required"})
+                    return
+                self._json(200, promote_strategy_to_main(str(strategy_id)))
+            elif action == "demote_strategy_to_test":
+                if not self._require_admin():
+                    return
+                strategy_id = data.get("strategy", "")
+                if not strategy_id:
+                    self._json(400, {"error": "strategy required"})
+                    return
+                self._json(200, demote_strategy_to_test(str(strategy_id)))
             elif action == "toggle_strategy_invert":
                 strategy_id = data.get("strategy", "")
                 if not strategy_id:
@@ -3710,6 +4270,7 @@ def main() -> None:
         strategy_scan=trigger_strategy_scan,
         poll_sec=60,
     )
+    start_stats_cache_scheduler()
     ThreadedHTTPServer((host, port), Handler).serve_forever()
 
 

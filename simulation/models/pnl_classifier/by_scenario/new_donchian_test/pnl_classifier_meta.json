@@ -1,0 +1,101 @@
+{
+  "scenario_id": "new_donchian_test",
+  "experiment_id": "exp14_lgbm_gate045",
+  "model": "lightgbm + sigmoid",
+  "model_key": "lightgbm",
+  "calibrate": true,
+  "calibrate_method": "sigmoid",
+  "min_profit_proba": 0.45,
+  "params": {
+    "n_estimators": 400,
+    "learning_rate": 0.05,
+    "max_depth": 8,
+    "num_leaves": 63,
+    "min_child_samples": 25,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "class_weight": "balanced"
+  },
+  "trained_at": "2026-08-08T08:25:10.915443+00:00",
+  "train_range": "20250101-20260331",
+  "test_range": "20260401-20260625",
+  "fit_mode": "all_cached",
+  "n_train_trades": 14206,
+  "n_test_trades": 4425,
+  "n_train": 14206,
+  "n_test": 4425,
+  "features": [
+    "scenario_id",
+    "pair_base",
+    "scan_type",
+    "group",
+    "strategy",
+    "is_short",
+    "stake_usdt",
+    "stoploss",
+    "roi_at_entry",
+    "hour_utc",
+    "dow_utc",
+    "mins_since_armed",
+    "log_open_rate",
+    "rsi_14",
+    "atr_pct_14",
+    "adx_14",
+    "vol_ratio_20",
+    "ret_1",
+    "ret_4",
+    "ret_12",
+    "trend_12h",
+    "ema_spread_pct",
+    "range_pct",
+    "dist_high_20_pct",
+    "dist_low_20_pct"
+  ],
+  "source": "ml_param_experiments_per_scenario",
+  "accuracy": 0.7044,
+  "roc_auc": 0.7012,
+  "loss_recall": 0.9455,
+  "loss_precision": 0.7044,
+  "profit_recall": 0.2469,
+  "profit_precision": 0.7047,
+  "macro_f1": 0.5865,
+  "confusion_matrix": [
+    [
+      2740,
+      158
+    ],
+    [
+      1150,
+      377
+    ]
+  ],
+  "classification_report": {
+    "loss": {
+      "precision": 0.7043701799485861,
+      "recall": 0.945479641131815,
+      "f1-score": 0.807307012374779,
+      "support": 2898.0
+    },
+    "profit": {
+      "precision": 0.7046728971962617,
+      "recall": 0.24688932547478717,
+      "f1-score": 0.36566440349175555,
+      "support": 1527.0
+    },
+    "accuracy": 0.704406779661017,
+    "macro avg": {
+      "precision": 0.7045215385724239,
+      "recall": 0.5961844833033011,
+      "f1-score": 0.5864857079332673,
+      "support": 4425.0
+    },
+    "weighted avg": {
+      "precision": 0.7044746430530382,
+      "recall": 0.704406779661017,
+      "f1-score": 0.6549028849704,
+      "support": 4425.0
+    }
+  },
+  "strategy": "DonchianBreakoutTestStrategy",
+  "note": "bootstrapped from new_donchian; retrain via train_test_block_3scen_ml.py"
+}

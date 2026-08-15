@@ -47,6 +47,18 @@ STRATEGY_IDS = [
     "AtrChannelBreakoutTestStrategy",
     "AdxMomentumTestStrategy",
     "SupertrendTestStrategy",
+    "CmfZeroCrossStrategy",
+    "CmfZeroCrossTestStrategy",
+    "ScalpEmaCrossTestStrategy",
+    "ChaikinOscTestStrategy",
+    "DonchianBreakoutTestStrategy",
+    "PpoSignalTestStrategy",
+    "DonchianAdxVolComboTestStrategy",
+    "ObvEmaCrossTestStrategy",
+    "ElderRayTestStrategy",
+    "AltVolumeBreakoutTestStrategy",
+    "BollingerRsiTestStrategy",
+    "MacdEmaTestStrategy",
 ]
 
 # Unknown / pack strategies reuse a known scoring profile.
@@ -57,6 +69,18 @@ SCORE_AS: dict[str, str] = {
     "AtrChannelBreakoutTestStrategy": "AdxMomentumStrategy",
     "AdxMomentumTestStrategy": "AdxMomentumStrategy",
     "SupertrendTestStrategy": "SupertrendStrategy",
+    "CmfZeroCrossStrategy": "AdxMomentumStrategy",
+    "CmfZeroCrossTestStrategy": "AdxMomentumStrategy",
+    "ScalpEmaCrossTestStrategy": "SupertrendStrategy",
+    "ChaikinOscTestStrategy": "AdxMomentumStrategy",
+    "DonchianBreakoutTestStrategy": "AdxMomentumStrategy",
+    "PpoSignalTestStrategy": "AdxMomentumStrategy",
+    "DonchianAdxVolComboTestStrategy": "AdxMomentumStrategy",
+    "ObvEmaCrossTestStrategy": "AdxMomentumStrategy",
+    "ElderRayTestStrategy": "AdxMomentumStrategy",
+    "AltVolumeBreakoutTestStrategy": "AdxMomentumStrategy",
+    "BollingerRsiTestStrategy": "BollingerRsiStrategy",
+    "MacdEmaTestStrategy": "MacdEmaStrategy",
 }
 
 
