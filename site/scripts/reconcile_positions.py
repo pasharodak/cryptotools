@@ -57,7 +57,14 @@ def db_path_for_config(base: Path, config_rel: str) -> Path:
     cfg = json.loads((base / config_rel).read_text(encoding="utf-8"))
     raw = cfg.get("db_url", "sqlite:///tradesv3.sqlite")
     name = raw.split("///")[-1]
-    return base / name
+    primary = base / name
+    if primary.exists() and primary.stat().st_size > 0:
+        return primary
+    # Local Windows often keeps DBs under user_data/ while db_url is relative to app root.
+    alt = base / "user_data" / Path(name).name
+    if alt.exists() and alt.stat().st_size > 0:
+        return alt
+    return primary
 
 
 def ft_pair_to_bybit(pair: str) -> str:
@@ -95,13 +102,42 @@ def load_open_trades(base: Path) -> list[dict[str, Any]]:
     return rows
 
 
-def bybit_positions(key: str, secret: str) -> list[dict[str, Any]]:
-    base = "https://api.bybit.com"
-    recv = 60000
+def bybit_api_base(env: dict[str, str] | None = None) -> str:
+    env = env or {}
+    demo_raw = (
+        env.get("BYBIT_DEMO_TRADING")
+        or env.get("CTENGINE__EXCHANGE__DEMO_TRADING")
+        or os.environ.get("BYBIT_DEMO_TRADING")
+        or os.environ.get("CTENGINE__EXCHANGE__DEMO_TRADING")
+        or ""
+    )
+    demo = str(demo_raw).strip().lower() in ("1", "true", "t", "yes", "y", "on")
+    return "https://api-demo.bybit.com" if demo else "https://api.bybit.com"
+
+
+def _bybit_server_skew_ms(base: str) -> int:
+    """Offset to add to local time so Bybit accepts signed requests."""
+    try:
+        r = requests.get(f"{base}/v5/market/time", timeout=10)
+        r.raise_for_status()
+        data = r.json().get("result") or {}
+        server_ms = int(data.get("timeSecond") or 0) * 1000
+        nano = str(data.get("timeNano") or "0")
+        if len(nano) >= 3:
+            server_ms += int(nano[:3])
+        return server_ms - int(time.time() * 1000)
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def bybit_positions(key: str, secret: str, *, env: dict[str, str] | None = None) -> list[dict[str, Any]]:
+    base = bybit_api_base(env)
+    recv = 120000
+    skew = _bybit_server_skew_ms(base)
     positions: list[dict[str, Any]] = []
     cursor = None
     while True:
-        ts = str(int(time.time() * 1000))
+        ts = str(int(time.time() * 1000) + skew)
         params: dict[str, str] = {"category": "linear", "settleCoin": "USDT", "limit": "200"}
         if cursor:
             params["cursor"] = cursor
@@ -132,9 +168,18 @@ def bybit_positions(key: str, secret: str) -> list[dict[str, Any]]:
     return positions
 
 
-def bybit_cancel_order(key: str, secret: str, symbol: str, order_id: str) -> dict[str, Any]:
-    recv = 60000
-    ts = str(int(time.time() * 1000))
+def bybit_cancel_order(
+    key: str,
+    secret: str,
+    symbol: str,
+    order_id: str,
+    *,
+    env: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    base = bybit_api_base(env)
+    recv = 120000
+    skew = _bybit_server_skew_ms(base)
+    ts = str(int(time.time() * 1000) + skew)
     body = json.dumps({"category": "linear", "symbol": symbol, "orderId": order_id})
     sign = hmac.new(
         secret.encode(),
@@ -150,7 +195,7 @@ def bybit_cancel_order(key: str, secret: str, symbol: str, order_id: str) -> dic
         "Content-Type": "application/json",
     }
     r = requests.post(
-        "https://api.bybit.com/v5/order/cancel",
+        f"{base}/v5/order/cancel",
         headers=headers,
         data=body,
         timeout=30,
@@ -197,7 +242,19 @@ def reconcile(
     secret = env.get("BYBIT_API_SECRET", "")
 
     open_trades = load_open_trades(base)
-    positions = bybit_positions(key, secret) if key and secret else []
+    demo_set = str(
+        env.get("BYBIT_DEMO_TRADING") or env.get("CTENGINE__EXCHANGE__DEMO_TRADING") or ""
+    ).strip().lower() in ("1", "true", "t", "yes", "y", "on")
+    if not demo_set:
+        for meta in BOTS.values():
+            try:
+                cfg = json.loads((base / meta["config"]).read_text(encoding="utf-8"))
+                if bool((cfg.get("exchange") or {}).get("demo_trading")):
+                    env = {**env, "BYBIT_DEMO_TRADING": "true"}
+                    break
+            except Exception:  # noqa: BLE001
+                continue
+    positions = bybit_positions(key, secret, env=env) if key and secret else []
 
     bybit_map = {
         (p["symbol"], bybit_side_key(p.get("side", ""))): p for p in positions
@@ -209,6 +266,7 @@ def reconcile(
 
     ghosts: list[dict[str, Any]] = []
     matched: list[dict[str, Any]] = []
+    claims: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for t in open_trades:
         sym = ft_pair_to_bybit(t["pair"])
         side = ft_side_key(t["is_short"])
@@ -218,11 +276,61 @@ def reconcile(
             "pair": t["pair"],
             "side": side,
             "port": t["port"],
+            "amount": float(t.get("amount") or 0),
+            "open_date": t.get("open_date") or "",
         }
+        claims.setdefault((sym, side), []).append(entry)
         if (sym, side) in bybit_map:
             matched.append(entry)
         else:
             ghosts.append(entry)
+
+    # Several bot rows can match one Bybit position — keep one owner, mark extras.
+    bot_rank = {"strategy": 0, "grid": 1, "finder": 2}
+    duplicates: list[dict[str, Any]] = []
+    kept_owners: list[dict[str, Any]] = []
+    for key, rows in claims.items():
+        if len(rows) < 2:
+            continue
+        pos = bybit_map.get(key)
+        if not pos:
+            # Pure ghosts already listed; no exchange size to compare.
+            continue
+        size = float(pos.get("size") or 0)
+
+        def _owner_sort(row: dict[str, Any]) -> tuple:
+            amt_err = abs(float(row.get("amount") or 0) - size)
+            return (
+                amt_err,
+                str(row.get("open_date") or ""),
+                bot_rank.get(str(row.get("bot")), 9),
+                int(row.get("trade_id") or 0),
+            )
+
+        ordered = sorted(rows, key=_owner_sort)
+        keep = ordered[0]
+        kept_owners.append(
+            {
+                "bot": keep["bot"],
+                "trade_id": keep["trade_id"],
+                "pair": keep["pair"],
+                "side": keep["side"],
+                "port": keep["port"],
+                "reason": "amount+oldest",
+            }
+        )
+        for extra in ordered[1:]:
+            duplicates.append(
+                {
+                    "bot": extra["bot"],
+                    "trade_id": extra["trade_id"],
+                    "pair": extra["pair"],
+                    "side": extra["side"],
+                    "port": extra["port"],
+                    "keep_bot": keep["bot"],
+                    "keep_trade_id": keep["trade_id"],
+                }
+            )
 
     exchange_only: list[dict[str, Any]] = []
     ft_keys = {
@@ -242,13 +350,16 @@ def reconcile(
             )
 
     return {
-        "ok": len(ghosts) == 0 and len(exchange_only) == 0,
+        "ok": len(ghosts) == 0 and len(exchange_only) == 0 and len(duplicates) == 0,
         "ft_open_count": len(open_trades),
         "bybit_position_count": len(positions),
         "ghost_count": len(ghosts),
+        "duplicate_count": len(duplicates),
         "exchange_only_count": len(exchange_only),
         "ghosts": ghosts,
         "matched": matched,
+        "duplicates": duplicates,
+        "kept_owners": kept_owners,
         "exchange_only": exchange_only,
         "duplicate_pairs": duplicate_pairs,
         "bybit_positions": [
@@ -263,11 +374,19 @@ def reconcile(
     }
 
 
-def bybit_last_price(key: str, secret: str, symbol: str) -> float | None:
-    """Public ticker — auth unused but kept for signature consistency."""
+def bybit_last_price(
+    key: str,
+    secret: str,
+    symbol: str,
+    *,
+    env: dict[str, str] | None = None,
+) -> float | None:
+    """Public ticker on the same host as the trading account (demo/main)."""
+    del key, secret  # auth unused; signature kept for call-site compatibility
+    base = bybit_api_base(env)
     try:
         r = requests.get(
-            "https://api.bybit.com/v5/market/tickers",
+            f"{base}/v5/market/tickers",
             params={"category": "linear", "symbol": symbol},
             timeout=15,
         )
@@ -290,10 +409,13 @@ def bybit_closed_pnl_near(
     *,
     start_ms: int | None = None,
     end_ms: int | None = None,
+    env: dict[str, str] | None = None,
 ) -> dict[str, Any] | None:
-    """Latest closed-PnL row for symbol (best-effort)."""
-    recv = 60000
-    ts = str(int(time.time() * 1000))
+    """Latest closed-PnL row for symbol (best-effort) from demo/main account."""
+    base = bybit_api_base(env)
+    recv = 120000
+    skew = _bybit_server_skew_ms(base)
+    ts = str(int(time.time() * 1000) + skew)
     params: dict[str, str] = {
         "category": "linear",
         "symbol": symbol,
@@ -318,13 +440,14 @@ def bybit_closed_pnl_near(
     }
     try:
         r = requests.get(
-            f"https://api.bybit.com/v5/position/closed-pnl?{qs}",
+            f"{base}/v5/position/closed-pnl?{qs}",
             headers=headers,
             timeout=20,
         )
         r.raise_for_status()
         data = r.json()
         if data.get("retCode") != 0:
+            logger.warning("closed-pnl %s retCode=%s %s", symbol, data.get("retCode"), data.get("retMsg"))
             return None
         rows = data.get("result", {}).get("list") or []
         return rows[0] if rows else None
@@ -358,6 +481,7 @@ def archive_trade_in_db(
     close_rate: float | None = None,
     profit_abs: float | None = None,
     exit_reason: str = "reconcile",
+    close_date: str | None = None,
 ) -> dict[str, Any]:
     """
     Close an open trade in sqlite without deleting it — keeps history for the UI.
@@ -390,7 +514,7 @@ def archive_trade_in_db(
             stake = float(row["stake_amount"] or 0) or 1.0
             profit_ratio = (profit_abs_calc / stake) if stake else 0.0
 
-        now = time.strftime("%Y-%m-%d %H:%M:%S")
+        close_ts = close_date or time.strftime("%Y-%m-%d %H:%M:%S")
         conn.execute(
             """
             UPDATE trades SET
@@ -405,7 +529,7 @@ def archive_trade_in_db(
             WHERE id = ? AND is_open = 1
             """,
             (
-                now,
+                close_ts,
                 rate,
                 profit_ratio,
                 profit_abs_calc,
@@ -415,14 +539,29 @@ def archive_trade_in_db(
             ),
         )
         # Cancel lingering open/stoploss order rows so the bot stops touching them.
-        conn.execute(
-            """
-            UPDATE orders SET status = 'canceled'
-            WHERE ft_trade_id = ? AND lower(coalesce(status, '')) IN ('open', 'new', 'partially_filled', '')
-            """,
-            (trade_id,),
-        )
+        try:
+            conn.execute(
+                """
+                UPDATE orders SET status = 'canceled'
+                WHERE ft_trade_id = ? AND lower(coalesce(status, '')) IN ('open', 'new', 'partially_filled', '')
+                """,
+                (trade_id,),
+            )
+        except sqlite3.Error:
+            # Minimal executor DBs may lack orders table — trades archive still succeeds.
+            pass
         conn.commit()
+        try:
+            import pair_entry_guard  # noqa: WPS433
+
+            pair_entry_guard.release_pair(
+                None,
+                str(row["pair"]),
+                "sell" if bool(row["is_short"]) else "buy",
+                force=True,
+            )
+        except Exception:  # noqa: BLE001
+            pass
         return {
             "ok": True,
             "action": "archived",
@@ -452,6 +591,7 @@ def fix_ghost_trade(
     base: Path | None = None,
     key: str = "",
     secret: str = "",
+    env: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     port = int(ghost["port"])
     trade_id = int(ghost["trade_id"])
@@ -491,18 +631,35 @@ def fix_ghost_trade(
     symbol = ft_pair_to_bybit(pair)
     close_rate = None
     profit_abs = None
+    close_date: str | None = None
     if key and secret:
-        row = bybit_closed_pnl_near(key, secret, symbol)
+        row = bybit_closed_pnl_near(key, secret, symbol, env=env)
         if row:
             try:
                 if row.get("avgExitPrice"):
                     close_rate = float(row["avgExitPrice"])
                 if row.get("closedPnl") is not None:
                     profit_abs = float(row["closedPnl"])
+                # Prefer exchange close time when available (ms).
+                for tk in ("updatedTime", "createdTime"):
+                    raw_t = row.get(tk)
+                    if raw_t is None:
+                        continue
+                    try:
+                        ms = int(raw_t)
+                        if ms > 10_000_000_000:
+                            close_date = time.strftime(
+                                "%Y-%m-%d %H:%M:%S",
+                                time.gmtime(ms / 1000.0),
+                            )
+                            out["exchange_close_ms"] = ms
+                        break
+                    except (TypeError, ValueError):
+                        pass
             except (TypeError, ValueError):
                 pass
         if close_rate is None:
-            close_rate = bybit_last_price(key, secret, symbol)
+            close_rate = bybit_last_price(key, secret, symbol, env=env)
 
     archived = archive_trade_in_db(
         db,
@@ -510,6 +667,7 @@ def fix_ghost_trade(
         close_rate=close_rate,
         profit_abs=profit_abs,
         exit_reason="reconcile",
+        close_date=close_date,
     )
     out.update(archived)
     # Refresh bot process so ORM doesn't overwrite the archived row with a stale open trade.
@@ -530,6 +688,8 @@ def cancel_orphan_stop_orders(
     key: str,
     secret: str,
     ghosts: list[dict[str, Any]],
+    *,
+    env: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """Cancel untriggered stop orders for ghost trades."""
     results: list[dict[str, Any]] = []
@@ -557,7 +717,7 @@ def cancel_orphan_stop_orders(
                 if not order_id:
                     continue
                 try:
-                    resp = bybit_cancel_order(key, secret, symbol, order_id)
+                    resp = bybit_cancel_order(key, secret, symbol, order_id, env=env)
                     ok = resp.get("retCode") == 0
                     results.append(
                         {
@@ -584,6 +744,70 @@ def cancel_orphan_stop_orders(
     return results
 
 
+def fix_duplicate_trade(
+    dup: dict[str, Any],
+    user: str,
+    password: str,
+    *,
+    base: Path | None = None,
+    key: str = "",
+    secret: str = "",
+    env: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """
+    Extra bot row for a position that already has an owner.
+    Archive in DB only — never forceexit (that would close the real Bybit position).
+    """
+    port = int(dup["port"])
+    trade_id = int(dup["trade_id"])
+    bot = str(dup["bot"])
+    pair = str(dup["pair"])
+    out: dict[str, Any] = {
+        "bot": bot,
+        "trade_id": trade_id,
+        "pair": pair,
+        "action": "archive_duplicate",
+        "keep_bot": dup.get("keep_bot"),
+        "keep_trade_id": dup.get("keep_trade_id"),
+    }
+
+    base = base or DEFAULT_BASE
+    db = db_path_for_bot(base, bot)
+    if not db:
+        out["ok"] = False
+        out["error"] = "db not found"
+        return out
+
+    symbol = ft_pair_to_bybit(pair)
+    close_rate = None
+    profit_abs = None
+    close_date: str | None = None
+    # Best-effort mark-to-market; do not pull closed-pnl (position is still open).
+    if key and secret:
+        close_rate = bybit_last_price(key, secret, symbol, env=env)
+
+    archived = archive_trade_in_db(
+        db,
+        trade_id,
+        close_rate=close_rate,
+        profit_abs=profit_abs,
+        exit_reason="reconcile_duplicate",
+        close_date=close_date,
+    )
+    out.update(archived)
+    out["action"] = "archive_duplicate"
+    try:
+        api_request(port, user, password, "POST", "/reload_config")
+        out["bot_reload"] = "ok"
+    except Exception as exc:
+        out["bot_reload"] = str(exc)
+        out.setdefault(
+            "warning",
+            "Duplicate archived in DB; bot reload failed — restart the bot if it stays open in UI",
+        )
+    return out
+
+
 def fix_reconcile(
     base: Path | None = None,
     env_path: Path | None = None,
@@ -596,9 +820,28 @@ def fix_reconcile(
     key = env.get("BYBIT_API_KEY", "")
     secret = env.get("BYBIT_API_SECRET", "")
 
+    # Re-detect demo from bot configs when env flag missing (same as reconcile()).
+    demo_set = str(
+        env.get("BYBIT_DEMO_TRADING") or env.get("CTENGINE__EXCHANGE__DEMO_TRADING") or ""
+    ).strip().lower() in ("1", "true", "t", "yes", "y", "on")
+    if not demo_set:
+        for meta in BOTS.values():
+            try:
+                cfg = json.loads((base / meta["config"]).read_text(encoding="utf-8"))
+                if bool((cfg.get("exchange") or {}).get("demo_trading")):
+                    env = {**env, "BYBIT_DEMO_TRADING": "true"}
+                    break
+            except Exception:  # noqa: BLE001
+                continue
+
     before = reconcile(base, env_path)
     ghosts = before.get("ghosts") or []
-    cancelled = cancel_orphan_stop_orders(base, key, secret, ghosts) if key and secret else []
+    duplicates = before.get("duplicates") or []
+    cancelled = (
+        cancel_orphan_stop_orders(base, key, secret, ghosts, env=env)
+        if key and secret
+        else []
+    )
     fixed: list[dict[str, Any]] = []
     for ghost in ghosts:
         fixed.append(
@@ -609,6 +852,19 @@ def fix_reconcile(
                 base=base,
                 key=key,
                 secret=secret,
+                env=env,
+            )
+        )
+    for dup in duplicates:
+        fixed.append(
+            fix_duplicate_trade(
+                dup,
+                user,
+                password,
+                base=base,
+                key=key,
+                secret=secret,
+                env=env,
             )
         )
 
@@ -618,7 +874,7 @@ def fix_reconcile(
         "after": after,
         "cancelled_orders": cancelled,
         "fixed": fixed,
-        "ok": after.get("ghost_count", 0) == 0,
+        "ok": bool(after.get("ok")),
     }
 
 

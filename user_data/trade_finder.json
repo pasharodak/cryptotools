@@ -4,21 +4,23 @@
     "sl_atr_mult": 0.8,
     "max_bars": 48,
     "sample_stride": 12,
-    "scan_stride": 2,
-    "min_confidence": 0.52,
+    "scan_stride": 3,
+    "min_confidence": 0.6,
     "stake_usdt": 10,
     "cooldown_bars": 12,
-    "invert_signal": true,
+    "invert_signal": false,
     "train_timerange": "20251101-20260531",
     "train_mode": "trade_db_mixed",
     "random_negative_ratio": 0.5,
-    "model": "xgboost",
+    "model": "transformer",
+    "transformer_model": "models/barrier_transformer/barrier_transformer_5m.pt",
     "train_pairs_source": "player_pair_pool",
     "classifier_gate": {
-        "enabled": true,
+        "enabled": false,
         "scenario_id": "trend_ema",
         "gate_mode": "profit_only",
         "min_confidence": 0.6,
-        "armed_offset_ms": 3600000
+        "armed_offset_ms": 3600000,
+        "note": "Disabled while Finder uses barrier Transformer (already a seq profit gate)"
     }
 }

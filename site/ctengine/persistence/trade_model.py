@@ -355,7 +355,15 @@ class Order(ModelBase):
             ft_order_side=side,
             ft_pair=pair,
             ft_amount=amount or order.get("amount", None) or 0.0,
-            ft_price=price or order.get("price", None),
+            # Market / stop orders from Bybit often have price=None until fill;
+            # ft_price is NOT NULL — fall back to stop/average/safe price.
+            ft_price=price
+            or order.get("price")
+            or order.get("average")
+            or order.get("stopPrice")
+            or order.get("stop_price")
+            or order.get("safe_price")
+            or 0.0,
         )
 
         o.update_from_ccxt_object(order)

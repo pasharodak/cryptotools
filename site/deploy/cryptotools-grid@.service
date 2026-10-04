@@ -12,7 +12,9 @@ EnvironmentFile=-/home/cryptotools/app/user_data/tenants/%i/.env
 ExecStart=/bin/bash -lc 'source /home/cryptotools/app/scripts/load_env.sh /home/cryptotools/app/user_data/tenants/%i/.env && exec /home/cryptotools/app/.venv/bin/ctbot trade --config user_data/tenants/%i/config_grid.json --logfile user_data/tenants/%i/logs/grid.log'
 Restart=on-failure
 RestartSec=30
-MemoryMax=2G
+Slice=cryptotools.slice
+MemoryHigh=550M
+MemoryMax=700M
 
 [Install]
 WantedBy=multi-user.target

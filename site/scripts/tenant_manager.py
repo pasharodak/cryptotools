@@ -153,7 +153,7 @@ def _fernet() -> Fernet:
     return Fernet(base64.urlsafe_b64encode(digest))
 
 
-def encrypt_secrets(payload: dict[str, str]) -> bytes:
+def encrypt_secrets(payload: dict[str, Any]) -> bytes:
     """Encrypt a secrets dict (JSON) with Fernet."""
     data = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     return _fernet().encrypt(data)
@@ -766,6 +766,34 @@ def derive_api_creds(user_id: str) -> tuple[str, str, str]:
     return username, password, jwt_secret
 
 
+def tenant_api_creds(user_id: str) -> tuple[str, str, str]:
+    """Creds the running tenant bot actually uses (from tenants/{id}/.env).
+
+    Fall back to derive_api_creds when .env is missing. Do not rewrite .env here —
+    a running ctbot keeps the password it was started with.
+    """
+    env_path = tenant_user_data(user_id) / ".env"
+    user = pwd = jwt = ""
+    if env_path.is_file():
+        try:
+            for line in env_path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, val = line.split("=", 1)
+                if key == "FREQUI_USERNAME":
+                    user = val
+                elif key == "FREQUI_PASSWORD":
+                    pwd = val
+                elif key == "FREQUI_JWT_SECRET":
+                    jwt = val
+        except OSError:
+            pass
+    if user and pwd:
+        return user, pwd, jwt
+    return derive_api_creds(user_id)
+
+
 def tenant_user_data(user_id: str) -> Path:
     """Path to ``user_data/tenants/{user_id}/``."""
     return TENANTS_DIR / str(user_id)
@@ -797,24 +825,33 @@ def write_tenant_env(user_id: str) -> Path:
 
     bybit_key = ""
     bybit_secret = ""
+    demo_trading = False
     sec = load_user_secrets(user_id)
     if sec:
         bybit_key = str(sec.get("bybit_api_key") or "")
         bybit_secret = str(sec.get("bybit_api_secret") or "")
+        demo_trading = _as_bool(sec.get("bybit_demo_trading"))
 
+    demo_val = "true" if demo_trading else "false"
     lines = [
         f"BYBIT_API_KEY={bybit_key}",
         f"BYBIT_API_SECRET={bybit_secret}",
+        f"BYBIT_DEMO_TRADING={demo_val}",
         f"FREQUI_USERNAME={api_user}",
         f"FREQUI_PASSWORD={api_pass}",
         f"FREQUI_JWT_SECRET={jwt_secret}",
         # Optional direct mappings (load_env.sh also sets these from FREQUI_/BYBIT_):
         f"CTENGINE__EXCHANGE__KEY={bybit_key}",
         f"CTENGINE__EXCHANGE__SECRET={bybit_secret}",
+        f"CTENGINE__EXCHANGE__DEMO_TRADING={demo_val}",
         f"CTENGINE__API_SERVER__USERNAME={api_user}",
         f"CTENGINE__API_SERVER__PASSWORD={api_pass}",
         f"CTENGINE__API_SERVER__JWT_SECRET_KEY={jwt_secret}",
         f"CT_ENABLED_STRATEGIES={td / 'enabled_strategies.json'}",
+        f"CT_TEST_STRATEGY_SETTINGS={td / 'test_strategy_settings.json'}",
+        f"CT_MAX_OPEN_TRADES_PER_STRATEGY={td / 'max_open_trades_per_strategy.json'}",
+        f"CT_DUAL_HEDGE={td / 'dual_hedge.json'}",
+        f"CT_STRATEGY_UI_PLACEMENT={td / 'strategy_ui_placement.json'}",
     ]
     env_path = td / ".env"
     env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -825,55 +862,498 @@ def write_tenant_env(user_id: str) -> Path:
     return env_path
 
 
-def save_user_secrets(user_id: str, key: str, secret: str) -> None:
-    """Encrypt and store Bybit API credentials; refresh tenant .env."""
-    key = (key or "").strip()
-    secret = (secret or "").strip()
-    if not key or not secret:
-        raise ValueError("bybit api key and secret are required")
+def _as_bool(val: Any) -> bool:
+    if isinstance(val, bool):
+        return val
+    return str(val or "").strip().lower() in ("1", "true", "t", "yes", "y", "on")
+
+
+def sync_tenant_demo_trading(user_id: str, demo_trading: bool) -> None:
+    """Keep exchange.demo_trading in tenant bot configs in sync with secrets."""
+    td = tenant_user_data(user_id)
+    if not td.is_dir():
+        return
+    for name in ("config_signal_engine.json", "config_strategy.json", "config_grid.json", "config.json"):
+        path = td / name
+        if not path.is_file():
+            continue
+        try:
+            cfg = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        exchange = dict(cfg.get("exchange") or {})
+        exchange["demo_trading"] = bool(demo_trading)
+        cfg["exchange"] = exchange
+        path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def _mask_value(val: str, *, keep_start: int = 4, keep_end: int = 4) -> str:
+    v = (val or "").strip()
+    if not v:
+        return "—"
+    if len(v) <= keep_start + keep_end:
+        return "•" * min(10, max(4, len(v)))
+    start = v[:keep_start] if keep_start > 0 else ""
+    end = v[-keep_end:] if keep_end > 0 else ""
+    mid = "…" if start or end else "••••"
+    return f"{start}{mid}{end}"
+
+
+def _new_profile_id() -> str:
+    return secrets.token_hex(8)
+
+
+def _empty_secrets_blob() -> dict[str, Any]:
+    return {
+        "bybit_api_key": "",
+        "bybit_api_secret": "",
+        "bybit_demo_trading": False,
+        "active_profile_id": None,
+        "profiles": [],
+    }
+
+
+def _admin_secrets_path() -> Path:
+    return SECRETS_DIR / "admin.enc"
+
+
+def _load_secrets_blob(owner_id: str) -> dict[str, Any]:
+    owner_id = str(owner_id)
+    path = _admin_secrets_path() if owner_id == "admin" else _secrets_path(owner_id)
+    blob = _empty_secrets_blob()
+    if path.is_file():
+        try:
+            loaded = decrypt_secrets(path.read_bytes())
+            if isinstance(loaded, dict):
+                blob.update(loaded)
+        except (OSError, ValueError, json.JSONDecodeError):
+            pass
+    profiles = blob.get("profiles")
+    if not isinstance(profiles, list):
+        profiles = []
+    blob["profiles"] = [p for p in profiles if isinstance(p, dict)]
+
+    # Migrate legacy single-key blob / admin env into a named profile.
+    key = str(blob.get("bybit_api_key") or "").strip()
+    secret = str(blob.get("bybit_api_secret") or "").strip()
+    if owner_id == "admin" and (not key or not secret):
+        key = (os.environ.get("BYBIT_API_KEY") or "").strip()
+        secret = (os.environ.get("BYBIT_API_SECRET") or "").strip()
+        if key and secret:
+            blob["bybit_api_key"] = key
+            blob["bybit_api_secret"] = secret
+            blob["bybit_demo_trading"] = _as_bool(
+                os.environ.get("BYBIT_DEMO_TRADING")
+                or os.environ.get("CTENGINE__EXCHANGE__DEMO_TRADING")
+            )
+    if key and secret and not blob["profiles"]:
+        pid = _new_profile_id()
+        demo = _as_bool(blob.get("bybit_demo_trading"))
+        blob["profiles"] = [
+            {
+                "id": pid,
+                "name": "Demo Trading" if demo else "Live",
+                "bybit_api_key": key,
+                "bybit_api_secret": secret,
+                "demo_trading": demo,
+                "created_at": _utc_now_iso(),
+            }
+        ]
+        blob["active_profile_id"] = pid
+        blob["bybit_api_key"] = key
+        blob["bybit_api_secret"] = secret
+        blob["bybit_demo_trading"] = demo
+        _write_secrets_blob(owner_id, blob)
+    return blob
+
+
+def _write_secrets_blob(owner_id: str, blob: dict[str, Any]) -> None:
+    owner_id = str(owner_id)
     SECRETS_DIR.mkdir(parents=True, exist_ok=True)
-    token = encrypt_secrets(
-        {"bybit_api_key": key, "bybit_api_secret": secret}
-    )
-    path = _secrets_path(user_id)
-    path.write_bytes(token)
+    path = _admin_secrets_path() if owner_id == "admin" else _secrets_path(owner_id)
+    path.write_bytes(encrypt_secrets(blob))
     try:
         os.chmod(path, 0o600)
     except OSError:
         pass
-    # Keep tenant env in sync when tenant dir exists (or create env early).
-    write_tenant_env(user_id)
 
 
-def secrets_status(user_id: str) -> dict[str, Any]:
-    """Status of stored secrets for a tenant (no secret values)."""
-    sec = load_user_secrets(user_id)
-    has = bool(
-        sec
-        and str(sec.get("bybit_api_key") or "").strip()
-        and str(sec.get("bybit_api_secret") or "").strip()
+def _public_profiles(blob: dict[str, Any]) -> list[dict[str, Any]]:
+    active_id = str(blob.get("active_profile_id") or "")
+    out: list[dict[str, Any]] = []
+    for p in blob.get("profiles") or []:
+        if not isinstance(p, dict):
+            continue
+        pid = str(p.get("id") or "")
+        if not pid:
+            continue
+        key = str(p.get("bybit_api_key") or "")
+        secret = str(p.get("bybit_api_secret") or "")
+        demo = _as_bool(p.get("demo_trading"))
+        out.append(
+            {
+                "id": pid,
+                "name": str(p.get("name") or ("Demo" if demo else "Live")),
+                "demo_trading": demo,
+                "mode_label": "Demo" if demo else "Live",
+                "api_key": _mask_value(key, keep_start=6, keep_end=4),
+                "api_secret": _mask_value(secret, keep_start=0, keep_end=4),
+                "active": pid == active_id,
+                "created_at": str(p.get("created_at") or ""),
+            }
+        )
+    return out
+
+
+def _apply_active_credentials(owner_id: str, blob: dict[str, Any]) -> None:
+    """Push active profile into env (admin) or tenant .env (user)."""
+    owner_id = str(owner_id)
+    active_id = str(blob.get("active_profile_id") or "")
+    active = None
+    for p in blob.get("profiles") or []:
+        if isinstance(p, dict) and str(p.get("id") or "") == active_id:
+            active = p
+            break
+    if not active:
+        blob["bybit_api_key"] = ""
+        blob["bybit_api_secret"] = ""
+        blob["bybit_demo_trading"] = False
+        blob["active_profile_id"] = None
+        _write_secrets_blob(owner_id, blob)
+        if owner_id == "admin":
+            _apply_admin_env("", "", False)
+        else:
+            write_tenant_env(owner_id)
+            sync_tenant_demo_trading(owner_id, False)
+        return
+    key = str(active.get("bybit_api_key") or "").strip()
+    secret = str(active.get("bybit_api_secret") or "").strip()
+    demo = _as_bool(active.get("demo_trading"))
+    blob["bybit_api_key"] = key
+    blob["bybit_api_secret"] = secret
+    blob["bybit_demo_trading"] = demo
+    _write_secrets_blob(owner_id, blob)
+    if owner_id == "admin":
+        _apply_admin_env(key, secret, demo)
+    else:
+        write_tenant_env(owner_id)
+        sync_tenant_demo_trading(owner_id, demo)
+
+
+def _apply_admin_env(key: str, secret: str, demo_trading: bool) -> None:
+    demo_val = "true" if demo_trading else "false"
+    updates = {
+        "BYBIT_API_KEY": key,
+        "BYBIT_API_SECRET": secret,
+        "BYBIT_DEMO_TRADING": demo_val,
+        "CTENGINE__EXCHANGE__KEY": key,
+        "CTENGINE__EXCHANGE__SECRET": secret,
+        "CTENGINE__EXCHANGE__DEMO_TRADING": demo_val,
+    }
+    env_path = _admin_env_path()
+    _upsert_env_file(env_path, updates)
+    for k, v in updates.items():
+        os.environ[k] = v
+    sync_admin_demo_trading(bool(demo_trading))
+
+
+def save_user_secrets(
+    user_id: str,
+    key: str,
+    secret: str,
+    *,
+    demo_trading: bool = False,
+    name: str | None = None,
+) -> dict[str, Any]:
+    """Add/activate a named Bybit key profile for a tenant."""
+    return upsert_key_profile(
+        str(user_id),
+        key,
+        secret,
+        demo_trading=demo_trading,
+        name=name,
     )
+
+
+def upsert_key_profile(
+    owner_id: str,
+    key: str,
+    secret: str,
+    *,
+    demo_trading: bool = False,
+    name: str | None = None,
+) -> dict[str, Any]:
+    """Add a named key profile (or replace same name) and make it active."""
+    key = (key or "").strip()
+    secret = (secret or "").strip()
+    if not key or not secret:
+        raise ValueError("bybit api key and secret are required")
+    owner_id = str(owner_id)
+    blob = _load_secrets_blob(owner_id)
+    demo = bool(demo_trading)
+    label = (name or "").strip() or ("Demo Trading" if demo else "Live")
+    profiles = list(blob.get("profiles") or [])
+    existing = None
+    for p in profiles:
+        if isinstance(p, dict) and str(p.get("name") or "").strip().lower() == label.lower():
+            existing = p
+            break
+    if existing is not None:
+        existing["bybit_api_key"] = key
+        existing["bybit_api_secret"] = secret
+        existing["demo_trading"] = demo
+        existing["name"] = label
+        pid = str(existing.get("id") or _new_profile_id())
+        existing["id"] = pid
+    else:
+        pid = _new_profile_id()
+        profiles.append(
+            {
+                "id": pid,
+                "name": label,
+                "bybit_api_key": key,
+                "bybit_api_secret": secret,
+                "demo_trading": demo,
+                "created_at": _utc_now_iso(),
+            }
+        )
+    blob["profiles"] = profiles
+    blob["active_profile_id"] = pid
+    _apply_active_credentials(owner_id, blob)
+    if owner_id != "admin":
+        try:
+            bots = restart_tenant_bots(owner_id)
+        except Exception:
+            bots = {}
+    else:
+        bots = {}
     return {
-        "user_id": str(user_id),
-        "has_secrets": has,
-        "has_bybit_api_key": bool(sec and str(sec.get("bybit_api_key") or "").strip()),
-        "has_bybit_api_secret": bool(
-            sec and str(sec.get("bybit_api_secret") or "").strip()
-        ),
+        "ok": True,
+        "user_id": owner_id,
+        "demo_trading": demo,
+        "active_profile_id": pid,
+        "profiles": _public_profiles(blob),
+        "bots_restarted": bots,
     }
 
 
-def admin_secrets_status() -> dict[str, Any]:
-    """Admin Bybit secrets come from process env (not duplicated in .enc)."""
-    key = (os.environ.get("BYBIT_API_KEY") or "").strip()
-    secret = (os.environ.get("BYBIT_API_SECRET") or "").strip()
+def delete_key_profile(owner_id: str, profile_id: str) -> dict[str, Any]:
+    owner_id = str(owner_id)
+    profile_id = str(profile_id or "").strip()
+    if not profile_id:
+        raise ValueError("profile_id required")
+    blob = _load_secrets_blob(owner_id)
+    profiles = [
+        p
+        for p in (blob.get("profiles") or [])
+        if isinstance(p, dict) and str(p.get("id") or "") != profile_id
+    ]
+    if len(profiles) == len(blob.get("profiles") or []):
+        raise KeyError(f"profile not found: {profile_id}")
+    blob["profiles"] = profiles
+    if str(blob.get("active_profile_id") or "") == profile_id:
+        blob["active_profile_id"] = str(profiles[0]["id"]) if profiles else None
+    _apply_active_credentials(owner_id, blob)
+    if owner_id != "admin":
+        try:
+            bots = restart_tenant_bots(owner_id)
+        except Exception:
+            bots = {}
+    else:
+        bots = {}
     return {
+        "ok": True,
+        "user_id": owner_id,
+        "profiles": _public_profiles(blob),
+        "active_profile_id": blob.get("active_profile_id"),
+        "bots_restarted": bots,
+    }
+
+
+def activate_key_profile(owner_id: str, profile_id: str) -> dict[str, Any]:
+    owner_id = str(owner_id)
+    profile_id = str(profile_id or "").strip()
+    blob = _load_secrets_blob(owner_id)
+    found = False
+    for p in blob.get("profiles") or []:
+        if isinstance(p, dict) and str(p.get("id") or "") == profile_id:
+            found = True
+            break
+    if not found:
+        raise KeyError(f"profile not found: {profile_id}")
+    blob["active_profile_id"] = profile_id
+    _apply_active_credentials(owner_id, blob)
+    if owner_id != "admin":
+        try:
+            bots = restart_tenant_bots(owner_id)
+        except Exception:
+            bots = {}
+    else:
+        bots = {}
+    return {
+        "ok": True,
+        "user_id": owner_id,
+        "active_profile_id": profile_id,
+        "profiles": _public_profiles(blob),
+        "bots_restarted": bots,
+    }
+
+
+def _enrich_trade_capability(status: dict[str, Any], key: str, secret: str, demo: bool) -> dict[str, Any]:
+    """Probe Bybit key permissions; attach read_only / can_trade / trade_block_reason."""
+    status.setdefault("read_only", None)
+    status.setdefault("can_trade", None)
+    status.setdefault("trade_block_reason", None)
+    status.setdefault("api_key_note", None)
+    if not key or not secret:
+        status["can_trade"] = False
+        status["trade_block_reason"] = "API-ключи не заданы"
+        return status
+    try:
+        from user_exchange import UserBybitExchange
+
+        ex = UserBybitExchange(key, secret, demo_trading=bool(demo))
+        try:
+            ex.sync_time()
+        except Exception:
+            pass
+        info = ex.query_api_key()
+        status["read_only"] = int(info.get("readOnly") or 0) == 1
+        status["api_key_note"] = str(info.get("note") or "") or None
+        block = ex.trade_block_reason()
+        status["trade_block_reason"] = block
+        status["can_trade"] = block is None
+    except Exception as exc:
+        status["can_trade"] = None
+        status["trade_block_reason"] = f"не удалось проверить ключ: {exc}"
+    return status
+
+
+def secrets_status(user_id: str) -> dict[str, Any]:
+    """Status of stored secrets for a tenant (no raw secret values)."""
+    blob = _load_secrets_blob(str(user_id))
+    key = str(blob.get("bybit_api_key") or "").strip()
+    secret = str(blob.get("bybit_api_secret") or "").strip()
+    has = bool(key and secret)
+    demo = bool(_as_bool(blob.get("bybit_demo_trading")))
+    status = {
+        "user_id": str(user_id),
+        "has_secrets": has,
+        "has_bybit_api_key": bool(key),
+        "has_bybit_api_secret": bool(secret),
+        "demo_trading": demo,
+        "active_profile_id": blob.get("active_profile_id"),
+        "profiles": _public_profiles(blob),
+    }
+    return _enrich_trade_capability(status, key, secret, demo)
+
+
+def admin_secrets_status() -> dict[str, Any]:
+    """Admin Bybit secrets: encrypted profiles + active sync to process env."""
+    blob = _load_secrets_blob("admin")
+    key = str(blob.get("bybit_api_key") or "").strip() or (
+        os.environ.get("BYBIT_API_KEY") or ""
+    ).strip()
+    secret = str(blob.get("bybit_api_secret") or "").strip() or (
+        os.environ.get("BYBIT_API_SECRET") or ""
+    ).strip()
+    demo = _as_bool(blob.get("bybit_demo_trading")) if key else _as_bool(
+        os.environ.get("BYBIT_DEMO_TRADING")
+        or os.environ.get("CTENGINE__EXCHANGE__DEMO_TRADING")
+    )
+    status = {
         "user_id": "admin",
         "has_secrets": bool(key and secret),
         "has_bybit_api_key": bool(key),
         "has_bybit_api_secret": bool(secret),
-        "source": "env",
+        "demo_trading": demo,
+        "active_profile_id": blob.get("active_profile_id"),
+        "profiles": _public_profiles(blob),
+        "source": "profiles",
     }
+    return _enrich_trade_capability(status, key, secret, bool(demo))
+
+
+def _admin_env_path() -> Path:
+    raw = (os.environ.get("CT_ENV") or "").strip()
+    if raw:
+        return Path(raw)
+    # Local default: site/.env ; prod often uses ~/.cryptotools.env via CT_ENV.
+    candidate = BASE / ".env"
+    if candidate.is_file():
+        return candidate
+    return Path.home() / ".cryptotools.env"
+
+
+def _upsert_env_file(path: Path, updates: dict[str, str]) -> None:
+    """Update or append KEY=value lines; preserve unrelated content."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines: list[str] = []
+    if path.is_file():
+        lines = path.read_text(encoding="utf-8").splitlines()
+    seen: set[str] = set()
+    out: list[str] = []
+    for line in lines:
+        raw = line.rstrip("\r")
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            out.append(raw)
+            continue
+        key, _ = stripped.split("=", 1)
+        key = key.strip()
+        if key in updates:
+            out.append(f"{key}={updates[key]}")
+            seen.add(key)
+        else:
+            out.append(raw)
+    for key, val in updates.items():
+        if key not in seen:
+            out.append(f"{key}={val}")
+    text = "\n".join(out)
+    if text and not text.endswith("\n"):
+        text += "\n"
+    path.write_text(text, encoding="utf-8")
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
+def sync_admin_demo_trading(demo_trading: bool) -> None:
+    """Keep exchange.demo_trading in admin bot configs in sync with env flag."""
+    ud = BASE / "user_data"
+    for name in ("config_strategy.json", "config_grid.json", "config.json"):
+        path = ud / name
+        if not path.is_file():
+            continue
+        try:
+            cfg = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        exchange = dict(cfg.get("exchange") or {})
+        exchange["demo_trading"] = bool(demo_trading)
+        cfg["exchange"] = exchange
+        path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def save_admin_secrets(
+    key: str,
+    secret: str,
+    *,
+    demo_trading: bool = False,
+    name: str | None = None,
+) -> dict[str, Any]:
+    """Add/activate admin Bybit key profile and sync active creds to .env."""
+    result = upsert_key_profile(
+        "admin",
+        key,
+        secret,
+        demo_trading=demo_trading,
+        name=name,
+    )
+    result["env_file"] = str(_admin_env_path())
+    result["source"] = "profiles"
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -921,6 +1401,7 @@ def _minimal_config(bot: str, user_id: str, port: int, stake: float) -> dict[str
             "name": "bybit",
             "key": "",
             "secret": "",
+            "demo_trading": False,
             "pair_whitelist": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
             "pair_blacklist": [],
         },
@@ -960,6 +1441,8 @@ def _patch_tenant_config(
     exchange = dict(cfg.get("exchange") or {})
     exchange["key"] = ""
     exchange["secret"] = ""
+    sec = load_user_secrets(user_id)
+    exchange["demo_trading"] = bool(sec and _as_bool(sec.get("bybit_demo_trading")))
     cfg["exchange"] = exchange
 
     api = dict(cfg.get("api_server") or {})
@@ -1007,6 +1490,34 @@ def provision_tenant(user_id: str, ports: dict[str, int]) -> Path:
     }
     _atomic_write_json(td / "bot_limits.json", bot_limits, mode=0o644)
     _atomic_write_json(td / "max_open_trades_per_strategy.json", {"value": 0}, mode=0o644)
+    test_settings_src = global_ud / "test_strategy_settings.json"
+    if test_settings_src.is_file():
+        try:
+            shutil.copy2(test_settings_src, td / "test_strategy_settings.json")
+        except OSError:
+            _atomic_write_json(
+                td / "test_strategy_settings.json",
+                {
+                    "max_open_trades": 3,
+                    "max_open_trades_per_strategy": 2,
+                    "stake_amount": 5.0,
+                    "stoploss": -0.02,
+                    "take_profit": 0.02,
+                },
+                mode=0o644,
+            )
+    else:
+        _atomic_write_json(
+            td / "test_strategy_settings.json",
+            {
+                "max_open_trades": 3,
+                "max_open_trades_per_strategy": 2,
+                "stake_amount": 5.0,
+                "stoploss": -0.02,
+                "take_profit": 0.02,
+            },
+            mode=0o644,
+        )
 
     enabled_src = global_ud / "enabled_strategies.json"
     if enabled_src.is_file():
@@ -1172,6 +1683,7 @@ def proxy_bot_request(
     query: Optional[dict[str, Any]] = None,
     body_bytes: Optional[bytes] = None,
     content_type: Optional[str] = None,
+    timeout: float = 60,
 ) -> tuple[int, dict[str, str], bytes]:
     """Proxy an HTTP call to the user's bot API.
 
@@ -1192,7 +1704,7 @@ def proxy_bot_request(
         api_user = (os.environ.get("FREQUI_USERNAME") or "cryptotools").strip()
         api_pass = os.environ.get("FREQUI_PASSWORD") or ""
     else:
-        api_user, api_pass, _jwt = derive_api_creds(str(user["id"]))
+        api_user, api_pass, _jwt = tenant_api_creds(str(user["id"]))
 
     path = (path or "").lstrip("/")
     # Preserve path segments safely
@@ -1216,7 +1728,7 @@ def proxy_bot_request(
 
     req = Request(url, data=data, headers=headers, method=(method or "GET").upper())
     try:
-        with urlopen(req, timeout=60) as resp:
+        with urlopen(req, timeout=float(timeout)) as resp:
             resp_headers = {k.lower(): v for k, v in resp.headers.items()}
             return int(resp.status), resp_headers, resp.read()
     except HTTPError as exc:
@@ -1229,6 +1741,13 @@ def proxy_bot_request(
     except TimeoutError:
         err = json.dumps({"error": "upstream_timeout"}).encode()
         return 504, {"content-type": "application/json"}, err
+    except Exception as exc:  # noqa: BLE001 — socket.timeout on some Pythons
+        name = type(exc).__name__.lower()
+        if "timeout" in name or "timed out" in str(exc).lower():
+            err = json.dumps({"error": "upstream_timeout"}).encode()
+            return 504, {"content-type": "application/json"}, err
+        err = json.dumps({"error": "upstream_error", "detail": str(exc)}).encode()
+        return 502, {"content-type": "application/json"}, err
 
 
 __all__ = [
@@ -1258,8 +1777,12 @@ __all__ = [
     "derive_api_creds",
     "write_tenant_env",
     "save_user_secrets",
+    "upsert_key_profile",
+    "delete_key_profile",
+    "activate_key_profile",
     "secrets_status",
     "admin_secrets_status",
+    "save_admin_secrets",
     "bot_ports_for_user",
     "start_tenant_bots",
     "stop_tenant_bots",

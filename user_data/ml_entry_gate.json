@@ -4,8 +4,9 @@
     "block_predicted": "loss",
     "min_confidence": 0.0,
     "grid_bots": {
-        "gate_mode": "profit_only",
-        "min_confidence": 0.7
+        "gate_mode": "block_loss",
+        "min_confidence": 0.85,
+        "note": "live_grid isotonic never predicts profit under profit_only; block only high-conf loss"
     },
     "finder_bots": {
         "gate_mode": "profit_only",

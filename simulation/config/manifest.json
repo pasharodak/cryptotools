@@ -1,8 +1,8 @@
 {
     "live_project_root": "D:/cryptotools/site",
     "sim_project_root": "D:/cryptotools/simulation",
-    "timerange": "20250101-20260706",
-    "player_timerange": "20250101-20260706",
+    "timerange": "20250101-20260928",
+    "player_timerange": "20250101-20260928",
     "sim_tuning": "simulation/config/sim_tuning.json",
     "player_pairs": [],
     "player_pair_selection": "scan_ranging",

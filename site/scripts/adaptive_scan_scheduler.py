@@ -12,7 +12,8 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-log = logging.getLogger("adaptive_scan")
+# Share pair-config file handler (pair_config logger is wired in pair_config_server).
+log = logging.getLogger("pair_config.adaptive_scan")
 
 # Minutes between scan passes; after 30 min cycle resets to 5.
 SCAN_INTERVALS_MIN = (5, 10, 15, 30)
@@ -25,7 +26,14 @@ COUNT_URLS = {
     "strategy": "http://127.0.0.1:8081/api/v1/count",
     "grid": "http://127.0.0.1:8082/api/v1/count",
 }
+SHOW_CONFIG_URLS = {
+    "finder": "http://127.0.0.1:8080/api/v1/show_config",
+    "strategy": "http://127.0.0.1:8081/api/v1/show_config",
+    "grid": "http://127.0.0.1:8082/api/v1/show_config",
+}
 BOTS = ("finder", "strategy", "grid")
+# bot -> True after one "not running" note (avoid log spam while UI polls /adaptive-scan)
+_STOPPED_NOTED: dict[str, bool] = {}
 
 _STATE: dict[str, Any] | None = None
 _STATE_LOCK = threading.Lock()
@@ -90,6 +98,17 @@ def get_bot_slots(base: Path) -> dict[str, Any]:
     open_total = 0
     max_total = 0
     for bot in BOTS:
+        cfg = _api_get(SHOW_CONFIG_URLS[bot]) or {}
+        state = str(cfg.get("state") or "").lower()
+        # Process down or trader STOPPED: /count would 502-spam bot logs — skip.
+        if not cfg or (state and state != "running"):
+            note_state = state or "offline"
+            if not _STOPPED_NOTED.get(bot):
+                _STOPPED_NOTED[bot] = True
+                log.info("%s not running (state=%s) — skip /count until start", bot, note_state)
+            per_bot[bot] = {"open": 0, "max": 0, "free": 0, "state": note_state}
+            continue
+        _STOPPED_NOTED.pop(bot, None)
         data = _api_get(COUNT_URLS[bot]) or {}
         current = int(data.get("current") or 0)
         maximum = int(data.get("max") or 0)
@@ -97,6 +116,7 @@ def get_bot_slots(base: Path) -> dict[str, Any]:
             "open": current,
             "max": maximum,
             "free": max(0, maximum - current),
+            "state": state or "running",
         }
         open_total += current
         max_total += maximum

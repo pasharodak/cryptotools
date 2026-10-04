@@ -1,0 +1,10 @@
+[Unit]
+Description=Every 5 min watchdog for shared bots
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

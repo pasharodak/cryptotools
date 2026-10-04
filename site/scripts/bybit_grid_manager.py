@@ -39,6 +39,7 @@ def tenant_bybit_context(user_data: Path | None, env_file: Path | None = None):
 
 
 BYBIT_API = "https://api.bybit.com"
+BYBIT_DEMO_API = "https://api-demo.bybit.com"
 GRID_MODE_LABELS = {1: "neutral", 2: "long", 3: "short"}
 GRID_TYPE_LABELS = {1: "arithmetic", 2: "geometric"}
 # Neutral grid with leverage often fills SL worse than configured % (empirical ~lev×0.8).
@@ -106,6 +107,34 @@ def load_env_file(path: Path) -> dict[str, str]:
         k, v = line.split("=", 1)
         env[k.strip()] = v.strip().strip('"').strip("'")
     return env
+
+
+def _env_truthy(val: str | None) -> bool:
+    return str(val or "").strip().lower() in ("1", "true", "t", "yes", "y", "on")
+
+
+def is_demo_trading() -> bool:
+    """Demo API keys must hit api-demo.bybit.com (not api.bybit.com)."""
+    tenant_env = _tenant_env_file.get()
+    if tenant_env is not None:
+        env = load_env_file(tenant_env)
+        if "BYBIT_DEMO_TRADING" in env or "CTENGINE__EXCHANGE__DEMO_TRADING" in env:
+            return _env_truthy(
+                env.get("BYBIT_DEMO_TRADING") or env.get("CTENGINE__EXCHANGE__DEMO_TRADING")
+            )
+    if os.environ.get("BYBIT_DEMO_TRADING") is not None:
+        return _env_truthy(os.environ.get("BYBIT_DEMO_TRADING"))
+    if os.environ.get("CTENGINE__EXCHANGE__DEMO_TRADING") is not None:
+        return _env_truthy(os.environ.get("CTENGINE__EXCHANGE__DEMO_TRADING"))
+    env_file = Path(os.environ.get("CT_ENV", ft_base().parent / ".cryptotools.env"))
+    env = load_env_file(env_file)
+    return _env_truthy(
+        env.get("BYBIT_DEMO_TRADING") or env.get("CTENGINE__EXCHANGE__DEMO_TRADING")
+    )
+
+
+def bybit_api_base() -> str:
+    return BYBIT_DEMO_API if is_demo_trading() else BYBIT_API
 
 
 def get_credentials() -> tuple[str, str]:
@@ -232,15 +261,17 @@ def _bybit_request(
                             "X-BAPI-RECV-WINDOW": recv_window,
                         }
                     )
+                api_base = bybit_api_base()
                 req = urllib.request.Request(
-                    f"{BYBIT_API}{path}",
+                    f"{api_base}{path}",
                     data=payload.encode(),
                     headers=headers,
                     method="POST",
                 )
             else:
+                api_base = bybit_api_base()
                 qs = urllib.parse.urlencode(params or {}, doseq=True)
-                url = f"{BYBIT_API}{path}?{qs}" if qs else f"{BYBIT_API}{path}"
+                url = f"{api_base}{path}?{qs}" if qs else f"{api_base}{path}"
                 headers: dict[str, str] = {}
                 if signed:
                     key, secret = get_credentials()
@@ -1563,6 +1594,7 @@ def get_status_payload() -> dict[str, Any]:
     payload["tp_sl_preview"] = tp_sl_preview(cfg.get("defaults", {}))
     payload["credentials_ok"] = creds_ok
     payload["credentials_error"] = creds_error
+    payload["demo_trading"] = is_demo_trading()
     if creds_ok:
         try:
             payload["funding"] = funding_status(cfg)

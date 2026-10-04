@@ -1,0 +1,9 @@
+[Unit]
+Description=Watchdog for CryptoTools shared bots
+
+[Service]
+Type=oneshot
+ExecStart=/home/cryptotools/app/deploy/watchdog-shared-bots.sh
+
+[Install]
+WantedBy=multi-user.target

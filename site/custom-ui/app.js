@@ -40,7 +40,6 @@ const BOTS = {
   },
 };
 
-const MAX_TRADES_LIMIT = 50;
 const STAKE_MIN = 1;
 const STAKE_MAX = 100;
 const STRATEGY_SL_MIN = 1;
@@ -52,7 +51,7 @@ const TEST_SL_MAX = 20;
 const TEST_TP_MIN = 0.5;
 const TEST_TP_MAX = 50;
 const STAKE_EDITABLE_BOTS = new Set(["grid", "strategy"]);
-const FINDER_STATS_LABEL = "ML Finder (XGBoost scanner)";
+const FINDER_STATS_LABEL = "ML Finder (Transformer)";
 const GRID_STATS_LABEL = "Grid (BB+ADX) + ML gate";
 const STRATEGY_STATS_LABEL = "Стратегии + ML gate";
 const BYBIT_GRID_STATS_LABEL = "Bybit Grid";
@@ -101,11 +100,11 @@ let mlConfidenceDefaults = {};
 let mlConfidenceChoices = [0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95];
 let strategyRisk = { stoploss_pct: 5, take_profit_pct: 10 };
 let testSettings = {
-  max_open_trades: 3,
-  max_open_trades_per_strategy: 0,
+  max_open_trades: 8,
+  max_open_trades_per_strategy: 2,
   stake_amount: 5,
-  stoploss_pct: 3,
-  take_profit_pct: 1.2,
+  stoploss_pct: 2,
+  take_profit_pct: 2,
 };
 let dualHedgeEnabled = false;
 let allowedBlocks = null; // null = all
@@ -118,6 +117,11 @@ let lastBybitGridRefresh = 0;
 const BYBIT_GRID_REFRESH_MS = 30000;
 const WHITELIST_REFRESH_MS = 60000;
 const whitelistCache = {};
+/** Last successful bot payload — keep UI filled while refresh is in flight / fails. */
+const botLiveCache = {};
+let serverStatusCache = null;
+let gridScanInfoText = null;
+let strategyScanInfoText = null;
 let tokens = { finder: null, strategy: null, grid: null };
 let creds = { user: "", pass: "" };
 let sessionToken = "";
@@ -321,7 +325,95 @@ function showReloadWarning(data) {
   if (el) {
     el.textContent = msg;
     el.classList.remove("hidden");
+  } else {
+    console.warn("reload_warning", msg);
   }
+}
+
+/** Keep UI/limit values from being overwritten by a stale live show_config after save. */
+const limitPins = {
+  maxTrades: {}, // bot -> { value, until }
+  maxPerStrategy: null, // { value, until } | null
+  testMaxOpen: null,
+  testMaxPer: null,
+  stake: {}, // bot -> { value, until }
+};
+const LIMIT_PIN_MS = 120000;
+/** Keep trade cards expanded across refreshAll / paintBotLive re-renders. */
+const expandedTradeIds = new Set(); // `${bot}:${tradeId}`
+
+function tradeExpandKey(bot, tradeId) {
+  return `${bot}:${tradeId}`;
+}
+
+function isTradeExpanded(bot, tradeId) {
+  return expandedTradeIds.has(tradeExpandKey(bot, tradeId));
+}
+
+function setTradeExpanded(bot, tradeId, expanded) {
+  const key = tradeExpandKey(bot, tradeId);
+  if (expanded) expandedTradeIds.add(key);
+  else expandedTradeIds.delete(key);
+}
+
+function pinMaxTrades(bot, value) {
+  const n = Math.round(Number(value));
+  if (!Number.isFinite(n) || n < 0) return;
+  limitPins.maxTrades[bot] = { value: n, until: Date.now() + LIMIT_PIN_MS };
+  BOTS[bot].maxTrades = n;
+}
+
+function applyPinnedMaxTrades(bot, fromLive) {
+  const pin = limitPins.maxTrades[bot];
+  if (pin && Date.now() < pin.until) {
+    BOTS[bot].maxTrades = pin.value;
+    return pin.value;
+  }
+  const n = Number(fromLive);
+  if (Number.isFinite(n) && n >= 0) {
+    BOTS[bot].maxTrades = Math.round(n);
+  }
+  return BOTS[bot].maxTrades;
+}
+
+function pinMaxPerStrategy(value) {
+  const n = Math.round(Number(value));
+  if (!Number.isFinite(n) || n < 0) return;
+  limitPins.maxPerStrategy = { value: n, until: Date.now() + LIMIT_PIN_MS };
+  BOTS.strategy.maxPerStrategy = n;
+}
+
+function applyPinnedMaxPerStrategy(fromLive) {
+  const pin = limitPins.maxPerStrategy;
+  if (pin && Date.now() < pin.until) {
+    BOTS.strategy.maxPerStrategy = pin.value;
+    return pin.value;
+  }
+  if (fromLive != null && Number.isFinite(Number(fromLive))) {
+    BOTS.strategy.maxPerStrategy = Math.round(Number(fromLive));
+  }
+  return BOTS.strategy.maxPerStrategy;
+}
+
+function pinTestMaxOpen(value) {
+  const n = Math.round(Number(value));
+  if (!Number.isFinite(n) || n < 0) return;
+  limitPins.testMaxOpen = { value: n, until: Date.now() + LIMIT_PIN_MS };
+  testSettings.max_open_trades = n;
+}
+
+function pinTestMaxPer(value) {
+  const n = Math.round(Number(value));
+  if (!Number.isFinite(n) || n < 0) return;
+  limitPins.testMaxPer = { value: n, until: Date.now() + LIMIT_PIN_MS };
+  testSettings.max_open_trades_per_strategy = n;
+}
+
+function applyPinnedTestSettings() {
+  const o = limitPins.testMaxOpen;
+  if (o && Date.now() < o.until) testSettings.max_open_trades = o.value;
+  const p = limitPins.testMaxPer;
+  if (p && Date.now() < p.until) testSettings.max_open_trades_per_strategy = p.value;
 }
 
 function authHeader(_bot) {
@@ -460,8 +552,14 @@ function applyAuthMeState(me) {
   allowedBlocks = me?.allowed_blocks === undefined ? null : me.allowed_blocks;
   allowedStrategies = me?.allowed_strategies === undefined ? null : me.allowed_strategies;
   if (me?.permission_catalog) permissionCatalog = me.permission_catalog;
+  sharedStackMode = !!(me?.shared_stack?.mode === "shared" || me?.shared_stack?.signal_engine);
+  sharedStackStatus = me?.shared_stack || sharedStackStatus;
+  tradingFlags = me?.trading_flags || tradingFlags;
+  if (me?.bots_control) applyBotControlSnapshot(me.bots_control);
+  if (sharedStackMode) paintSharedStrategyState();
   if (currentUser?.role) localStorage.setItem(SESSION_ROLE_KEY, currentUser.role);
   localStorage.setItem(SESSION_IMPERSONATING_KEY, isImpersonating ? "1" : "0");
+  if (sessionToken && !botsEventsAbort) startBotsEventsStream();
 }
 
 function userMayUseBlock(blockId) {
@@ -479,11 +577,12 @@ function applyBlockVisibility() {
 
 function updateMultiUserUi(me) {
   const role = me?.user?.role || me?.role || currentUser?.role || "";
-  const secrets = me?.secrets || {};
+  const secrets = me?.secrets;
   const banner = $("secrets-banner");
   if (banner) {
     // Show for tenants (incl. while admin impersonates) when secrets missing
-    const showSecretsBanner = (role !== "admin" || isImpersonating) && !secrets.has_secrets;
+    const showSecretsBanner =
+      (role !== "admin" || isImpersonating) && secrets && secrets.has_secrets === false;
     banner.classList.toggle("hidden", !showSecretsBanner);
   }
   const impBanner = $("impersonate-banner");
@@ -499,19 +598,142 @@ function updateMultiUserUi(me) {
   document.querySelectorAll("[data-admin-only]").forEach((el) => {
     el.classList.toggle("hidden", !isAdminUser());
   });
+  // Secrets form is available for admin and tenants (Live / Demo keys).
   document.querySelectorAll("[data-user-secrets]").forEach((el) => {
-    el.classList.toggle("hidden", isAdminUser());
+    el.classList.remove("hidden");
   });
   const statusEl = $("secrets-status");
-  if (statusEl) {
-    statusEl.textContent = secrets.has_secrets
-      ? "Ключи Bybit заданы"
-      : isAdminUser()
-        ? "Ключи админа из серверного .env"
-        : "Ключи Bybit не заданы — боты не запустятся";
+  if (statusEl && secrets) {
+    const profiles = Array.isArray(secrets.profiles) ? secrets.profiles : [];
+    const active = profiles.find((p) => p.active);
+    let base = "Ключи Bybit не заданы — добавьте API Key / Secret ниже";
+    if (profiles.length) {
+      base = active
+        ? `Торгуем на: ${active.name} (${active.mode_label || (active.demo_trading ? "Demo" : "Live")})`
+        : `Сохранено профилей: ${profiles.length} — выберите аккаунт ниже`;
+    }
+    if (secrets.can_trade === false && secrets.trade_block_reason) {
+      statusEl.textContent = `${base}. ⚠ ${secrets.trade_block_reason}`;
+      statusEl.classList.add("secrets-status-warn");
+    } else if (secrets.can_trade === true) {
+      statusEl.textContent = `${base}. Торговля разрешена ключом.`;
+      statusEl.classList.remove("secrets-status-warn");
+    } else {
+      statusEl.textContent = base;
+      statusEl.classList.remove("secrets-status-warn");
+    }
   }
+  const liveRadio = $("secrets-mode-live");
+  const demoRadio = $("secrets-mode-demo");
+  if (liveRadio && demoRadio && secrets && typeof secrets.demo_trading === "boolean") {
+    liveRadio.checked = !secrets.demo_trading;
+    demoRadio.checked = !!secrets.demo_trading;
+  }
+  renderSecretsProfiles(secrets);
   applyBlockVisibility();
   syncRatingUserFilterVisibility();
+}
+
+function renderSecretsProfiles(secrets) {
+  const box = $("secrets-profiles");
+  const tradeOn = $("secrets-trade-on");
+  const tradeOpts = $("secrets-trade-on-options");
+  if (!box) return;
+  const profiles = Array.isArray(secrets?.profiles) ? secrets.profiles : [];
+  if (!profiles.length) {
+    box.innerHTML = `<p class="muted secrets-profiles-empty">Сохранённых ключей пока нет</p>`;
+    if (tradeOn) tradeOn.hidden = true;
+    if (tradeOpts) tradeOpts.innerHTML = "";
+    return;
+  }
+  if (tradeOn) tradeOn.hidden = false;
+  if (tradeOpts) {
+    tradeOpts.innerHTML = profiles
+      .map((p) => {
+        const mode = p.mode_label || (p.demo_trading ? "Demo" : "Live");
+        const label = `${p.name || mode} · ${mode}`;
+        return `<label class="secrets-trade-option${p.active ? " is-active" : ""}">
+          <input type="radio" name="secrets-trade-profile" value="${escapeHtml(p.id)}" ${p.active ? "checked" : ""} />
+          <span class="secrets-trade-option-text">
+            <strong>${escapeHtml(p.name || mode)}</strong>
+            <span class="muted">${escapeHtml(mode)} · ${escapeHtml(p.api_key || "—")}</span>
+          </span>
+        </label>`;
+      })
+      .join("");
+    tradeOpts.querySelectorAll('input[name="secrets-trade-profile"]').forEach((input) => {
+      input.addEventListener("change", () => {
+        if (!input.checked) return;
+        activateSecretsProfile(input.value).catch(() => {});
+      });
+    });
+  }
+  box.innerHTML = profiles
+    .map((p) => {
+      const mode = p.mode_label || (p.demo_trading ? "Demo" : "Live");
+      const activeBadge = p.active
+        ? `<span class="secrets-profile-badge active">торгуем здесь</span>`
+        : `<span class="secrets-profile-badge">${escapeHtml(mode)}</span>`;
+      return `<div class="secrets-profile-card${p.active ? " is-active" : ""}" data-profile-id="${escapeHtml(p.id)}">
+        <div class="secrets-profile-head">
+          <strong class="secrets-profile-name">${escapeHtml(p.name || mode)}</strong>
+          ${activeBadge}
+        </div>
+        <div class="secrets-profile-body">
+          <div><span class="muted">Тип</span> ${escapeHtml(mode)}</div>
+          <div><span class="muted">API Key</span> <code>${escapeHtml(p.api_key || "—")}</code></div>
+          <div><span class="muted">API Secret</span> <code>${escapeHtml(p.api_secret || "—")}</code></div>
+        </div>
+        <div class="secrets-profile-actions">
+          ${
+            p.active
+              ? ""
+              : `<button type="button" class="btn btn-sm primary" data-secrets-activate="${escapeHtml(p.id)}">Торговать на этих</button>`
+          }
+          <button type="button" class="btn btn-sm danger" data-secrets-delete="${escapeHtml(p.id)}">Удалить</button>
+        </div>
+      </div>`;
+    })
+    .join("");
+  box.querySelectorAll("[data-secrets-delete]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const id = btn.getAttribute("data-secrets-delete");
+      if (!id) return;
+      if (!confirm("Удалить эти ключи?")) return;
+      deleteSecretsProfile(id).catch(() => {});
+    });
+  });
+  box.querySelectorAll("[data-secrets-activate]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const id = btn.getAttribute("data-secrets-activate");
+      if (!id) return;
+      activateSecretsProfile(id).catch(() => {});
+    });
+  });
+}
+
+async function deleteSecretsProfile(profileId) {
+  try {
+    const payload = { profile_id: profileId };
+    if (isAdminUser() && !isImpersonating) payload.user_id = "admin";
+    await pairConfigApi(`/secrets?profile_id=${encodeURIComponent(profileId)}`, "DELETE", payload);
+    showSecretsMsg("Ключи удалены");
+    await refreshAuthMe();
+  } catch (e) {
+    showSecretsMsg(formatApiError(e.message), true);
+  }
+}
+
+async function activateSecretsProfile(profileId) {
+  try {
+    const payload = { profile_id: profileId };
+    if (isAdminUser() && !isImpersonating) payload.user_id = "admin";
+    await pairConfigApi("/secrets/activate", "POST", payload);
+    showSecretsMsg("Торговля переключена на выбранный аккаунт");
+    await refreshAuthMe();
+  } catch (e) {
+    showSecretsMsg(formatApiError(e.message), true);
+  }
 }
 
 async function loginBot(_bot) {
@@ -551,7 +773,7 @@ async function loginAll() {
   try {
     await refreshAuthMe();
   } catch {
-    updateMultiUserUi({ user: currentUser, secrets: {} });
+    updateMultiUserUi({ user: currentUser });
   }
 }
 
@@ -711,17 +933,65 @@ function invalidateWhitelistCache(bot = null) {
   else Object.keys(whitelistCache).forEach((k) => delete whitelistCache[k]);
 }
 
+function tradeRowId(trade) {
+  const raw = trade?.trade_id ?? trade?.id;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 function mergeTradeMlMeta(trades, metaById) {
   if (!trades?.length || !metaById || !Object.keys(metaById).length) return trades || [];
   return trades.map((t) => {
-    const m = metaById[String(t.trade_id)];
-    return m ? { ...t, ml_meta: { ...(t.ml_meta || {}), ...m } } : t;
+    const tid = tradeRowId(t);
+    const m = tid != null ? metaById[String(tid)] : null;
+    if (!m) return t;
+    const row = tid != null && t.trade_id == null ? { ...t, trade_id: tid } : { ...t };
+    return { ...row, ml_meta: { ...(row.ml_meta || {}), ...m } };
+  });
+}
+
+/** Keep previously loaded ML badges when a refresh returns trades without ml_meta. */
+function preserveTradeMlMeta(prevTrades, nextTrades) {
+  if (!nextTrades?.length) return nextTrades || [];
+  if (!prevTrades?.length) return nextTrades;
+  const prevById = new Map();
+  for (const t of prevTrades) {
+    const id = tradeRowId(t);
+    if (id != null && t.ml_meta && typeof t.ml_meta === "object") {
+      prevById.set(id, t.ml_meta);
+    }
+  }
+  if (!prevById.size) return nextTrades;
+  return nextTrades.map((t) => {
+    const id = tradeRowId(t);
+    if (id == null) return t;
+    const prevMeta = prevById.get(id);
+    if (!prevMeta) return t;
+    const existing = t.ml_meta && typeof t.ml_meta === "object" ? t.ml_meta : {};
+    const hasConf =
+      existing.ml_confidence != null || existing.ml_gate_confidence != null;
+    if (hasConf) return t;
+    const row = t.trade_id == null ? { ...t, trade_id: id } : { ...t };
+    return { ...row, ml_meta: { ...prevMeta, ...existing } };
+  });
+}
+
+function withPreservedMlMeta(bot, trades) {
+  const prev = botLiveCache[bot]?.trades;
+  return preserveTradeMlMeta(prev, trades);
+}
+
+function tradesNeedMlEnrich(trades) {
+  return (trades || []).some((t) => {
+    const m = t?.ml_meta;
+    if (!m || typeof m !== "object") return true;
+    return m.ml_confidence == null && m.ml_gate_confidence == null;
   });
 }
 
 async function enrichTradesWithMl(bot, trades) {
   if (!trades?.length) return trades || [];
-  const ids = trades.map((t) => t.trade_id).filter((id) => id != null);
+  const ids = trades.map((t) => tradeRowId(t)).filter((id) => id != null);
   if (!ids.length) return trades;
   try {
     const data = await pairConfigApi(
@@ -767,7 +1037,186 @@ const STATS_SCOPE_META = {
 };
 
 let pairlistMode = "scanner";
-let finderBotEnabled = false;
+/** @deprecated control-plane Start/Stop is the source of truth; always treat as allowed. */
+let finderBotEnabled = true;
+let sharedStackMode = false;
+let sharedStackStatus = {};
+let tradingFlags = { strategy: true, grid: false, finder: false };
+let lastAuthMeRefresh = 0;
+/** @type {Record<string, {desired?: boolean, status?: string, observed?: object}>} */
+let botsControl = {};
+let botsEventsAbort = null;
+let botsEventsLastId = 0;
+
+const CONTROL_STATUS_LABEL = {
+  OFF: "STOPPED",
+  STARTING: "STARTING…",
+  RUNNING: "RUNNING",
+  STOPPING: "STOPPING…",
+  ERROR: "ERROR",
+};
+
+function controlStatusOf(bot) {
+  const row = botsControl[bot];
+  return String(row?.status || "").toUpperCase() || "";
+}
+
+function controlRunning(bot) {
+  const st = controlStatusOf(bot);
+  return st === "RUNNING" || st === "STARTING" || st === "STOPPING";
+}
+
+function applyBotControlSnapshot(bots) {
+  if (!bots || typeof bots !== "object") return;
+  botsControl = { ...botsControl, ...bots };
+  for (const bot of Object.keys(BOTS)) {
+    if (!bots[bot]) continue;
+    paintControlState(bot);
+  }
+}
+
+function paintControlState(bot) {
+  const st = controlStatusOf(bot);
+  if (!st) return;
+  const running = st === "RUNNING" || st === "STARTING";
+  let hint = "";
+  if (st === "STARTING" || st === "STOPPING") hint = "sync";
+  else if (st === "ERROR") hint = "offline";
+  // Shared strategy still respects signal/executor health
+  if (bot === "strategy" && sharedStackMode && st === "RUNNING") {
+    const sig = sharedStackStatus.signal_engine || {};
+    const exe = sharedStackStatus.trade_executor || {};
+    if (!sig.active || !exe.active) hint = "offline";
+  }
+  setState(bot, running && hint !== "offline", hint === "sync" ? "sync" : hint === "offline" ? "offline" : st);
+  renderActions(bot, st === "RUNNING" || st === "STARTING");
+  rememberBotLive(bot, { running: st === "RUNNING", controlStatus: st });
+}
+
+function applyControlEvent(ev) {
+  if (!ev || typeof ev !== "object") return;
+  if (ev.id) botsEventsLastId = Math.max(botsEventsLastId, Number(ev.id) || 0);
+  if (ev.type === "bot.snapshot" && ev.payload?.bots) {
+    applyBotControlSnapshot(ev.payload.bots);
+    return;
+  }
+  if (ev.type === "bot.status" && ev.payload?.bot) {
+    const bot = ev.payload.bot;
+    botsControl[bot] = ev.payload;
+    if (typeof ev.payload.desired === "boolean") {
+      tradingFlags = { ...tradingFlags, [bot]: !!ev.payload.desired };
+    }
+    paintControlState(bot);
+    if (bot === "strategy") paintSharedStrategyState();
+  }
+}
+
+async function startBotsEventsStream() {
+  if (botsEventsAbort) {
+    try {
+      botsEventsAbort.abort();
+    } catch {
+      /* ignore */
+    }
+  }
+  const ac = new AbortController();
+  botsEventsAbort = ac;
+  const headers = { ...sessionHeader(), Accept: "text/event-stream" };
+  try {
+    const res = await fetch(`/api/pair-config/bots/events?after=${botsEventsLastId}`, {
+      headers,
+      signal: ac.signal,
+    });
+    if (!res.ok || !res.body) return;
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    let eventName = "message";
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const parts = buf.split("\n");
+      buf = parts.pop() || "";
+      for (const line of parts) {
+        if (line.startsWith("event:")) {
+          eventName = line.slice(6).trim();
+          continue;
+        }
+        if (line.startsWith("data:")) {
+          const raw = line.slice(5).trim();
+          try {
+            const ev = JSON.parse(raw);
+            if (!ev.type) ev.type = eventName;
+            applyControlEvent(ev);
+          } catch {
+            /* ignore */
+          }
+          eventName = "message";
+        }
+      }
+    }
+  } catch (e) {
+    if (e?.name === "AbortError") return;
+  } finally {
+    if (botsEventsAbort === ac) botsEventsAbort = null;
+  }
+  // reconnect
+  setTimeout(() => {
+    if (sessionToken) startBotsEventsStream();
+  }, 2500);
+}
+
+async function setBotEnabled(bot, enabled) {
+  // Optimistic
+  botsControl[bot] = {
+    ...(botsControl[bot] || {}),
+    bot,
+    desired: !!enabled,
+    enabled: !!enabled,
+    status: enabled ? "STARTING" : "STOPPING",
+  };
+  tradingFlags = { ...tradingFlags, [bot]: !!enabled };
+  paintControlState(bot);
+  const snap = await pairConfigApi(`/bots/${bot}`, "PATCH", { enabled: !!enabled });
+  if (snap?.bot) {
+    botsControl[bot] = snap;
+    paintControlState(bot);
+  }
+  return snap;
+}
+
+function strategyRunningInSharedMode() {
+  const st = controlStatusOf("strategy");
+  if (st === "RUNNING" || st === "STARTING") return true;
+  if (st === "OFF" || st === "STOPPING" || st === "ERROR") return false;
+  const sig = sharedStackStatus.signal_engine || {};
+  const exe = sharedStackStatus.trade_executor || {};
+  return !!(sig.active && exe.active && tradingFlags.strategy);
+}
+
+function sharedStrategyStateHint() {
+  const sig = sharedStackStatus.signal_engine || {};
+  const exe = sharedStackStatus.trade_executor || {};
+  if (!sig.active || !exe.active) return "offline";
+  return "";
+}
+
+function paintSharedStrategyState() {
+  if (!sharedStackMode) return;
+  const running = strategyRunningInSharedMode();
+  const hint = sharedStrategyStateHint();
+  setState("strategy", running, hint);
+  const snap = botLiveCache.strategy || {};
+  paintBotLive("strategy", {
+    config: snap.config,
+    profit: snap.profit,
+    balance: snap.balance,
+    trades: snap.trades || [],
+    running,
+    stateHint: hint,
+  });
+}
 
 function isAllVolumePairlist() {
   return pairlistMode === "all_volume";
@@ -777,7 +1226,7 @@ async function refreshPairlistMode() {
   try {
     const d = await pairConfigApi("/pairs");
     pairlistMode = d._pairlist_mode || "scanner";
-    finderBotEnabled = d._finder_bot_enabled !== false;
+    finderBotEnabled = true;
   } catch {
     /* keep previous */
   }
@@ -1535,20 +1984,29 @@ function renderHistoryView() {
 
 async function loadHistory() {
   const statusEl = $("history-status");
-  if (statusEl) statusEl.textContent = "Загрузка…";
   const bodyEl = $("history-table-body");
-  if (bodyEl) bodyEl.innerHTML = "";
   const cardsEl = $("history-cards");
-  if (cardsEl) cardsEl.innerHTML = "";
+
+  if (historyDataCache || statsDataCache) {
+    historyDataCache = historyDataCache || statsDataCache;
+    updateHistoryStrategyFilterOptions(historyDataCache.catalog);
+    updateHistoryPairSuggestions(collectUniquePairs(historyDataCache));
+    renderHistoryView();
+  } else if (statusEl) {
+    statusEl.textContent = "Загрузка…";
+    if (bodyEl) bodyEl.innerHTML = "";
+    if (cardsEl) cardsEl.innerHTML = "";
+  }
+
   try {
-    historyPage = 1;
-    historyDataCache = await fetchStatsData(CLOSED_TRADES_FETCH_LIMIT);
+    historyPage = historyDataCache ? historyPage : 1;
+    historyDataCache = await prefetchStatsBundle();
     updateHistoryStrategyFilterOptions(historyDataCache.catalog);
     updateHistoryPairSuggestions(collectUniquePairs(historyDataCache));
     renderHistoryView();
   } catch (e) {
     if (e.message === "auth") logout();
-    else if (statusEl) statusEl.textContent = formatApiError(e.message);
+    else if (statusEl && !historyDataCache) statusEl.textContent = formatApiError(e.message);
   }
 }
 
@@ -1560,6 +2018,12 @@ function openHistory() {
   view?.classList.remove("hidden");
   view?.setAttribute("aria-hidden", "false");
   renderHistoryExportColumns();
+  if (historyDataCache || statsDataCache) {
+    historyDataCache = historyDataCache || statsDataCache;
+    updateHistoryStrategyFilterOptions(historyDataCache.catalog);
+    updateHistoryPairSuggestions(collectUniquePairs(historyDataCache));
+    renderHistoryView();
+  }
   loadHistory();
 }
 
@@ -2437,6 +2901,12 @@ function renderStatsModal(data) {
     statsScope,
     catalog
   );
+  // Active strategies first; idle (no trades in period) sink to the bottom.
+  rows.sort((a, b) => {
+    const aActive = a.closed || a.wins || a.losses || a.flat ? 1 : 0;
+    const bActive = b.closed || b.wins || b.losses || b.flat ? 1 : 0;
+    return bActive - aActive;
+  });
 
   let totalProfit = 0;
   let totalLoss = 0;
@@ -2563,6 +3033,7 @@ async function fetchStatsData(_tradeLimit = CLOSED_TRADES_FETCH_LIMIT, { force =
     gridTrades: data.grid || [],
     bybitHistory: data.bybit_history || [],
     catalog: data.strategies || strategyCatalog,
+    openSummary: data.open_summary || null,
     loadErrors: [],
     builtAt: data.built_at || null,
     cached: !!data.cached,
@@ -2573,10 +3044,15 @@ async function fetchStatsData(_tradeLimit = CLOSED_TRADES_FETCH_LIMIT, { force =
 let statsPrefetchInFlight = null;
 let lastStatsPrefetchAt = 0;
 const STATS_PREFETCH_MS = 25000;
+let openSummaryCache = null;
 
 async function prefetchStatsBundle({ force = false } = {}) {
   const now = Date.now();
   if (!force && statsDataCache && now - lastStatsPrefetchAt < STATS_PREFETCH_MS) {
+    if (statsDataCache.openSummary) {
+      openSummaryCache = statsDataCache.openSummary;
+      renderTradesSummaryFromOpen(openSummaryCache);
+    }
     return statsDataCache;
   }
   if (statsPrefetchInFlight) return statsPrefetchInFlight;
@@ -2584,9 +3060,13 @@ async function prefetchStatsBundle({ force = false } = {}) {
     try {
       const data = await fetchStatsData(CLOSED_TRADES_FETCH_LIMIT, { force });
       statsDataCache = data;
-      lastStatsPrefetchAt = Date.now();
-      if (!historyDataCache) historyDataCache = data;
+      historyDataCache = data;
       if (!pnlDashDataCache) pnlDashDataCache = data;
+      lastStatsPrefetchAt = Date.now();
+      if (data.openSummary) {
+        openSummaryCache = data.openSummary;
+        renderTradesSummaryFromOpen(openSummaryCache);
+      }
       return data;
     } finally {
       statsPrefetchInFlight = null;
@@ -2735,12 +3215,13 @@ function syncEnabledFromPayload(data) {
   syncTestSettingsFromPayload(data);
   if (data?.dual_hedge != null) dualHedgeEnabled = !!data.dual_hedge;
   if (data?.max_open_trades_per_strategy != null) {
-    BOTS.strategy.maxPerStrategy = Number(data.max_open_trades_per_strategy);
+    applyPinnedMaxPerStrategy(data.max_open_trades_per_strategy);
     updateMaxTradesHint();
   }
   if (isSettingsOpen() && isAdminUser()) {
     renderPlacementAdmin(data);
   }
+  repaintStrategyTradesFromCache();
 }
 
 function showPlacementMsg(text, isError = false) {
@@ -2819,13 +3300,32 @@ function syncStrategyRiskFromPayload(data) {
 function syncTestSettingsFromPayload(data) {
   const ts = data?.test_settings;
   if (!ts) return;
-  if (ts.max_open_trades != null) testSettings.max_open_trades = Number(ts.max_open_trades);
+  if (ts.max_open_trades != null) {
+    const pin = limitPins.testMaxOpen;
+    if (!(pin && Date.now() < pin.until)) {
+      testSettings.max_open_trades = Number(ts.max_open_trades);
+    } else {
+      testSettings.max_open_trades = pin.value;
+    }
+  }
   if (ts.max_open_trades_per_strategy != null) {
-    testSettings.max_open_trades_per_strategy = Number(ts.max_open_trades_per_strategy);
+    const pin = limitPins.testMaxPer;
+    if (!(pin && Date.now() < pin.until)) {
+      testSettings.max_open_trades_per_strategy = Number(ts.max_open_trades_per_strategy);
+    } else {
+      testSettings.max_open_trades_per_strategy = pin.value;
+    }
   }
   if (ts.stake_amount != null) testSettings.stake_amount = Number(ts.stake_amount);
   if (ts.stoploss_pct != null) testSettings.stoploss_pct = Number(ts.stoploss_pct);
   if (ts.take_profit_pct != null) testSettings.take_profit_pct = Number(ts.take_profit_pct);
+  applyPinnedTestSettings();
+  // Test-block max is part of strategy-bot capacity — reflect it on the Strategy card/chip.
+  const tMax = Number(testSettings.max_open_trades) || 0;
+  if (tMax > Number(BOTS.strategy.maxTrades || 0)) {
+    BOTS.strategy.maxTrades = tMax;
+  }
+  updateMaxTradesHint();
 }
 
 function strategyRiskSummaryText() {
@@ -2841,12 +3341,19 @@ function setSettingsSummary(id, text) {
   if (el) el.textContent = text || "развернуть";
 }
 
+function closedPnlSummaryText(bot) {
+  const profit = botLiveCache[bot]?.profit || botLiveCache[bot]?.closedProfitDb;
+  const coin = profit?.profit_closed_coin;
+  if (coin == null || !Number.isFinite(Number(coin))) return "";
+  return ` · PnL ${fmtUsdSigned(coin)}`;
+}
+
 function updateBotSettingsSummaries() {
   const strat = BOTS.strategy;
   const risk = strategyRiskSummaryText();
   setSettingsSummary(
     "strategy-settings-summary",
-    `макс ${strat.maxTrades} · stake ${strat.stakeAmount} USDT${risk ? ` · ${risk}` : ""} · развернуть`
+    `макс ${strat.maxTrades} · stake ${strat.stakeAmount} USDT${risk ? ` · ${risk}` : ""}${closedPnlSummaryText("strategy")} · развернуть`
   );
   const tSl = Number(testSettings.stoploss_pct);
   const tTp = Number(testSettings.take_profit_pct);
@@ -2859,7 +3366,7 @@ function updateBotSettingsSummaries() {
   const grid = BOTS.grid;
   setSettingsSummary(
     "grid-settings-summary",
-    `макс ${grid.maxTrades} · stake ${grid.stakeAmount} USDT · развернуть`
+    `макс ${grid.maxTrades} · stake ${grid.stakeAmount} USDT${closedPnlSummaryText("grid")} · развернуть`
   );
   setSettingsSummary(
     "bybitgrid-settings-summary",
@@ -2868,7 +3375,7 @@ function updateBotSettingsSummaries() {
   const finder = BOTS.finder;
   setSettingsSummary(
     "finder-settings-summary",
-    `макс ${finder.maxTrades} · развернуть`
+    `макс ${finder.maxTrades}${closedPnlSummaryText("finder")} · развернуть`
   );
 }
 
@@ -2892,7 +3399,7 @@ function renderDualHedgeControl() {
     <div class="strategy-dual-hedge-row">
       <label class="strategy-dual-hedge-label">
         <input type="checkbox" class="strategy-dual-hedge-cb" ${dualHedgeEnabled ? "checked" : ""} />
-        <strong>Dual hedge</strong>
+        <span class="strategy-dual-hedge-title-text"><strong>Dual hedge</strong></span>
       </label>
       ${hint}
     </div>
@@ -3050,65 +3557,237 @@ function updateTestStrategyDisplay() {
   }
 }
 
-function bindCollapsibleSections() {
-  document.querySelectorAll("[data-collapsible-toggle]").forEach((btn) => {
-    if (btn.dataset.bound) return;
-    btn.dataset.bound = "1";
-    const section = btn.closest(".collapsible-section");
-    if (!section) return;
-    btn.addEventListener("click", () => {
-      const expanded = section.classList.toggle("is-expanded");
-      section.classList.toggle("is-collapsed", !expanded);
-      btn.setAttribute("aria-expanded", expanded ? "true" : "false");
-    });
+const COLLAPSIBLE_STORAGE_KEY = "ct_ui_collapsible_v1";
+
+function readCollapsiblePrefs() {
+  try {
+    const raw = localStorage.getItem(COLLAPSIBLE_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeCollapsiblePref(sectionId, expanded) {
+  if (!sectionId) return;
+  const prefs = readCollapsiblePrefs();
+  prefs[sectionId] = !!expanded;
+  try {
+    localStorage.setItem(COLLAPSIBLE_STORAGE_KEY, JSON.stringify(prefs));
+  } catch {
+    /* quota / private mode */
+  }
+}
+
+function setCollapsibleExpanded(section, expanded, { persist = true } = {}) {
+  if (!section) return;
+  section.classList.toggle("is-expanded", expanded);
+  section.classList.toggle("is-collapsed", !expanded);
+  const btn = section.querySelector("[data-collapsible-toggle]");
+  if (btn) btn.setAttribute("aria-expanded", expanded ? "true" : "false");
+  if (persist && section.id) writeCollapsiblePref(section.id, expanded);
+}
+
+function restoreCollapsibleSections() {
+  const prefs = readCollapsiblePrefs();
+  document.querySelectorAll(".collapsible-section[id]").forEach((section) => {
+    if (!Object.prototype.hasOwnProperty.call(prefs, section.id)) return;
+    setCollapsibleExpanded(section, !!prefs[section.id], { persist: false });
   });
 }
 
-/** Keep floating tip bubbles inside the viewport (esp. mobile). */
+function bindCollapsibleSections() {
+  if (document.documentElement.dataset.collapsibleBound) {
+    restoreCollapsibleSections();
+    return;
+  }
+  document.documentElement.dataset.collapsibleBound = "1";
+
+  const toggleCollapsible = (btn) => {
+    const section = btn.closest(".collapsible-section");
+    if (!section) return;
+    const expanded = !section.classList.contains("is-expanded");
+    setCollapsibleExpanded(section, expanded);
+  };
+
+  document.addEventListener("click", (ev) => {
+    const btn = ev.target.closest("[data-collapsible-toggle]");
+    if (!btn) return;
+    toggleCollapsible(btn);
+  });
+
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key !== "Enter" && ev.key !== " ") return;
+    const btn = ev.target.closest("[data-collapsible-toggle]");
+    if (!btn) return;
+    ev.preventDefault();
+    toggleCollapsible(btn);
+  });
+
+  restoreCollapsibleSections();
+}
+
+/** Fixed overlay for tips; on mobile section-header tips must be fixed too
+ *  (absolute under the toggle gets buried by the next collapsible blocks). */
 function positionUiHintBody(details) {
   if (!details || details.classList.contains("ui-hint-block") || !details.open) return;
   const body = details.querySelector(":scope > .ui-hint-body");
-  if (!body) return;
-  body.style.transform = "";
-  const pad = 10;
-  const rect = body.getBoundingClientRect();
+  const btn = details.querySelector(":scope > .ui-hint-btn");
+  if (!body || !btn) return;
+
   const viewW = window.innerWidth || document.documentElement.clientWidth;
-  let dx = 0;
-  if (rect.left < pad) dx += pad - rect.left;
-  if (rect.right + dx > viewW - pad) dx -= rect.right + dx - (viewW - pad);
-  if (rect.left + dx < pad) dx = pad - rect.left;
-  if (Math.abs(dx) > 0.5) body.style.transform = `translateX(${Math.round(dx)}px)`;
+  const isCollapsibleTip = details.classList.contains("collapsible-title-hint");
+  const isPanelTitleTip = !!details.closest(".panel-title-row, .panel-head");
+  // Row tips (strategy name, ML bulk, etc.) stay CSS-absolute under the row.
+  if (viewW <= 960 && !isCollapsibleTip && !isPanelTitleTip) {
+    resetUiHintBody(details);
+    return;
+  }
+
+  const pad = 10;
+  const gap = 8;
+  const viewH = window.innerHeight || document.documentElement.clientHeight;
+  const btnRect = btn.getBoundingClientRect();
+  const maxW =
+    viewW <= 960
+      ? Math.min(viewW - pad * 2, viewW - 24)
+      : Math.min(18.5 * 16, viewW - pad * 2);
+
+  body.style.position = "fixed";
+  body.style.setProperty("position", "fixed", "important");
+  body.style.right = "auto";
+  body.style.bottom = "auto";
+  body.style.transform = "none";
+  /* Keep below sticky topbar (z-index 200) so tips never cover the menu */
+  body.style.zIndex = "150";
+  body.style.setProperty("z-index", "150", "important");
+  body.style.width = `${Math.round(maxW)}px`;
+  body.style.maxWidth = `${Math.round(viewW - pad * 2)}px`;
+  body.style.maxHeight = "";
+  body.style.overflowY = "";
+  body.style.left = "0px";
+  body.style.top = "0px";
+
+  const h = body.offsetHeight || body.getBoundingClientRect().height;
+  const w = body.offsetWidth || maxW;
+
+  let left = btnRect.left;
+  if (viewW <= 960) {
+    // Prefer full usable width under the header on phones.
+    left = pad;
+  } else {
+    if (left + w > viewW - pad) left = viewW - pad - w;
+    if (left < pad) left = pad;
+  }
+
+  const topbarEl = document.getElementById("topbar");
+  const topFloor = topbarEl
+    ? Math.max(pad, Math.ceil(topbarEl.getBoundingClientRect().bottom) + 6)
+    : pad;
+
+  let top = btnRect.bottom + gap;
+  const sideLeft = btnRect.right + gap;
+  const canPlaceSide = viewW > 960 && isCollapsibleTip && sideLeft + w <= viewW - pad;
+
+  if (canPlaceSide) {
+    left = sideLeft;
+    top = Math.max(topFloor, btnRect.top);
+  } else {
+    const spaceBelow = viewH - pad - (btnRect.bottom + gap);
+    const spaceAbove = btnRect.top - gap - topFloor;
+    if (h > spaceBelow && spaceAbove > spaceBelow) {
+      top = btnRect.top - gap - h;
+    }
+  }
+  if (top < topFloor) top = topFloor;
+  if (top + h > viewH - pad) {
+    const avail = Math.max(120, viewH - pad - top);
+    body.style.maxHeight = `${Math.round(avail)}px`;
+    body.style.overflowY = "auto";
+  }
+
+  body.style.setProperty("left", `${Math.round(left)}px`, "important");
+  body.style.setProperty("top", `${Math.round(top)}px`, "important");
 }
 
 function resetUiHintBody(details) {
   const body = details?.querySelector?.(":scope > .ui-hint-body");
-  if (body) body.style.transform = "";
+  if (!body) return;
+  body.style.removeProperty("position");
+  body.style.removeProperty("left");
+  body.style.removeProperty("top");
+  body.style.removeProperty("right");
+  body.style.removeProperty("bottom");
+  body.style.removeProperty("transform");
+  body.style.removeProperty("width");
+  body.style.removeProperty("max-width");
+  body.style.removeProperty("max-height");
+  body.style.removeProperty("overflow-y");
+  body.style.removeProperty("z-index");
+  body.style.position = "";
+  body.style.left = "";
+  body.style.top = "";
+  body.style.right = "";
+  body.style.bottom = "";
+  body.style.transform = "";
+  body.style.width = "";
+  body.style.maxWidth = "";
+  body.style.maxHeight = "";
+  body.style.overflowY = "";
+  body.style.zIndex = "";
+}
+
+function repositionOpenUiHints() {
+  document.querySelectorAll("details.ui-hint[open]").forEach((d) => positionUiHintBody(d));
 }
 
 function bindUiHints() {
   if (document.body.dataset.uiHintsBound) return;
   document.body.dataset.uiHintsBound = "1";
-  document.addEventListener("toggle", (e) => {
-    const details = e.target;
-    if (!(details instanceof HTMLDetailsElement) || !details.classList.contains("ui-hint")) return;
-    if (details.open) {
-      document.querySelectorAll("details.ui-hint[open]").forEach((other) => {
-        if (other !== details && !other.classList.contains("ui-hint-block")) {
-          other.open = false;
-          resetUiHintBody(other);
-        }
-      });
-      requestAnimationFrame(() => positionUiHintBody(details));
-    } else {
-      resetUiHintBody(details);
-    }
-  }, true);
-  window.addEventListener(
-    "resize",
-    () => {
-      document.querySelectorAll("details.ui-hint[open]").forEach((d) => positionUiHintBody(d));
+  document.addEventListener(
+    "toggle",
+    (e) => {
+      const details = e.target;
+      if (!(details instanceof HTMLDetailsElement) || !details.classList.contains("ui-hint")) return;
+      if (details.open) {
+        document.querySelectorAll("details.ui-hint[open]").forEach((other) => {
+          if (other !== details && !other.classList.contains("ui-hint-block")) {
+            other.open = false;
+            resetUiHintBody(other);
+          }
+        });
+        requestAnimationFrame(() => positionUiHintBody(details));
+      } else {
+        resetUiHintBody(details);
+      }
     },
-    { passive: true }
+    true
+  );
+  document.addEventListener(
+    "pointerdown",
+    (e) => {
+      const t = e.target;
+      if (!(t instanceof Element)) return;
+      if (t.closest("details.ui-hint")) return;
+      document.querySelectorAll("details.ui-hint[open]:not(.ui-hint-block)").forEach((d) => {
+        d.open = false;
+        resetUiHintBody(d);
+      });
+    },
+    true
+  );
+  window.addEventListener("resize", repositionOpenUiHints, { passive: true });
+  let hintScrollTimer = 0;
+  window.addEventListener(
+    "scroll",
+    () => {
+      if (hintScrollTimer) return;
+      hintScrollTimer = window.setTimeout(() => {
+        hintScrollTimer = 0;
+        repositionOpenUiHints();
+      }, 80);
+    },
+    { passive: true, capture: true }
   );
 }
 
@@ -3120,6 +3799,8 @@ function whitelistSummaryText(pairs) {
 }
 
 function renderWhitelist(bot, whitelist) {
+  // null/undefined = skip (keep last rendered pairs during refresh)
+  if (whitelist == null) return;
   const pairs = whitelist?.whitelist || [];
   const el = $(BOTS[bot].pairsEl);
   if (el) el.textContent = pairs.join(", ") || "—";
@@ -3195,8 +3876,10 @@ function renderBulkEnableControlsFor(ids, { group = "main", label = "Страт�
   const total = catalog.length;
   const html = `
     <div class="strategy-enable-bulk-inner">
-      <span class="strategy-enable-bulk-label">${label}</span>
-      ${hint ? uiHintHtml(hint) : ""}
+      <span class="strategy-enable-bulk-head">
+        <span class="strategy-enable-bulk-label">${label}</span>
+        ${hint ? uiHintHtml(hint) : ""}
+      </span>
       <span class="muted strategy-enable-bulk-count">${activeCount} / ${total} вкл</span>
       <div class="strategy-enable-bulk-actions">
         <button type="button" class="btn btn-sm primary" data-strategy-enable-all>Включить все</button>
@@ -3274,6 +3957,7 @@ function renderBulkEnableControls() {
 }
 
 function renderBulkMlConfidenceControlsFor(ids, { group = "main" } = {}) {
+  bindMlConfidenceMenusOnce();
   const catalog = catalogByGroup(group === "test");
   const choices = bulkMlConfidenceChoices();
   const common = (() => {
@@ -3282,25 +3966,33 @@ function renderBulkMlConfidenceControlsFor(ids, { group = "main" } = {}) {
     const first = vals[0];
     return vals.every((v) => Math.abs(v - first) < 1e-9) ? first : null;
   })();
+  const scopeLabel = group === "test" ? "тестовых" : "основных";
+  const valueLabel = common != null ? `${Math.round(common * 100)}%` : "разные";
+  const wrapKey = group === "test" ? "test" : "main";
   const options = choices
     .map((v) => {
       const p = Math.round(Number(v) * 100);
-      const sel = common != null && Math.abs(common - Number(v)) < 1e-9 ? " selected" : "";
-      return `<option value="${v}"${sel}>${p}%</option>`;
+      const isCur = common != null && Math.abs(common - Number(v)) < 1e-9;
+      return `<button type="button" class="strategy-ml-conf-option${isCur ? " is-selected" : ""}" data-ml-conf-bulk-option data-group="${wrapKey}" data-value="${v}" role="option" aria-selected="${isCur ? "true" : "false"}">${p}%</button>`;
     })
     .join("");
-  const scopeLabel = group === "test" ? "тестовых" : "основных";
   const html = `
     <div class="strategy-ml-conf-bulk-inner">
-      <label class="strategy-ml-conf-bulk-label">
-        <span>Уверенность ML для ${scopeLabel}</span>
-        <select class="strategy-ml-conf-bulk-select" data-ml-conf-bulk-select>
+      <div class="strategy-ml-conf-bulk-head">
+        <span class="strategy-ml-conf-bulk-title">Уверенность ML для ${scopeLabel}</span>
+        ${uiHintHtml(`Только ${scopeLabel} · без рестарта · «Стандарт» = дефолт из pack`)}
+      </div>
+      <div class="strategy-ml-conf strategy-ml-conf-bulk-picker" data-ml-conf-bulk-wrap="${wrapKey}">
+        <button type="button" class="strategy-ml-conf-btn" data-ml-conf-bulk-btn="${wrapKey}" aria-haspopup="listbox" aria-expanded="false" title="Минимальная уверенность ML для всех ${scopeLabel}">
+          <span class="strategy-ml-conf-label">Порог</span>
+          <span class="strategy-ml-conf-value" data-ml-conf-bulk-value>${valueLabel}</span>
+          <span class="strategy-ml-conf-caret" aria-hidden="true">▾</span>
+        </button>
+        <div class="strategy-ml-conf-menu" data-ml-conf-bulk-menu="${wrapKey}" hidden role="listbox" aria-label="Уверенность ML для ${scopeLabel}">
           ${options}
-        </select>
-      </label>
-      ${uiHintHtml(`Только ${scopeLabel} · без рестарта · «Стандарт» = дефолт из pack`)}
+        </div>
+      </div>
       <div class="strategy-ml-conf-bulk-actions">
-        <button type="button" class="btn btn-sm primary" data-ml-conf-bulk-apply>Применить</button>
         <button type="button" class="btn btn-sm ghost" data-ml-conf-bulk-reset title="Вернуть порог из обучения (pack)">Стандарт</button>
       </div>
     </div>
@@ -3309,17 +4001,41 @@ function renderBulkMlConfidenceControlsFor(ids, { group = "main" } = {}) {
     const el = $(id);
     if (!el) continue;
     el.innerHTML = html;
-    const select = el.querySelector("[data-ml-conf-bulk-select]");
-    const applyBtn = el.querySelector("[data-ml-conf-bulk-apply]");
+    const wrap = el.querySelector("[data-ml-conf-bulk-wrap]");
+    const btn = el.querySelector("[data-ml-conf-bulk-btn]");
+    const menu = el.querySelector("[data-ml-conf-bulk-menu]");
     const resetBtn = el.querySelector("[data-ml-conf-bulk-reset]");
-    if (applyBtn && !applyBtn.dataset.bound) {
-      applyBtn.dataset.bound = "1";
-      applyBtn.addEventListener("click", async () => {
-        const value = Number(select?.value);
+
+    if (btn && menu && !btn.dataset.bound) {
+      btn.dataset.bound = "1";
+      btn.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const willOpen = menu.hidden;
+        closeAllMlConfidenceMenus(willOpen ? `__bulk_${wrapKey}` : null);
+        menu.hidden = !willOpen;
+        btn.setAttribute("aria-expanded", willOpen ? "true" : "false");
+        wrap?.classList.toggle("is-open", willOpen);
+        if (willOpen) {
+          requestAnimationFrame(() => positionMlConfidenceMenu(wrap, menu));
+        } else {
+          resetMlConfidenceMenuPosition(menu);
+        }
+      });
+    }
+
+    el.querySelectorAll("[data-ml-conf-bulk-option]").forEach((opt) => {
+      if (opt.dataset.bound) return;
+      opt.dataset.bound = "1";
+      opt.addEventListener("click", async (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const value = Number(opt.getAttribute("data-value"));
         if (!Number.isFinite(value)) return;
         const pct = Math.round(value * 100);
         if (!confirm(`Поставить уверенность ML ${pct}% для ${scopeLabel}?`)) return;
-        applyBtn.disabled = true;
+        closeAllMlConfidenceMenus();
+        if (btn) btn.disabled = true;
         if (resetBtn) resetBtn.disabled = true;
         try {
           await setAllStrategiesMlConfidence(value, { group });
@@ -3329,16 +4045,17 @@ function renderBulkMlConfidenceControlsFor(ids, { group = "main" } = {}) {
           if (e.message === "auth") logout();
           else alert(formatApiError(e.message));
         } finally {
-          applyBtn.disabled = false;
+          if (btn) btn.disabled = false;
           if (resetBtn) resetBtn.disabled = false;
         }
       });
-    }
+    });
+
     if (resetBtn && !resetBtn.dataset.bound) {
       resetBtn.dataset.bound = "1";
       resetBtn.addEventListener("click", async () => {
         if (!confirm(`Сбросить уверенность ML к стандарту для ${scopeLabel}?`)) return;
-        applyBtn.disabled = true;
+        if (btn) btn.disabled = true;
         resetBtn.disabled = true;
         try {
           await setAllStrategiesMlConfidence(null, { reset: true, group });
@@ -3348,7 +4065,7 @@ function renderBulkMlConfidenceControlsFor(ids, { group = "main" } = {}) {
           if (e.message === "auth") logout();
           else alert(formatApiError(e.message));
         } finally {
-          applyBtn.disabled = false;
+          if (btn) btn.disabled = false;
           resetBtn.disabled = false;
         }
       });
@@ -3390,19 +4107,57 @@ function renderMlConfidenceControl(id) {
     </div>`;
 }
 
-function positionMlConfidenceMenu(wrap, menu) {
-  if (!wrap || !menu) return;
+function resetMlConfidenceMenuPosition(menu) {
+  if (!menu) return;
   menu.classList.remove("opens-up");
-  // Measure after visible: prefer opening upward when near the bottom of the viewport / panel.
-  const btn = wrap.querySelector("[data-strategy-ml-confidence-btn]");
+  menu.style.position = "";
+  menu.style.left = "";
+  menu.style.right = "";
+  menu.style.top = "";
+  menu.style.bottom = "";
+  menu.style.width = "";
+  menu.style.maxWidth = "";
+  menu.style.maxHeight = "";
+  menu.style.zIndex = "";
+}
+
+function positionMlConfidenceMenu(wrap, menu) {
+  if (!wrap || !menu || menu.hidden) return;
+  const btn = wrap.querySelector(
+    "[data-strategy-ml-confidence-btn], [data-ml-conf-bulk-btn]"
+  );
   const anchor = btn || wrap;
   const rect = anchor.getBoundingClientRect();
-  const menuH = Math.min(menu.scrollHeight || 224, window.innerHeight * 0.45, 224);
-  const spaceBelow = window.innerHeight - rect.bottom;
-  const spaceAbove = rect.top;
-  if (spaceBelow < menuH + 12 && spaceAbove > spaceBelow) {
+  const pad = 8;
+  const viewW = window.innerWidth || document.documentElement.clientWidth;
+  const viewH = window.innerHeight || document.documentElement.clientHeight;
+  const width = Math.min(rect.width, viewW - pad * 2);
+  const maxH = Math.min(14 * 16, viewH * 0.45, 224);
+
+  menu.style.position = "fixed";
+  menu.style.right = "auto";
+  menu.style.bottom = "auto";
+  menu.style.zIndex = "220";
+  menu.style.width = `${Math.round(width)}px`;
+  menu.style.maxWidth = `${Math.round(viewW - pad * 2)}px`;
+  menu.style.maxHeight = `${Math.round(maxH)}px`;
+  menu.style.left = `${Math.round(Math.max(pad, Math.min(rect.left, viewW - pad - width)))}px`;
+  menu.style.top = "0px";
+
+  const menuH = Math.min(menu.scrollHeight || maxH, maxH);
+  const spaceBelow = viewH - pad - rect.bottom;
+  const spaceAbove = rect.top - pad;
+  let top = rect.bottom + 4;
+  menu.classList.remove("opens-up");
+  if (menuH > spaceBelow && spaceAbove > spaceBelow) {
+    top = rect.top - 4 - menuH;
     menu.classList.add("opens-up");
   }
+  if (top < pad) top = pad;
+  if (top + menuH > viewH - pad) {
+    menu.style.maxHeight = `${Math.round(Math.max(120, viewH - pad - top))}px`;
+  }
+  menu.style.top = `${Math.round(top)}px`;
 }
 
 function closeAllMlConfidenceMenus(exceptId) {
@@ -3413,7 +4168,22 @@ function closeAllMlConfidenceMenus(exceptId) {
     const btn = wrap.querySelector("[data-strategy-ml-confidence-btn]");
     if (menu) {
       menu.hidden = true;
-      menu.classList.remove("opens-up");
+      resetMlConfidenceMenuPosition(menu);
+    }
+    if (btn) btn.setAttribute("aria-expanded", "false");
+    wrap.classList.remove("is-open");
+  });
+  document.querySelectorAll("[data-ml-conf-bulk-wrap]").forEach((wrap) => {
+    const key = wrap.getAttribute("data-ml-conf-bulk-wrap");
+    const exceptKey = exceptId && String(exceptId).startsWith("__bulk_")
+      ? String(exceptId).slice("__bulk_".length)
+      : null;
+    if (exceptKey && key === exceptKey) return;
+    const menu = wrap.querySelector("[data-ml-conf-bulk-menu]");
+    const btn = wrap.querySelector("[data-ml-conf-bulk-btn]");
+    if (menu) {
+      menu.hidden = true;
+      resetMlConfidenceMenuPosition(menu);
     }
     if (btn) btn.setAttribute("aria-expanded", "false");
     wrap.classList.remove("is-open");
@@ -3426,7 +4196,7 @@ function bindMlConfidenceMenusOnce() {
   document.addEventListener("click", (ev) => {
     const t = ev.target;
     if (!(t instanceof Element)) return;
-    if (t.closest("[data-strategy-ml-confidence-wrap]")) return;
+    if (t.closest("[data-strategy-ml-confidence-wrap], [data-ml-conf-bulk-wrap]")) return;
     closeAllMlConfidenceMenus();
   });
   document.addEventListener("keydown", (ev) => {
@@ -3464,10 +4234,12 @@ function renderStrategyTogglesInto(container, { testGroup = false } = {}) {
         <label class="strategy-toggle-label">
           <input type="checkbox" data-strategy="${s.id}" ${enabledStrategies[s.id] ? "checked" : ""} />
           <span class="strategy-toggle-text">
-            <strong>${strategyCatalogLabel(s)}${invertedStrategies[s.id] ? ' <span class="strategy-inv-badge">инв</span>' : ""}${trainOn ? ' <span class="strategy-train-badge">train SL/TP</span>' : ""} <span class="strategy-ml-badge">ML ${mlConfidencePct(s.id)}%</span></strong>
+            <span class="strategy-toggle-title-row">
+              <strong>${strategyCatalogLabel(s)}${invertedStrategies[s.id] ? ' <span class="strategy-inv-badge">инв</span>' : ""}${trainOn ? ' <span class="strategy-train-badge">train SL/TP</span>' : ""} <span class="strategy-ml-badge">ML ${mlConfidencePct(s.id)}%</span></strong>
+              ${descHint}
+            </span>
           </span>
         </label>
-        ${descHint}
       </div>
       <label class="strategy-invert-switch" title="Инвертировать: long↔short">
         <span class="strategy-invert-text">Инвертировать</span>
@@ -3479,6 +4251,12 @@ function renderStrategyTogglesInto(container, { testGroup = false } = {}) {
     </li>`;
     })
     .join("");
+
+  // Hint is inside the enable <label>; stop label activation without blocking <details>.
+  container.querySelectorAll(".strategy-toggle-title-row .ui-hint").forEach((hint) => {
+    hint.addEventListener("click", (ev) => ev.stopPropagation());
+    hint.addEventListener("mousedown", (ev) => ev.preventDefault());
+  });
 
   container.querySelectorAll('input[data-strategy]').forEach((cb) => {
     cb.addEventListener("change", async () => {
@@ -3597,10 +4375,10 @@ function renderStrategyTogglesInto(container, { testGroup = false } = {}) {
       btn.setAttribute("aria-expanded", willOpen ? "true" : "false");
       wrap?.classList.toggle("is-open", willOpen);
       if (willOpen) {
-        // Next frame so layout/overflow:visible is applied before measuring.
+        // Next frame so layout is applied before measuring.
         requestAnimationFrame(() => positionMlConfidenceMenu(wrap, menu));
       } else {
-        menu.classList.remove("opens-up");
+        resetMlConfidenceMenuPosition(menu);
       }
     });
   });
@@ -3656,6 +4434,7 @@ async function refreshStrategyEnabled() {
     renderStrategyToggles();
   } catch (e) {
     if (e.message === "auth") logout();
+    else console.warn("refreshStrategyEnabled:", e.message);
   }
 }
 
@@ -3845,43 +4624,77 @@ async function loadStrategySettings() {
 function updateMaxTradesHint() {
   const el = $("max-trades-hint");
   if (!el) return;
-  const activeMax =
-    BOTS.strategy.maxTrades + BOTS.grid.maxTrades + bybitGridMaxBots;
+  const testMax = Number(testSettings.max_open_trades) || 0;
+  const stratSlots = Math.max(Number(BOTS.strategy.maxTrades) || 0, testMax);
+  const activeMax = stratSlots + BOTS.grid.maxTrades + bybitGridMaxBots;
   const per =
     Number(BOTS.strategy.maxPerStrategy) > 0
       ? ` · ≤${BOTS.strategy.maxPerStrategy}/стратегия`
       : "";
-  el.textContent = `До ${activeMax} позиций: Finder — ${BOTS.finder.maxTrades}, стратегии — ${BOTS.strategy.maxTrades}${per}, Grid — ${BOTS.grid.maxTrades}, Bybit Grid — ${bybitGridMaxBots} · ML gate`;
+  const testBit = testMax > 0 ? ` · тест ≤${testMax}` : "";
+  el.textContent = `До ${activeMax} позиций: Finder — ${BOTS.finder.maxTrades}, стратегии — ${stratSlots}${per}${testBit}, Grid — ${BOTS.grid.maxTrades}, Bybit Grid — ${bybitGridMaxBots} · ML gate`;
 }
 
 async function setMaxTrades(bot, value) {
   const next = Number(value);
-  if (!Number.isFinite(next) || next < 0 || next > MAX_TRADES_LIMIT) return;
+  if (!Number.isFinite(next) || next < 0 || !Number.isInteger(next)) return;
   const data = await pairConfigApi("/pairs", "POST", {
     action: "set_max_trades",
     bot,
     max_open_trades: next,
   });
-  BOTS[bot].maxTrades = next;
+  pinMaxTrades(bot, data?.max_open_trades ?? next);
   updateMaxTradesHint();
+  updateBotSettingsSummaries();
+  // Refresh card immediately so the input shows the saved value even if
+  // live bot reload lagged or the process was down.
+  try {
+    const snap = botLiveCache[bot] || {};
+    const openCount =
+      bot === "strategy" && Array.isArray(snap.trades)
+        ? splitStrategyTrades(snap.trades).main.length
+        : Array.isArray(snap.trades)
+          ? snap.trades.length
+          : 0;
+    renderStats(bot, snap.profit, snap.balance, openCount, snap.config?.stake_amount);
+  } catch {
+    /* ignore */
+  }
   showReloadWarning(data);
   if (data?.trade_warning) {
     showReloadWarning({ reload_warning: data.trade_warning });
+  }
+  const applied = data?.live_applied !== false;
+  const diskMsg =
+    `${BOTS[bot].label}: лимит ${BOTS[bot].maxTrades} сохранён` +
+    (applied ? "" : " на диск") +
+    (data?.reload_warning && !applied
+      ? ` (${formatApiError(JSON.stringify({ error: data.reload_warning }))})`
+      : "");
+  if (isSettingsOpen()) {
+    showPairMsg(diskMsg, !applied);
+  } else if ($("pair-msg")) {
+    showPairMsg(diskMsg, !applied);
+  } else {
+    // Main panel — brief toast via alert only on failure
+    if (!applied && data?.reload_warning) {
+      /* soft: value is pinned; background ensure continues */
+    }
   }
   return data;
 }
 
 async function setMaxOpenTradesPerStrategy(value) {
   const next = Number(value);
-  if (!Number.isFinite(next) || next < 0 || next > MAX_TRADES_LIMIT) return;
+  if (!Number.isFinite(next) || next < 0 || !Number.isInteger(next)) return;
   const data = await pairConfigApi("/pairs", "POST", {
     action: "set_max_open_trades_per_strategy",
     max_open_trades_per_strategy: next,
   });
   if (data?.max_open_trades_per_strategy != null) {
-    BOTS.strategy.maxPerStrategy = Number(data.max_open_trades_per_strategy);
+    pinMaxPerStrategy(data.max_open_trades_per_strategy);
   } else {
-    BOTS.strategy.maxPerStrategy = next;
+    pinMaxPerStrategy(next);
   }
   updateMaxTradesHint();
   renderMaxPerStrategySettings();
@@ -3929,17 +4742,22 @@ function bindNumericSetting(container, { validate, onSave }) {
       return;
     }
     btn.disabled = true;
+    const prevLabel = btn.textContent;
+    btn.textContent = "…";
     try {
       await onSave(next);
-      await refreshAll();
+      input.value = String(Number.isInteger(next) ? next : next);
+      // Soft refresh — don't block UI on full stack poll
+      refreshAll().catch(() => {});
       if (isSettingsOpen()) {
-        await loadPairSettings();
+        loadPairSettings().catch(() => {});
       }
     } catch (e) {
       if (e.message === "auth") logout();
       else alert(formatApiError(e.message));
     } finally {
       btn.disabled = false;
+      btn.textContent = prevLabel || "Сохранить";
     }
   };
 
@@ -3952,9 +4770,9 @@ function bindNumericSetting(container, { validate, onSave }) {
 function bindMaxTradesInput(container, bot) {
   bindNumericSetting(container, {
     validate: (value) =>
-      value >= 0 && value <= MAX_TRADES_LIMIT
+      value >= 0 && Number.isInteger(value)
         ? true
-        : `От 0 до ${MAX_TRADES_LIMIT} (0 = бот остановлен)`,
+        : "Целое число ≥ 0 (0 = бот остановлен)",
     onSave: (value) => setMaxTrades(bot, value),
   });
 }
@@ -3973,7 +4791,7 @@ function renderMaxTradesInput(bot) {
   const maxTrades = BOTS[bot].maxTrades;
   return `
     <div class="numeric-setting" data-max-trades-input data-bot="${bot}">
-      <input type="number" class="numeric-setting-input" min="0" max="${MAX_TRADES_LIMIT}" step="1" value="${maxTrades}" inputmode="numeric" aria-label="Макс. сделок ${BOTS[bot].label}" />
+      <input type="number" class="numeric-setting-input" min="0" step="1" value="${maxTrades}" inputmode="numeric" aria-label="Макс. сделок ${BOTS[bot].label}" />
       <button type="button" class="btn btn-sm primary numeric-setting-save">Сохранить</button>
     </div>
   `;
@@ -3983,7 +4801,7 @@ function renderMaxPerStrategyInput() {
   const value = Number(BOTS.strategy.maxPerStrategy) || 0;
   return `
     <div class="numeric-setting" data-max-per-strategy-input>
-      <input type="number" class="numeric-setting-input" min="0" max="${MAX_TRADES_LIMIT}" step="1" value="${value}" inputmode="numeric" aria-label="Макс. сделок на одну стратегию" />
+      <input type="number" class="numeric-setting-input" min="0" step="1" value="${value}" inputmode="numeric" aria-label="Макс. сделок на одну стратегию" />
       <button type="button" class="btn btn-sm primary numeric-setting-save">Сохранить</button>
     </div>
   `;
@@ -3992,9 +4810,9 @@ function renderMaxPerStrategyInput() {
 function bindMaxPerStrategyInput(container) {
   bindNumericSetting(container, {
     validate: (value) =>
-      value >= 0 && value <= MAX_TRADES_LIMIT
+      value >= 0 && Number.isInteger(value)
         ? true
-        : `От 0 до ${MAX_TRADES_LIMIT} (0 = без лимита на стратегию)`,
+        : "Целое число ≥ 0 (0 = без лимита на стратегию)",
     onSave: (value) => setMaxOpenTradesPerStrategy(value),
   });
 }
@@ -4081,7 +4899,7 @@ function renderTestStrategyStats(el, profit, balance, openCount) {
       <span class="stat-inline-label">Открыто (тестовые)</span>
       <strong>${openCount} / ${maxOpen}</strong>
       <div class="numeric-setting" data-test-max-trades-input>
-        <input type="number" class="numeric-setting-input" min="0" max="${MAX_TRADES_LIMIT}" step="1" value="${maxOpen}" inputmode="numeric" aria-label="Макс. сделок тестового блока" />
+        <input type="number" class="numeric-setting-input" min="0" step="1" value="${maxOpen}" inputmode="numeric" aria-label="Макс. сделок тестового блока" />
         <button type="button" class="btn btn-sm primary numeric-setting-save">Сохранить</button>
       </div>
       <span class="muted stat-hint">0 = стоп тестовых · отдельно от основных</span>
@@ -4089,7 +4907,7 @@ function renderTestStrategyStats(el, profit, balance, openCount) {
     <div class="stat-per-strategy">
       <span class="stat-inline-label">На одну тестовую</span>
       <div class="numeric-setting" data-test-max-per-input>
-        <input type="number" class="numeric-setting-input" min="0" max="${MAX_TRADES_LIMIT}" step="1" value="${per}" inputmode="numeric" aria-label="Макс. сделок на одну тестовую стратегию" />
+        <input type="number" class="numeric-setting-input" min="0" step="1" value="${per}" inputmode="numeric" aria-label="Макс. сделок на одну тестовую стратегию" />
         <button type="button" class="btn btn-sm primary numeric-setting-save">Сохранить</button>
       </div>
       <span class="muted stat-hint">0 = без лимита по enter_tag</span>
@@ -4110,15 +4928,17 @@ function renderTestStrategyStats(el, profit, balance, openCount) {
   `;
   bindNumericSetting(el.querySelector("[data-test-max-trades-input]"), {
     validate: (value) =>
-      value >= 0 && value <= MAX_TRADES_LIMIT ? true : `От 0 до ${MAX_TRADES_LIMIT}`,
+      value >= 0 && Number.isInteger(value) ? true : "Целое число ≥ 0",
     onSave: async (value) => {
+      pinTestMaxOpen(value);
       await setTestStrategySettings({ max_open_trades: value });
     },
   });
   bindNumericSetting(el.querySelector("[data-test-max-per-input]"), {
     validate: (value) =>
-      value >= 0 && value <= MAX_TRADES_LIMIT ? true : `От 0 до ${MAX_TRADES_LIMIT}`,
+      value >= 0 && Number.isInteger(value) ? true : "Целое число ≥ 0 (0 = без лимита)",
     onSave: async (value) => {
+      pinTestMaxPer(value);
       await setTestStrategySettings({ max_open_trades_per_strategy: value });
     },
   });
@@ -4138,10 +4958,32 @@ function renderTestStrategyLimits() {
   /* limits rendered in #test-strategy-stats */
 }
 
+function isTestStrategyId(sid) {
+  const id = String(sid || "");
+  if (!id) return false;
+  const fromCatalog = (strategyCatalog || []).find((s) => s.id === id);
+  if (fromCatalog) return isTestCatalogEntry(fromCatalog);
+  // Catalog may still be loading, or the tenant allowlist omitted this id.
+  return /TestStrategy$/i.test(id);
+}
+
 function isTestTrade(trade, bot = "strategy") {
   if (bot !== "strategy") return false;
-  const sid = tradeSourceId(trade, bot);
-  return (strategyCatalog || []).some((s) => s.id === sid && isTestCatalogEntry(s));
+  if (isTestStrategyId(tradeSourceId(trade, bot))) return true;
+  const strat = String(trade.strategy || "");
+  return !!(strat && strat !== "MultiStrategyRouter" && /TestStrategy$/i.test(strat));
+}
+
+function repaintStrategyTradesFromCache() {
+  const snap = botLiveCache.strategy;
+  if (!snap || !Array.isArray(snap.trades)) return;
+  paintBotLive("strategy", {
+    config: snap.config,
+    profit: snap.profit,
+    balance: snap.balance,
+    trades: snap.trades,
+    running: snap.running,
+  });
 }
 
 function splitStrategyTrades(trades) {
@@ -4254,6 +5096,7 @@ function updateTradesSectionSummary(summaryId, trades, emptyLabel) {
   if (summary) summary.textContent = tradesSummaryText(trades, emptyLabel);
 }
 
+
 function renderTradesInto(el, bot, trades) {
   if (!el) return;
   const open = trades || [];
@@ -4274,6 +5117,14 @@ function renderTradesInto(el, bot, trades) {
     return;
   }
 
+  // Drop expand pins for trades that are no longer open in this list.
+  const openIds = new Set(open.map((t) => String(t.trade_id)));
+  for (const key of [...expandedTradeIds]) {
+    if (!key.startsWith(`${bot}:`)) continue;
+    const id = key.slice(bot.length + 1);
+    if (!openIds.has(id)) expandedTradeIds.delete(key);
+  }
+
   el.innerHTML = open
     .map((t) => {
       const rows = tradeDetailRows(t)
@@ -4285,9 +5136,11 @@ function renderTradesInto(el, bot, trades) {
       const pnl = Number(t.profit_pct || 0);
       const tag = tradeSourceLabel(t, bot);
       const mlBadge = renderTradeMlBadge(t);
-      return `<article class="trade-card is-collapsed" data-trade-id="${t.trade_id}">
+      const expanded = isTradeExpanded(bot, t.trade_id);
+      const expandCls = expanded ? "is-expanded" : "is-collapsed";
+      return `<article class="trade-card ${expandCls}" data-trade-id="${t.trade_id}">
         <div class="trade-summary">
-          <button type="button" class="trade-toggle" aria-expanded="false" aria-label="Развернуть сделку">
+          <button type="button" class="trade-toggle" aria-expanded="${expanded ? "true" : "false"}" aria-label="${expanded ? "Свернуть сделку" : "Развернуть сделку"}">
             <div class="trade-summary-main">
               <strong class="trade-pair">${t.pair}</strong>
               <span class="trade-meta">${t.is_short ? "SHORT" : "LONG"} · ${t.leverage || 1}x · #${t.trade_id}</span>
@@ -4327,6 +5180,10 @@ function bindTradeListEl(el) {
       card.classList.toggle("is-collapsed", !expanded);
       toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
       toggle.setAttribute("aria-label", expanded ? "Свернуть сделку" : "Развернуть сделку");
+      const tradeId = card.dataset.tradeId;
+      const exitBtn = card.querySelector("[data-act=forceexit]");
+      const tradeBot = exitBtn?.dataset.bot;
+      if (tradeBot && tradeId) setTradeExpanded(tradeBot, tradeId, expanded);
       return;
     }
 
@@ -4387,10 +5244,13 @@ function renderActions(bot, running) {
     }
   };
 
-  if (bot === "finder" && !finderBotEnabled) {
-    fillAll(
-      '<p class="muted finder-disabled-note">ML Finder отключён на сервере. Кнопка «Старт» недоступна.</p>'
-    );
+  if (bot === "strategy" && sharedStackMode) {
+    const note = running
+      ? "Торговля через общий Signal Engine + Executor (не отдельный бот пользователя)."
+      : tradingFlags.strategy
+        ? "Signal Engine или Executor недоступен — проверьте статус в Настройках."
+        : "Автоторговля выключена. Включите в Настройках → «Strategy trading». Открытые сделки всё ещё мониторятся.";
+    fillAll(`<p class="muted finder-disabled-note">${note}</p>`);
     return;
   }
   const slotsDisabled = Number(cfg.maxTrades) <= 0;
@@ -4406,7 +5266,7 @@ function renderActions(bot, running) {
       try {
         if (act === "stop") {
           if (!confirm(`Остановить бота «${BOTS[bot].label}»?`)) return;
-          await api(bot, "/stop", "POST");
+          await setBotEnabled(bot, false);
         }
         if (act === "reload") await api(bot, "/reload_config", "POST");
         await refreshAll();
@@ -4435,19 +5295,17 @@ function renderActions(bot, running) {
     const label = btn.textContent;
     try {
       if (act === "start") {
-        if (bot === "finder" && !finderBotEnabled) {
-          alert("ML Finder отключён на сервере.");
-          return;
-        }
         if (Number(BOTS[bot].maxTrades) <= 0) {
           alert("Макс. сделок = 0. Установите 1 или больше в Настройках.");
           return;
         }
-        await api(bot, "/start", "POST");
+        btn.disabled = true;
+        await setBotEnabled(bot, true);
       }
       if (act === "stop") {
         if (!confirm(`Остановить бота «${BOTS[bot].label}»? Новые сделки не будут открываться.`)) return;
-        await api(bot, "/stop", "POST");
+        btn.disabled = true;
+        await setBotEnabled(bot, false);
       }
       if (act === "reload") await api(bot, "/reload_config", "POST");
       if (act === "scan-ranging") {
@@ -4488,6 +5346,12 @@ function renderActions(bot, running) {
     } catch (e) {
       if (e.message === "auth") logout();
       else alert(formatApiError(e.message));
+      try {
+        const all = await pairConfigApi("/bots");
+        if (all?.bots) applyBotControlSnapshot(all.bots);
+      } catch {
+        /* ignore */
+      }
       if (bot === "grid") await loadGridScanInfo();
       if (bot === "strategy") await loadStrategyScanInfo();
     }
@@ -4503,20 +5367,21 @@ async function loadGridScanInfo() {
   }
   try {
     const d = await pairConfigApi("/ranging-scan");
+    let text;
     if (d.running) {
-      el.textContent = "Скан выполняется…";
-      return;
+      text = "Скан выполняется…";
+    } else if (!d.scanned_at) {
+      text = "Скан боковика ещё не запускался";
+    } else {
+      const t = fmtAppDateShort(d.scanned_at);
+      const n = d.selected_count ?? d.ranging_found ?? 0;
+      const checked = d.candidates_checked ?? "?";
+      text = `Боковик: ${n} пар (из ${checked} проверенных) · ${t}`;
     }
-    if (!d.scanned_at) {
-      el.textContent = "Скан боковика ещё не запускался";
-      return;
-    }
-    const t = fmtAppDateShort(d.scanned_at);
-    const n = d.selected_count ?? d.ranging_found ?? 0;
-    const checked = d.candidates_checked ?? "?";
-    el.textContent = `Боковик: ${n} пар (из ${checked} проверенных) · ${t}`;
+    gridScanInfoText = text;
+    el.textContent = text;
   } catch {
-    el.textContent = "Скан боковика: нет данных";
+    if (gridScanInfoText) el.textContent = gridScanInfoText;
   }
 }
 
@@ -4538,6 +5403,7 @@ async function loadStrategyScanInfo() {
     .filter(Boolean);
   if (!els.length) return;
   const setText = (text) => {
+    strategyScanInfoText = text;
     for (const el of els) el.textContent = text;
   };
   if (isAllVolumePairlist()) {
@@ -4568,7 +5434,9 @@ async function loadStrategyScanInfo() {
         : `Скан пар: ${n} (из ${checked}) · ${t}`
     );
   } catch {
-    setText("Скан пар: нет данных");
+    if (strategyScanInfoText) {
+      for (const el of els) el.textContent = strategyScanInfoText;
+    }
   }
 }
 
@@ -4584,10 +5452,6 @@ function setState(bot, running, hint = "") {
       el.title = title;
     }
   };
-  if (bot === "finder" && !finderBotEnabled) {
-    apply("DISABLED", "badge stopped", "ML Finder отключён на сервере — не запускается при перезагрузке");
-    return;
-  }
   if (hint === "offline") {
     apply("OFFLINE", "badge stopped", "Нет связи с API бота — перезапуск или перегрузка");
     return;
@@ -4596,15 +5460,43 @@ function setState(bot, running, hint = "") {
     apply("SYNC…", "badge running", "Бот перезагружается или обновляет конфиг — подождите");
     return;
   }
-  const title = running
-    ? bot === "finder"
-      ? `ML Finder · scanner + pnl gate ${ML_GATE_STRATEGY}`
-      : bot === "strategy"
-        ? `Бот торгует · ML gate ${ML_GATE_STRATEGY}`
-        : bot === "grid"
-          ? `Бот торгует · ML gate ${ML_GATE_STRATEGY}`
-          : "Бот торгует"
-    : "Бот остановлен — нажмите «Старт»";
+  // Control-plane derived statuses (RU titles, EN badge codes)
+  const ctrl = typeof hint === "string" ? hint.toUpperCase() : "";
+  if (ctrl === "STARTING") {
+    apply("STARTING…", "badge running", "Запуск торговли…");
+    return;
+  }
+  if (ctrl === "STOPPING") {
+    apply("STOPPING…", "badge stopped", "Остановка новых входов…");
+    return;
+  }
+  if (ctrl === "ERROR") {
+    apply("ERROR", "badge stopped", botsControl[bot]?.observed?.last_error || "Ошибка запуска");
+    return;
+  }
+  if (ctrl === "OFF") {
+    apply("STOPPED", "badge stopped", "Бот остановлен — нажмите «Старт»");
+    return;
+  }
+  if (ctrl === "RUNNING") {
+    running = true;
+  }
+  const title =
+    bot === "strategy" && sharedStackMode
+      ? running
+        ? "Signal Engine + Executor · автоторговля включена"
+        : hint === "offline"
+          ? "Signal Engine или Executor не работает — см. Настройки"
+          : "Автоторговля выключена — Настройки → переключатель Strategy"
+      : running
+        ? bot === "finder"
+          ? `ML Finder · scanner + pnl gate ${ML_GATE_STRATEGY}`
+          : bot === "strategy"
+            ? `Бот торгует · ML gate ${ML_GATE_STRATEGY}`
+            : bot === "grid"
+              ? `Бот торгует · ML gate ${ML_GATE_STRATEGY}`
+              : "Бот торгует"
+        : "Бот остановлен — нажмите «Старт»";
   apply(
     running ? "RUNNING" : "STOPPED",
     `badge ${running ? "running" : "stopped"}`,
@@ -4612,87 +5504,342 @@ function setState(bot, running, hint = "") {
   );
 }
 
-async function refreshBot(bot) {
-  const settled = await Promise.allSettled([
-    api(bot, "/show_config"),
-    api(bot, "/profit"),
-    api(bot, "/balance"),
-    api(bot, "/status"),
-  ]);
-  const val = (i) => (settled[i].status === "fulfilled" ? settled[i].value : null);
-  const config = val(0);
-  const profit = val(1);
-  const balance = val(2);
-  const status = val(3);
+function rememberBotLive(bot, patch) {
+  botLiveCache[bot] = { ...(botLiveCache[bot] || {}), ...patch, ts: Date.now() };
+}
 
-  if (!config && settled[0].status === "rejected") {
-    try {
-      const count = await api(bot, "/count");
-      if (count != null) {
-        setState(bot, true, "sync");
-        $(BOTS[bot].pairsEl).textContent = "—";
-        const summary = $(`${bot}-pairs-summary`);
-        if (summary) summary.textContent = "—";
-        return [];
-      }
-    } catch {
-      /* fall through */
-    }
-    throw settled[0].reason;
+/** Prefer live /profit; fall back to sqlite closed_profit from open-trades bundle. */
+function mergeClosedProfit(liveProfit, dbProfit) {
+  const liveCount = Number(liveProfit?.trade_count ?? liveProfit?.closed_trade_count ?? 0);
+  const liveCoin = liveProfit?.profit_closed_coin;
+  const hasLive =
+    liveProfit != null &&
+    ((liveCoin != null && Number.isFinite(Number(liveCoin)) && (liveCount > 0 || Number(liveCoin) !== 0)) ||
+      liveCount > 0);
+  if (hasLive) return liveProfit;
+  if (dbProfit && (dbProfit.trade_count > 0 || dbProfit.profit_closed_coin != null)) {
+    return {
+      ...(liveProfit || {}),
+      profit_closed_coin: dbProfit.profit_closed_coin,
+      profit_closed_fiat: dbProfit.profit_closed_fiat ?? dbProfit.profit_closed_coin,
+      trade_count: dbProfit.trade_count,
+      closed_profit_source: "db",
+    };
   }
+  return liveProfit;
+}
 
-  const running = String(config?.state || "").toLowerCase() === "running";
-  const openTrades = Array.isArray(status) ? status : [];
-  const maxFromConfig = Number(config?.max_open_trades);
-  if (Number.isFinite(maxFromConfig) && maxFromConfig >= 0) {
-    BOTS[bot].maxTrades = Math.round(maxFromConfig);
-  }
-  const openCount = openTrades.length;
+function paintBotLive(bot, { config, profit, balance, trades, running, stateHint = "" } = {}) {
+  const openTrades = Array.isArray(trades) ? trades : [];
+  const ctrl = controlStatusOf(bot);
+  const isRunning =
+    ctrl
+      ? ctrl === "RUNNING" || ctrl === "STARTING"
+      : running != null
+        ? !!running
+        : String(config?.state || "").toLowerCase() === "running";
+  const hint = stateHint || ctrl || "";
+  if (hint) setState(bot, isRunning, hint);
+  else setState(bot, isRunning);
 
-  const now = Date.now();
-  let whitelist = whitelistCache[bot]?.data;
-  if (!whitelistCache[bot] || now - whitelistCache[bot].ts >= WHITELIST_REFRESH_MS) {
-    try {
-      whitelist = await api(bot, "/whitelist");
-      whitelistCache[bot] = { data: whitelist, ts: now };
-    } catch {
-      /* keep stale cache if any */
-    }
-  }
-
-  setState(bot, running);
-  const enrichedTrades = await enrichTradesWithMl(bot, openTrades);
   if (bot === "strategy") {
-    const { main, test } = splitStrategyTrades(enrichedTrades);
+    const { main, test } = splitStrategyTrades(openTrades);
     renderStatsInto($(BOTS.strategy.statsEl), bot, profit, balance, main.length, config?.stake_amount, {
       openLabel: "Открыто (основные)",
     });
     renderTestStrategyStats($("test-strategy-stats"), profit, balance, test.length);
-    renderActions(bot, running);
+    renderActions(bot, isRunning);
     renderTradesInto($(BOTS.strategy.tradesEl), bot, main);
     renderTradesInto($("test-strategy-trades"), bot, test);
   } else {
-    renderStats(bot, profit, balance, openCount, config?.stake_amount);
-    renderActions(bot, running);
-    renderTrades(bot, enrichedTrades);
+    renderStats(bot, profit, balance, openTrades.length, config?.stake_amount);
+    renderActions(bot, isRunning);
+    renderTrades(bot, openTrades);
   }
-  renderWhitelist(bot, whitelist);
-  updateMaxTradesHint();
-  return enrichedTrades;
+  return openTrades;
+}
+
+function paintBotFromCache(bot, stateHint = "") {
+  const snap = botLiveCache[bot];
+  if (!snap?.config && !snap?.trades && snap?.profit == null && snap?.balance == null) {
+    return false;
+  }
+  paintBotLive(bot, {
+    config: snap.config,
+    profit: snap.profit,
+    balance: snap.balance,
+    trades: snap.trades || [],
+    running: snap.running,
+    stateHint,
+  });
+  if (whitelistCache[bot]?.data) renderWhitelist(bot, whitelistCache[bot].data);
+  return true;
+}
+
+async function refreshBot(bot) {
+  // Paint last-known immediately, then refresh from pair-config cache/db (fast),
+  // then optionally live ctbot APIs in the background (may be slow/wedged).
+  const prev = botLiveCache[bot] || {};
+  if (Array.isArray(prev.trades)) {
+    paintBotLive(bot, {
+      config: prev.config,
+      profit: prev.profit,
+      balance: prev.balance,
+      trades: prev.trades,
+      running: prev.running,
+    });
+  }
+
+  let openTrades = Array.isArray(prev.trades) ? prev.trades : [];
+  try {
+    const bundle = await fetchOpenTradesCache();
+    const entry = bundle?.bots?.[bot];
+    if (entry && Array.isArray(entry.trades)) {
+      openTrades = withPreservedMlMeta(bot, entry.trades);
+      paintBotLive(bot, {
+        config: prev.config,
+        profit: prev.profit,
+        balance: prev.balance,
+        trades: openTrades,
+        running: prev.running,
+      });
+      rememberBotLive(bot, { trades: openTrades });
+    }
+  } catch {
+    /* keep prev */
+  }
+
+  if (bot === "strategy" && sharedStackMode) {
+    const running = strategyRunningInSharedMode();
+    const hint = sharedStrategyStateHint();
+    paintBotLive(bot, {
+      config: prev.config,
+      profit: prev.profit,
+      balance: prev.balance,
+      trades: openTrades,
+      running,
+      stateHint: hint,
+    });
+    rememberBotLive(bot, { trades: openTrades, running });
+
+    // Shared mode must not replace open trades with signal-engine /status (empty),
+    // but still pull balance/profit/config/whitelist from the live API.
+    void (async () => {
+      let config = prev.config || null;
+      let profit = prev.profit ?? null;
+      let balance = prev.balance ?? null;
+      try {
+        const cfg = await api(bot, "/show_config").catch(() => null);
+        if (cfg) {
+          config = cfg;
+          // Shared signal-engine config keeps max_open_trades=1 (no local fills).
+          // Real slot limit lives in bot_limits / config_strategy — never overwrite UI from SE.
+          rememberBotLive(bot, { config });
+        }
+      } catch {
+        /* keep cache */
+      }
+      const paintShared = () => {
+        paintBotLive(bot, {
+          config: botLiveCache[bot]?.config || config,
+          profit: botLiveCache[bot]?.profit ?? profit,
+          balance: botLiveCache[bot]?.balance ?? balance,
+          trades: botLiveCache[bot]?.trades || openTrades,
+          running: strategyRunningInSharedMode(),
+          stateHint: sharedStrategyStateHint(),
+        });
+      };
+      const now = Date.now();
+      const needWhitelist =
+        !whitelistCache[bot] || now - whitelistCache[bot].ts >= WHITELIST_REFRESH_MS;
+      await Promise.all([
+        api(bot, "/profit")
+          .then((v) => {
+            profit = mergeClosedProfit(v, botLiveCache[bot]?.closedProfitDb);
+            rememberBotLive(bot, { profit });
+            paintShared();
+          })
+          .catch(() => {
+            profit = mergeClosedProfit(profit, botLiveCache[bot]?.closedProfitDb);
+            if (profit) {
+              rememberBotLive(bot, { profit });
+              paintShared();
+            }
+          }),
+        api(bot, "/balance")
+          .then((v) => {
+            balance = v;
+            rememberBotLive(bot, { balance });
+            paintShared();
+          })
+          .catch(() => {}),
+        needWhitelist
+          ? api(bot, "/whitelist")
+              .then((w) => {
+                whitelistCache[bot] = { data: w, ts: Date.now() };
+                renderWhitelist(bot, w);
+              })
+              .catch(() => {})
+          : Promise.resolve(),
+      ]);
+    })();
+    return openTrades;
+  }
+
+  // Live enrichment — never blocks the caller.
+  void (async () => {
+    let config = prev.config || null;
+    let profit = prev.profit ?? null;
+    let balance = prev.balance ?? null;
+    let trades = openTrades;
+    try {
+      const [cfg, status] = await Promise.all([
+        api(bot, "/show_config").catch(() => null),
+        api(bot, "/status").catch(() => null),
+      ]);
+      if (cfg) {
+        config = cfg;
+        // Status badge comes from control-plane; do not overwrite from show_config.state
+        if (!controlStatusOf(bot) && !(bot === "strategy" && sharedStackMode)) {
+          setState(bot, String(cfg?.state || "").toLowerCase() === "running");
+        }
+        // Shared signal-engine reports max_open_trades=1; keep pair-config / bot_limits value.
+        if (!(bot === "strategy" && sharedStackMode)) {
+          applyPinnedMaxTrades(bot, cfg?.max_open_trades);
+        }
+      }
+      if (Array.isArray(status)) trades = withPreservedMlMeta(bot, status);
+    } catch {
+      /* keep cache */
+    }
+
+    const ctrl = controlStatusOf(bot);
+    const running =
+      ctrl
+        ? ctrl === "RUNNING" || ctrl === "STARTING"
+        : bot === "strategy" && sharedStackMode
+          ? strategyRunningInSharedMode()
+          : config != null
+            ? String(config?.state || "").toLowerCase() === "running"
+            : prev.running;
+    const stateHint = ctrl || (bot === "strategy" && sharedStackMode ? sharedStrategyStateHint() : "");
+    paintBotLive(bot, { config, profit, balance, trades, running, stateHint });
+    rememberBotLive(bot, { config, profit, balance, trades, running });
+
+    if (trades.length && tradesNeedMlEnrich(trades)) {
+      try {
+        const enriched = await enrichTradesWithMl(bot, trades);
+        if (enriched?.length) {
+          trades = enriched;
+          paintBotLive(bot, { config, profit, balance, trades, running });
+          rememberBotLive(bot, { trades });
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+
+    const now = Date.now();
+    const needWhitelist = !whitelistCache[bot] || now - whitelistCache[bot].ts >= WHITELIST_REFRESH_MS;
+    Promise.all([
+      api(bot, "/profit")
+        .then((v) => {
+          profit = mergeClosedProfit(v, botLiveCache[bot]?.closedProfitDb);
+          rememberBotLive(bot, { profit });
+          // Use latest cached trades (may already include ML) — never wipe badges.
+          const latest = botLiveCache[bot]?.trades || trades;
+          paintBotLive(bot, { config, profit, balance, trades: latest, running });
+        })
+        .catch(() => {
+          profit = mergeClosedProfit(profit, botLiveCache[bot]?.closedProfitDb);
+          if (profit) {
+            rememberBotLive(bot, { profit });
+            const latest = botLiveCache[bot]?.trades || trades;
+            paintBotLive(bot, { config, profit, balance, trades: latest, running });
+          }
+        }),
+      api(bot, "/balance")
+        .then((v) => {
+          balance = v;
+          rememberBotLive(bot, { balance });
+          const latest = botLiveCache[bot]?.trades || trades;
+          paintBotLive(bot, { config, profit, balance, trades: latest, running });
+        })
+        .catch(() => {}),
+      (needWhitelist
+        ? api(bot, "/whitelist")
+            .then((w) => {
+              whitelistCache[bot] = { data: w, ts: Date.now() };
+              return w;
+            })
+            .catch(() => whitelistCache[bot]?.data)
+        : Promise.resolve(whitelistCache[bot]?.data)
+      ).then((w) => {
+        if (w != null) renderWhitelist(bot, w);
+        updateMaxTradesHint();
+      }),
+    ]).catch(() => {});
+  })();
+
+  return openTrades;
+}
+
+function totalMaxOpenSlots() {
+  const testMax = Number(testSettings.max_open_trades) || 0;
+  const fromBots = Object.values(BOTS).reduce((s, b) => {
+    const n = Number(b.maxTrades || 0);
+    if (b === BOTS.strategy) return s + Math.max(n, testMax);
+    return s + n;
+  }, 0);
+  const fromServer = Number(openSummaryCache?.max_total);
+  // Prefer pair-config sum (includes test-block ceiling) when available.
+  if (Number.isFinite(fromServer) && fromServer > 0) return Math.max(fromServer, fromBots);
+  return fromBots;
+}
+
+function renderTradesSummaryFromOpen(summary) {
+  const el = $("trades-summary");
+  if (!el || !summary) return;
+  const count = Number(summary.count) || 0;
+  const maxTotal = Number(summary.max_total);
+  const maxLabel = Number.isFinite(maxTotal) && maxTotal > 0 ? maxTotal : totalMaxOpenSlots();
+  if (!count) {
+    el.classList.add("is-empty");
+    el.innerHTML = `<span class="ts-label">Открытые сделки</span><strong>нет · 0 / ${maxLabel}</strong>`;
+    return;
+  }
+  el.classList.remove("is-empty");
+  const margin = Number(summary.margin) || 0;
+  const pnl = Number(summary.pnl) || 0;
+  const pnlClassName = pnlClass(pnl);
+  el.innerHTML = `
+    <span class="ts-label">Всего по сделкам</span>
+    <strong>${count} / ${maxLabel}</strong>
+    <span class="ts-row">Маржа <b>${fmtUsd(margin)}</b></span>
+    <span class="ts-row">PnL <b class="${pnlClassName}">${pnl >= 0 ? "+" : ""}${Number(pnl).toFixed(2)} USDT</b></span>
+  `;
 }
 
 function renderTradesSummary(allTrades) {
   const el = $("trades-summary");
   if (!el) return;
 
-  const maxTotal = Object.values(BOTS).reduce((s, b) => s + b.maxTrades, 0);
+  // Prefer server warm summary when live bot poll is still empty (e.g. finder retries).
+  if ((!allTrades || !allTrades.length) && openSummaryCache && Number(openSummaryCache.count) > 0) {
+    renderTradesSummaryFromOpen(openSummaryCache);
+    return;
+  }
+
+  const maxTotal = totalMaxOpenSlots();
   const count = allTrades.length;
 
   if (!count) {
+    el.classList.add("is-empty");
     el.innerHTML = `<span class="ts-label">Открытые сделки</span><strong>нет · 0 / ${maxTotal}</strong>`;
     return;
   }
 
+  el.classList.remove("is-empty");
   const margin = allTrades.reduce((s, t) => s + Number(t.stake_amount || 0), 0);
   const pnl = allTrades.reduce(
     (s, t) => s + Number(t.total_profit_abs ?? t.profit_abs ?? 0),
@@ -4700,9 +5847,16 @@ function renderTradesSummary(allTrades) {
   );
   const pnlClassName = pnlClass(pnl);
 
+  openSummaryCache = {
+    count,
+    max_total: Number(openSummaryCache?.max_total) > 0 ? Number(openSummaryCache.max_total) : maxTotal,
+    margin,
+    pnl,
+  };
+
   el.innerHTML = `
     <span class="ts-label">Всего по сделкам</span>
-    <strong>${count} / ${maxTotal}</strong>
+    <strong>${count} / ${openSummaryCache.max_total}</strong>
     <span class="ts-row">Маржа <b>${fmtUsd(margin)}</b></span>
     <span class="ts-row">PnL <b class="${pnlClassName}">${pnl >= 0 ? "+" : ""}${Number(pnl).toFixed(2)} USDT</b></span>
   `;
@@ -4765,9 +5919,15 @@ async function refreshServerStats() {
       pairConfigApi("/system"),
       pairConfigApi("/adaptive-scan").catch(() => null),
     ]);
+    serverStatusCache = { stats, adaptive };
     renderServerStatus(stats, adaptive);
   } catch (e) {
     if (e.message === "auth") throw e;
+    // Keep last CPU/RAM line instead of flashing "Сервер —".
+    if (serverStatusCache) {
+      renderServerStatus(serverStatusCache.stats, serverStatusCache.adaptive);
+      return;
+    }
     const el = $("server-status");
     if (el) {
       el.textContent = "Сервер —";
@@ -4812,14 +5972,17 @@ async function refreshReconcileBanner() {
       btn.textContent = "…";
       try {
         const result = await pairConfigApi("/position-reconcile/fix", "POST", {});
-        const archived = (result.fixed || []).filter((x) => x.action === "archived").length;
-        const exited = (result.fixed || []).filter((x) => x.action === "forceexit").length;
-        if (archived || exited) {
-          alert(
-            `Синхронизация: закрыто через биржу ${exited}, записано в историю ${archived}. ` +
-              (result.ok ? "Расхождений больше нет." : "Часть расхождений осталась — обновите страницу.")
-          );
-        }
+        const fixed = result.fixed || [];
+        const archived = fixed.filter((x) => x.action === "archived").length;
+        const exited = fixed.filter((x) => x.action === "forceexit").length;
+        const deduped = fixed.filter((x) => x.action === "archive_duplicate").length;
+        const after = result.after || {};
+        alert(
+          `Синхронизация: закрыто через биржу ${exited}, призраков в историю ${archived}, ` +
+            `дублей убрано ${deduped}. ` +
+            `Сейчас: боты ${after.ft_open_count ?? "—"} / биржа ${after.bybit_position_count ?? "—"}. ` +
+            (result.ok ? "Расхождений больше нет." : "Часть расхождений осталась — обновите страницу.")
+        );
         await refreshAll();
       } catch (e) {
         alert(formatApiError(e.message));
@@ -4834,21 +5997,21 @@ async function refreshReconcileBanner() {
 }
 
 async function refreshBotSafe(bot, attempt = 0) {
+  // No retries — open trades come from pair-config cache/db; live ctbot may be wedged.
   try {
     return await refreshBot(bot);
   } catch (e) {
     if (e.message === "auth") throw e;
-    if (attempt < 2) {
-      await new Promise((r) => setTimeout(r, 4000));
-      return refreshBotSafe(bot, attempt + 1);
+    if (bot === "strategy" && sharedStackMode) {
+      paintSharedStrategyState();
+      return botLiveCache[bot]?.trades || [];
+    }
+    if (paintBotFromCache(bot)) {
+      console.warn(`refresh ${bot} (kept last):`, e.message);
+      return botLiveCache[bot]?.trades || [];
     }
     const cfg = BOTS[bot];
-    const el = $(cfg.stateEl);
-    if (el) {
-      el.textContent = "OFFLINE";
-      el.className = "badge stopped";
-      el.title = "Бот недоступен — перезапуск или ошибка API";
-    }
+    setState(bot, false, "offline");
     $(cfg.statsEl).innerHTML = '<p class="muted">Нет связи с ботом</p>';
     $(cfg.actionsEl).innerHTML = "";
     $(cfg.tradesEl).innerHTML = '<p class="muted">—</p>';
@@ -5294,30 +6457,129 @@ function collectBybitGridForm() {
   };
 }
 
+async function fetchOpenTradesCache({ refresh = false } = {}) {
+  const qs = refresh ? "?refresh=1" : "";
+  return pairConfigApi(`/open-trades${qs}`);
+}
+
+function paintOpenTradesFromServerBundle(bundle) {
+  if (!bundle?.bots) return [];
+  const all = [];
+  for (const bot of Object.keys(BOTS)) {
+    const entry = bundle.bots[bot];
+    if (!entry || !Array.isArray(entry.trades)) continue;
+    const trades = withPreservedMlMeta(bot, entry.trades);
+    const prev = botLiveCache[bot] || {};
+    if (entry.closed_profit) {
+      rememberBotLive(bot, { closedProfitDb: entry.closed_profit });
+    }
+    const profit = mergeClosedProfit(prev.profit, entry.closed_profit || prev.closedProfitDb);
+    paintBotLive(bot, {
+      config: prev.config,
+      profit,
+      balance: prev.balance,
+      trades,
+      running: prev.running,
+    });
+    rememberBotLive(bot, { trades, profit });
+    all.push(...trades);
+    if (tradesNeedMlEnrich(trades)) {
+      enrichTradesWithMl(bot, trades)
+        .then((enriched) => {
+          if (!enriched?.length) return;
+          const cur = botLiveCache[bot] || {};
+          paintBotLive(bot, {
+            config: cur.config,
+            profit: cur.profit,
+            balance: cur.balance,
+            trades: enriched,
+            running: cur.running,
+          });
+          rememberBotLive(bot, { trades: enriched });
+        })
+        .catch(() => {});
+    }
+  }
+  if (all.length || openSummaryCache) {
+    renderTradesSummary(all);
+  }
+  return all;
+}
+
 async function refreshAll() {
   try {
     const now = Date.now();
-    // Strategies payload first — sync max_open_trades_per_strategy before dashboard stats render.
-    await refreshStrategyEnabled();
-    const tasks = [
-      refreshPairlistMode(),
-      refreshBotSafe("finder"),
-      refreshBotSafe("strategy"),
-      refreshBotSafe("grid"),
-      refreshServerStats(),
-      refreshReconcileBanner(),
-      loadGridScanInfo(),
-      loadStrategyScanInfo(),
+    if (sessionToken) {
+      try {
+        const me = await refreshAuthMe();
+        lastAuthMeRefresh = now;
+        if (sharedStackMode) paintSharedStrategyState();
+        updateMultiUserUi(me);
+      } catch (e) {
+        if (e.message === "auth") throw e;
+      }
+    }
+    if (openSummaryCache) renderTradesSummaryFromOpen(openSummaryCache);
+
+    // Instant path: pair-config open-trades (sqlite/cache) — never waits on ctbot.
+    let cachedTrades = [];
+    try {
+      const bundle = await fetchOpenTradesCache();
+      cachedTrades = paintOpenTradesFromServerBundle(bundle) || [];
+    } catch (e) {
+      if (e.message === "auth") throw e;
+      console.warn("open-trades cache:", e.message);
+    }
+
+    renderTradesSummary(cachedTrades);
+    $("last-update").textContent = `Обновлено: ${fmtAppTime(new Date())} ${APP_TZ_LABEL}`;
+
+    // Test-block limits live in pair-config files — sync even if /strategies is slow.
+    pairConfigApi("/pairs")
+      .then((data) => {
+        syncTestSettingsFromPayload(data);
+        const strat = data?.strategy || {};
+        if (strat.max_open_trades != null) applyPinnedMaxTrades("strategy", strat.max_open_trades);
+        if (strat.max_open_trades_per_strategy != null) {
+          applyPinnedMaxPerStrategy(strat.max_open_trades_per_strategy);
+        }
+        updateBotSettingsSummaries();
+      })
+      .catch(() => {});
+
+    // Background: strategy flags + live bot APIs (may be slow; UI already painted).
+    refreshStrategyEnabled().catch((e) => {
+      if (e.message === "auth") logout();
+      else console.warn("refreshStrategyEnabled:", e.message);
+    });
+    // Always refresh grid — shared-stack only replaces strategy trading, not Volatility Grid.
+    const liveBots = ["strategy", "grid", "finder"];
+    Promise.all(liveBots.map((b) => refreshBotSafe(b)))
+      .then((results) => {
+        const stratTrades = results[0] || [];
+        const gridTrades = liveBots.includes("grid") ? results[liveBots.indexOf("grid")] || [] : [];
+        const finderTrades = liveBots.includes("finder") ? results[liveBots.indexOf("finder")] || [] : [];
+        renderTradesSummary([
+          ...(stratTrades || []),
+          ...(gridTrades || []),
+          ...(finderTrades || []),
+        ]);
+        $("last-update").textContent = `Обновлено: ${fmtAppTime(new Date())} ${APP_TZ_LABEL}`;
+      })
+      .catch(() => {});
+
+    const sideTasks = [
+      refreshPairlistMode().catch(() => {}),
+      refreshServerStats().catch(() => {}),
+      refreshReconcileBanner().catch(() => {}),
+      loadGridScanInfo().catch(() => {}),
+      loadStrategyScanInfo().catch(() => {}),
     ];
     if (now - lastBybitGridRefresh >= BYBIT_GRID_REFRESH_MS) {
-      tasks.push(refreshBybitGrid());
+      sideTasks.push(refreshBybitGrid().catch(() => {}));
       lastBybitGridRefresh = now;
     }
-    const results = await Promise.all(tasks);
-    const allTrades = results.slice(1, 4).flat();
-    renderTradesSummary(allTrades);
-    $("last-update").textContent = `Обновлено: ${fmtAppTime(new Date())} ${APP_TZ_LABEL}`;
-    // Keep stats warm in the background (server also caches).
+    Promise.all(sideTasks).catch(() => {});
     prefetchStatsBundle().catch(() => {});
   } catch (e) {
     if (e.message === "auth") logout();
@@ -5335,6 +6597,7 @@ function showPairMsg(text, isError = false) {
 async function loadPairSettings() {
   await loadStrategySettings();
   const data = await pairConfigApi("/pairs");
+  finderBotEnabled = true;
   const finder = data.finder || {};
   const strategy = data.strategy || {};
   const grid = data.grid || {};
@@ -5347,12 +6610,13 @@ async function loadPairSettings() {
     ]),
   ];
 
-  if (finder.max_open_trades != null) BOTS.finder.maxTrades = finder.max_open_trades;
-  if (strategy.max_open_trades != null) BOTS.strategy.maxTrades = strategy.max_open_trades;
+  syncTestSettingsFromPayload(data);
+  if (finder.max_open_trades != null) applyPinnedMaxTrades("finder", finder.max_open_trades);
+  if (strategy.max_open_trades != null) applyPinnedMaxTrades("strategy", strategy.max_open_trades);
   if (strategy.max_open_trades_per_strategy != null) {
-    BOTS.strategy.maxPerStrategy = Number(strategy.max_open_trades_per_strategy);
+    applyPinnedMaxPerStrategy(strategy.max_open_trades_per_strategy);
   }
-  if (grid.max_open_trades != null) BOTS.grid.maxTrades = grid.max_open_trades;
+  if (grid.max_open_trades != null) applyPinnedMaxTrades("grid", grid.max_open_trades);
   if (grid.stake_amount != null) BOTS.grid.stakeAmount = Number(grid.stake_amount);
   if (strategy.stake_amount != null) BOTS.strategy.stakeAmount = Number(strategy.stake_amount);
   if (strategy.enabled_strategies) {
@@ -5371,7 +6635,7 @@ async function loadPairSettings() {
     el.innerHTML = `
       <span class="max-trades-label">${BOTS[bot].label}</span>
       ${renderMaxTradesInput(bot)}
-      <span class="muted max-trades-hint">0 = стоп · 1–${MAX_TRADES_LIMIT}</span>
+      <span class="muted max-trades-hint">0 = стоп · любое целое ≥ 1</span>
     `;
     bindMaxTradesInput(el.querySelector("[data-max-trades-input]"), bot);
   });
@@ -5429,6 +6693,100 @@ function isSettingsOpen() {
   return !!(v && !v.classList.contains("hidden"));
 }
 
+function renderTradingToggle(me) {
+  const statusEl = $("shared-stack-status");
+  const chk = $("trading-strategy-enabled");
+  if (!statusEl || !chk) return;
+  const stack = me?.shared_stack || {};
+  const sig = stack.signal_engine || {};
+  const exe = stack.trade_executor || {};
+  const sigOk = sig.active ? "работает" : sig.state || "—";
+  const exeOk = exe.active ? "работает" : exe.state || "—";
+  statusEl.textContent = `Signal Engine: ${sigOk} · Executor: ${exeOk}`;
+  chk.checked = !!tradingFlags.strategy;
+}
+
+function showTelegramMsg(text, isError = false) {
+  const el = $("telegram-msg");
+  if (!el) return;
+  el.textContent = text || "";
+  el.className = isError ? "pair-msg error" : "pair-msg ok";
+  el.classList.toggle("hidden", !text);
+}
+
+async function loadTelegramSettings() {
+  const statusEl = $("telegram-status");
+  const input = $("telegram-chat-id");
+  const chk = $("telegram-notify-enabled");
+  try {
+    const data = await pairConfigApi("/telegram");
+    if (input && !input.dataset.dirty) {
+      input.value = data.chat_id || "";
+    }
+    if (chk) chk.checked = data.enabled !== false && !!data.chat_id;
+    if (statusEl) {
+      const bot = data.bot_configured ? "бот настроен" : "TELEGRAM_BOT_TOKEN не задан";
+      statusEl.textContent = data.chat_id
+        ? `Привязан chat id ${data.chat_id} · ${bot}`
+        : `Не привязан · ${bot}. В боте: /start → скопируйте id`;
+    }
+    // Mini App: prefill Telegram user id if empty
+    const tgId = window.Telegram?.WebApp?.initDataUnsafe?.user?.id;
+    if (input && !input.value && tgId) {
+      input.value = String(tgId);
+    }
+  } catch (e) {
+    if (statusEl) statusEl.textContent = e.message || "Ошибка загрузки Telegram";
+  }
+}
+
+async function saveTelegramSettings({ clear = false } = {}) {
+  const input = $("telegram-chat-id");
+  const chk = $("telegram-notify-enabled");
+  const chatId = clear ? "" : (input?.value.trim() || "");
+  const payload = {
+    chat_id: chatId,
+    enabled: clear ? false : !!(chk?.checked ?? true),
+  };
+  const initData = window.Telegram?.WebApp?.initData;
+  if (!chatId && initData && !clear) {
+    payload.init_data = initData;
+  }
+  const data = await pairConfigApi("/telegram", "PATCH", payload);
+  if (input) {
+    input.value = data.chat_id || "";
+    delete input.dataset.dirty;
+  }
+  if (chk) chk.checked = !!data.enabled;
+  showTelegramMsg(
+    data.chat_id
+      ? `Сохранено: chat id ${data.chat_id}. Проверьте сообщение в Telegram.`
+      : "Telegram отвязан"
+  );
+  await loadTelegramSettings();
+  return data;
+}
+
+async function saveTradingToggle(enabled) {
+  const msg = $("trading-toggle-msg");
+  try {
+    await setBotEnabled("strategy", !!enabled);
+    const data = await pairConfigApi("/trading-enabled");
+    tradingFlags = data.flags || tradingFlags;
+    paintSharedStrategyState();
+    if (msg) {
+      msg.textContent = enabled ? "Автоторговля включена" : "Автоторговля выключена (открытые сделки всё ещё мониторятся)";
+      msg.className = "pair-msg ok";
+    }
+  } catch (e) {
+    if (e.message === "auth") throw e;
+    if (msg) {
+      msg.textContent = e.message || "Ошибка сохранения";
+      msg.className = "pair-msg error";
+    }
+  }
+}
+
 function openSettings() {
   closeMobileMenu();
   hideMainViewsForOverlay();
@@ -5439,7 +6797,10 @@ function openSettings() {
     if (e.message === "auth") logout();
     else showPairMsg(e.message, true);
   });
-  refreshAuthMe().catch(() => {});
+  refreshAuthMe()
+    .then((me) => renderTradingToggle(me))
+    .catch(() => {});
+  loadTelegramSettings().catch(() => {});
   if (isAdminUser()) {
     loadUsersAdmin().catch(() => {});
     renderPlacementAdmin({ strategies: strategyCatalog });
@@ -5790,18 +7151,64 @@ $("user-perms-strats-none")?.addEventListener("click", () => {
 $("secrets-save-btn")?.addEventListener("click", async () => {
   const key = $("secrets-api-key")?.value.trim() || "";
   const secret = $("secrets-api-secret")?.value || "";
+  const demoTrading = !!$("secrets-mode-demo")?.checked;
+  const name =
+    $("secrets-name")?.value.trim() ||
+    (demoTrading ? "Demo Trading" : "Live");
   if (!key || !secret) return showSecretsMsg("Введите API Key и Secret", true);
   try {
-    await pairConfigApi("/secrets", "PUT", {
+    const payload = {
+      name,
       bybit_api_key: key,
       bybit_api_secret: secret,
-    });
+      bybit_demo_trading: demoTrading,
+    };
+    // Admin writes own profiles; tenants / impersonation write encrypted secrets.
+    if (isAdminUser() && !isImpersonating) {
+      payload.user_id = "admin";
+    }
+    await pairConfigApi("/secrets", "PUT", payload);
     $("secrets-api-key").value = "";
     $("secrets-api-secret").value = "";
-    showSecretsMsg("Ключи сохранены, боты перезапускаются");
+    if ($("secrets-name")) $("secrets-name").value = "";
+    showSecretsMsg(
+      demoTrading
+        ? `«${name}» сохранён (Demo → api-demo.bybit.com)`
+        : `«${name}» сохранён (Live → api.bybit.com)`
+    );
     await refreshAuthMe();
   } catch (e) {
     showSecretsMsg(formatApiError(e.message), true);
+  }
+});
+
+$("trading-strategy-enabled")?.addEventListener("change", async (e) => {
+  const enabled = !!e.target.checked;
+  try {
+    await saveTradingToggle(enabled);
+  } catch (err) {
+    if (err.message === "auth") logout();
+    e.target.checked = !enabled;
+  }
+});
+
+$("telegram-chat-id")?.addEventListener("input", () => {
+  if ($("telegram-chat-id")) $("telegram-chat-id").dataset.dirty = "1";
+});
+$("telegram-save-btn")?.addEventListener("click", async () => {
+  try {
+    await saveTelegramSettings();
+  } catch (e) {
+    if (e.message === "auth") logout();
+    else showTelegramMsg(formatApiError(e.message), true);
+  }
+});
+$("telegram-clear-btn")?.addEventListener("click", async () => {
+  try {
+    await saveTelegramSettings({ clear: true });
+  } catch (e) {
+    if (e.message === "auth") logout();
+    else showTelegramMsg(formatApiError(e.message), true);
   }
 });
 
@@ -5825,7 +7232,7 @@ function toggleMobileMenu() {
 }
 
 function isMobileMenuMode() {
-  return window.matchMedia("(max-width: 640px)").matches;
+  return window.matchMedia("(max-width: 900px)").matches;
 }
 
 const LOG_POLL_MS = 1500;
@@ -5835,17 +7242,49 @@ let logsFilter = "all";
 let logsStickBottom = true;
 
 function logLineClass(line) {
-  if (/\b(ERROR|CRITICAL|Exception|Traceback)\b/i.test(line)) return "log-error";
-  if (/\b(WARNING|WARN)\b/i.test(line)) return "log-warn";
+  if (/\b(ERROR|CRITICAL|Exception|Traceback|ORDER FAIL|ТОРГОВЛЯ ЗАБЛОКИРОВАНА)\b/i.test(line)) {
+    return "log-error";
+  }
+  if (/\b(WARNING|WARN|SKIP|ML gate (BLOCK|отклонил)|сделки не открываются)\b/i.test(line)) {
+    return "log-warn";
+  }
+  if (/\b(ENTRY OK|ML gate ALLOW|SIGNAL → executor)\b/i.test(line)) {
+    return "log-ok";
+  }
   return "";
 }
 
 function splitLogLine(line) {
   const m = line.match(
-    /^(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[,.]\d+)?(?: UTC)?)\s+(.*)$/s
+    /^(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[,.]\d+)?(?: UTC(?:\+3)?)?)\s+(.*)$/s
   );
   if (m) return { ts: m[1], text: m[2] };
   return { ts: null, text: line };
+}
+
+/** Bot log files are written in UTC on VPS — show wall clock in APP_TIMEZONE. */
+function fmtLogTs(tsRaw) {
+  if (!tsRaw) return null;
+  const s = String(tsRaw).trim();
+  if (/UTC\+3\b/i.test(s)) {
+    return s.replace(/\s*UTC\+3\b/i, "").trim() + ` ${APP_TZ_LABEL}`;
+  }
+  const d = parseAppInstant(s.replace(/\s*UTC\b/i, "").trim());
+  if (!d) return s;
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: APP_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(d);
+  const get = (t) => parts.find((p) => p.type === t)?.value || "";
+  const ms = s.match(/[,.](\d+)/);
+  const frac = ms ? `,${ms[1].padEnd(3, "0").slice(0, 3)}` : "";
+  return `${get("year")}-${get("month")}-${get("day")} ${get("hour")}:${get("minute")}:${get("second")}${frac} ${APP_TZ_LABEL}`;
 }
 
 function appendLogEntries(entries) {
@@ -5856,10 +7295,15 @@ function appendLogEntries(entries) {
   for (const e of entries) {
     const row = document.createElement("div");
     const parsed = e.ts ? { ts: e.ts, text: e.line } : splitLogLine(e.line);
-    const body = parsed.ts && parsed.text !== e.line ? parsed.text : e.line;
+    let body = e.line;
+    if (parsed.ts) {
+      const split = splitLogLine(e.line);
+      body = split.ts ? split.text : e.line;
+    }
     row.className = `log-line log-${e.bot} ${logLineClass(body)}`;
-    const timeHtml = parsed.ts
-      ? `<span class="log-time">${escapeHtml(parsed.ts)}</span>`
+    const shownTs = fmtLogTs(parsed.ts);
+    const timeHtml = shownTs
+      ? `<span class="log-time">${escapeHtml(shownTs)}</span>`
       : `<span class="log-time log-time-missing">—</span>`;
     row.innerHTML = `${timeHtml}<span class="log-tag">[${e.label}]</span>${escapeHtml(body)}`;
     frag.appendChild(row);
@@ -6090,6 +7534,21 @@ function goHome() {
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
+function isNavSurfaceOpen(id) {
+  const el = $(id);
+  return !!(el && !el.classList.contains("hidden"));
+}
+
+/** Second click on the same menu item returns to the main dashboard. */
+function toggleNavItem(surfaceId, openFn) {
+  closeMobileMenu();
+  if (isNavSurfaceOpen(surfaceId)) {
+    goHome();
+    return;
+  }
+  openFn();
+}
+
 $("logout-btn").addEventListener("click", () => {
   closeMobileMenu();
   logout();
@@ -6100,40 +7559,31 @@ $("refresh-btn").addEventListener("click", () => {
   refreshAll();
 });
 $("stats-btn").addEventListener("click", () => {
-  closeMobileMenu();
-  openStats("all", "all");
+  toggleNavItem("stats-modal", () => openStats("all", "all"));
 });
 $("pnl-dashboard-btn")?.addEventListener("click", () => {
-  closeMobileMenu();
-  openPnlDashboard();
+  toggleNavItem("pnl-dashboard-view", openPnlDashboard);
 });
 $("rating-btn")?.addEventListener("click", () => {
-  closeMobileMenu();
-  openRating();
+  toggleNavItem("rating-view", openRating);
 });
 $("history-btn")?.addEventListener("click", () => {
-  closeMobileMenu();
-  openHistory();
+  toggleNavItem("history-view", openHistory);
 });
 $("info-btn").addEventListener("click", () => {
-  closeMobileMenu();
-  openInfo();
+  toggleNavItem("info-modal", openInfo);
 });
 $("guide-btn")?.addEventListener("click", () => {
-  closeMobileMenu();
-  openGuide();
+  toggleNavItem("guide-modal", openGuide);
 });
 $("settings-btn").addEventListener("click", () => {
-  closeMobileMenu();
-  openSettings();
+  toggleNavItem("settings-view", openSettings);
 });
 $("logs-btn").addEventListener("click", () => {
-  closeMobileMenu();
-  openLogs();
+  toggleNavItem("logs-view", openLogs);
 });
 $("changelog-btn")?.addEventListener("click", () => {
-  closeMobileMenu();
-  openChangelog();
+  toggleNavItem("changelog-view", openChangelog);
 });
 $("changelog-back-btn")?.addEventListener("click", closeChangelog);
 document.querySelectorAll(".changelog-filter").forEach((btn) => {
@@ -6276,7 +7726,9 @@ if (savedSession) {
     .then(() => {
       $("login-screen").classList.add("hidden");
       $("app-screen").classList.remove("hidden");
-      refreshAll();
+      loadStrategySettings()
+        .catch(() => {})
+        .finally(() => refreshAll());
     })
     .catch(() => {
       clearSession();

@@ -1,6 +1,6 @@
 {
     "$schema": "https://schema.cryptotools.local/schema.json",
-    "max_open_trades": 1,
+    "max_open_trades": 20,
     "stake_currency": "USDT",
     "stake_amount": 1.0,
     "tradable_balance_ratio": 0.95,
@@ -230,7 +230,8 @@
             "THE/USDT:USDT",
             "UMA/USDT:USDT",
             "ZRO/USDT:USDT"
-        ]
+        ],
+        "demo_trading": true
     },
     "telegram": {
         "enabled": false

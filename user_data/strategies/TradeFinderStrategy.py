@@ -1,5 +1,5 @@
 # pragma pylint: disable=missing-docstring, invalid-name
-"""ML Trade Finder — XGBoost scanner every scan_stride bars + pnl classifier gate."""
+"""ML Trade Finder — barrier Transformer (or XGBoost) scanner every scan_stride bars."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ if str(_USER_DATA) not in sys.path:
     sys.path.insert(0, str(_USER_DATA))
 from ml.finder_live import FinderLive  # noqa: E402
 from ml.gate import save_ml_to_trade  # noqa: E402
+from _pair_guard import claim_entry  # noqa: E402
 from _sim_live import PROD_MINIMAL_ROI, PROD_STOPLOSS  # noqa: E402
 
 
@@ -26,7 +27,7 @@ class TradeFinderStrategy(IStrategy):
     can_short = True
     timeframe = "5m"
     process_only_new_candles = True
-    startup_candle_count = 150
+    startup_candle_count = 200  # XF window=96 + indicator warmup
     use_exit_signal = False
     trailing_stop = False
 
@@ -91,6 +92,9 @@ class TradeFinderStrategy(IStrategy):
             return False
         df, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
         if not self.finder.allow_with_classifier_gate(signal, current_time=current_time, ohlcv_df=df):
+            return False
+        # First-wins across Strategy/Grid/Finder (same Bybit account).
+        if not claim_entry("finder", pair, side):
             return False
         self._pending_by_pair[pair] = signal
         return True

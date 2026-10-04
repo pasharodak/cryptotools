@@ -23,6 +23,21 @@ if ($env:BYBIT_API_KEY) {
 if ($env:BYBIT_API_SECRET) {
     $env:CTENGINE__EXCHANGE__SECRET = $env:BYBIT_API_SECRET
 }
+# Demo Trading → api-demo.bybit.com (ctengine exchange.demo_trading)
+if (-not $env:BYBIT_DEMO_TRADING -and $env:CTENGINE__EXCHANGE__DEMO_TRADING) {
+    $env:BYBIT_DEMO_TRADING = $env:CTENGINE__EXCHANGE__DEMO_TRADING
+}
+if ($env:BYBIT_DEMO_TRADING) {
+    $env:CTENGINE__EXCHANGE__DEMO_TRADING = $env:BYBIT_DEMO_TRADING
+}
+if (-not $env:FREQUI_USERNAME) { $env:FREQUI_USERNAME = "cryptotools" }
+$env:CTENGINE__API_SERVER__USERNAME = $env:FREQUI_USERNAME
+if ($env:FREQUI_PASSWORD) {
+    $env:CTENGINE__API_SERVER__PASSWORD = $env:FREQUI_PASSWORD
+}
+if ($env:FREQUI_JWT_SECRET) {
+    $env:CTENGINE__API_SERVER__JWT_SECRET_KEY = $env:FREQUI_JWT_SECRET
+}
 if ($env:TELEGRAM_BOT_TOKEN) {
     $env:CTENGINE__TELEGRAM__TOKEN = $env:TELEGRAM_BOT_TOKEN
 }

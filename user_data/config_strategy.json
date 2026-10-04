@@ -1,6 +1,6 @@
 {
     "$schema": "https://schema.cryptotools.local/schema.json",
-    "max_open_trades": 19,
+    "max_open_trades": 100,
     "stake_currency": "USDT",
     "stake_amount": 5,
     "tradable_balance_ratio": 0.95,
@@ -229,7 +229,8 @@
             "THE/USDT:USDT",
             "UMA/USDT:USDT",
             "ZRO/USDT:USDT"
-        ]
+        ],
+        "demo_trading": true
     },
     "telegram": {
         "enabled": false
@@ -251,5 +252,5 @@
     "internals": {
         "process_throttle_secs": 5
     },
-    "_pairlist_mode": "ml_training \u2014 StaticPairList 118 pairs from ML training dataset"
+    "_pairlist_mode": "ml_training — StaticPairList 118 pairs from ML training dataset"
 }

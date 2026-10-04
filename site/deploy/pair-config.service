@@ -15,6 +15,9 @@ Environment=PAIR_CONFIG_PORT=8090
 ExecStart=/home/cryptotools/app/.venv/bin/python3 /home/cryptotools/app/scripts/pair_config_server.py
 Restart=on-failure
 RestartSec=5
+Slice=cryptotools.slice
+MemoryHigh=400M
+MemoryMax=512M
 
 [Install]
 WantedBy=multi-user.target

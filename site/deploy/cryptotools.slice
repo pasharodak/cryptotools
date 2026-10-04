@@ -1,0 +1,9 @@
+[Unit]
+Description=CryptoTools bots and APIs (shared memory ceiling)
+Documentation=file:///home/cryptotools/app
+
+[Slice]
+# Host has ~5.8G RAM — leave ~1G for OS/nginx/ssh/journal.
+MemoryAccounting=yes
+MemoryHigh=4200M
+MemoryMax=4800M

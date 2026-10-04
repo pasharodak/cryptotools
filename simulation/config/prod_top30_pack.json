@@ -865,17 +865,17 @@
       "label": "Supertrend (ATR) (test)",
       "group": "trend_test",
       "test_group": true,
-      "stoploss": -0.03,
-      "tp": 0.012,
+      "stoploss": -0.012,
+      "tp": 0.016,
       "winner_exp": "test_block_xgb_wide",
       "score_ml_test_pnl": 71.5166,
       "min_profit_proba": 0.7,
       "sim_module": "SimClassicStrategies",
       "minimal_roi": {
-        "0": 0.012,
-        "60": 0.008,
-        "180": 0.005,
-        "480": 0.0
+        "0": 0.016,
+        "60": 0.012,
+        "180": 0.006,
+        "480": 0
       }
     },
     {

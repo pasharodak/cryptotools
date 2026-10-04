@@ -2,6 +2,270 @@
   "seeded_version": 7,
   "entries": [
     {
+      "at": "2026-10-04T15:17:55.077849+00:00",
+      "category": "finder",
+      "field": "max_open_trades",
+      "old": 22,
+      "new": 100,
+      "text": "Макс. сделок (ML Finder) изменён: 22 → 100",
+      "source": "auto"
+    },
+    {
+      "at": "2026-10-04T12:48:04.691000+00:00",
+      "category": "grid_ft",
+      "field": "max_open_trades",
+      "old": 15,
+      "new": 20,
+      "text": "Макс. сделок (Grid) изменён: 15 → 20",
+      "source": "auto"
+    },
+    {
+      "at": "2026-10-04T12:45:18.822622+00:00",
+      "category": "grid_ft",
+      "field": "max_open_trades",
+      "old": 16,
+      "new": 15,
+      "text": "Макс. сделок (Grid) изменён: 16 → 15",
+      "source": "auto"
+    },
+    {
+      "at": "2026-10-04T12:45:18.683455+00:00",
+      "category": "grid_ft",
+      "field": "max_open_trades",
+      "old": 15,
+      "new": 16,
+      "text": "Макс. сделок (Grid) изменён: 15 → 16",
+      "source": "auto"
+    },
+    {
+      "at": "2026-10-04T12:37:56.411451+00:00",
+      "category": "grid_ft",
+      "field": "max_open_trades",
+      "old": 2,
+      "new": 15,
+      "text": "Макс. сделок (Grid) изменён: 2 → 15",
+      "source": "auto"
+    },
+    {
+      "at": "2026-10-04T12:34:35.712615+00:00",
+      "category": "grid_ft",
+      "field": "max_open_trades",
+      "old": 20,
+      "new": 2,
+      "text": "Макс. сделок (Grid) изменён: 20 → 2",
+      "source": "auto"
+    },
+    {
+      "at": "2026-10-04T12:10:39.469157+00:00",
+      "category": "finder",
+      "field": "max_open_trades",
+      "old": 14,
+      "new": 22,
+      "text": "Макс. сделок (ML Finder) изменён: 14 → 22",
+      "source": "auto"
+    },
+    {
+      "at": "2026-10-04T11:15:51.568682+00:00",
+      "category": "strategy_scanner",
+      "field": "_note",
+      "text": "Скан пар стратегий: 4 пар в whitelist. Примеры: LONGXIA/USDT:USDT, BTW/USDT:USDT, ZRO/USDT:USDT, NEAR/USDT:USDT",
+      "source": "auto"
+    },
+    {
+      "at": "2026-10-04T11:13:51.933610+00:00",
+      "category": "ranging_scanner",
+      "field": "_note",
+      "text": "Скан боковика: найдено ? пар, whitelist обновлён. Топ: —",
+      "source": "auto"
+    },
+    {
+      "at": "2026-10-04T11:04:00.198937+00:00",
+      "category": "finder",
+      "field": "max_open_trades",
+      "old": 4,
+      "new": 14,
+      "text": "Макс. сделок (ML Finder) изменён: 4 → 14",
+      "source": "auto"
+    },
+    {
+      "at": "2026-10-04T10:41:10.191183+00:00",
+      "category": "grid_ft",
+      "field": "max_open_trades",
+      "old": 18,
+      "new": 20,
+      "text": "Макс. сделок (Grid) изменён: 18 → 20",
+      "source": "auto"
+    },
+    {
+      "at": "2026-10-04T10:40:48.955817+00:00",
+      "category": "grid_ft",
+      "field": "max_open_trades",
+      "old": 20,
+      "new": 18,
+      "text": "Макс. сделок (Grid) изменён: 20 → 18",
+      "source": "auto"
+    },
+    {
+      "at": "2026-10-04T10:40:26.615814+00:00",
+      "category": "grid_ft",
+      "field": "max_open_trades",
+      "old": 15,
+      "new": 20,
+      "text": "Макс. сделок (Grid) изменён: 15 → 20",
+      "source": "auto"
+    },
+    {
+      "at": "2026-10-04T10:40:04.776607+00:00",
+      "category": "grid_ft",
+      "field": "max_open_trades",
+      "old": 20,
+      "new": 15,
+      "text": "Макс. сделок (Grid) изменён: 20 → 15",
+      "source": "auto"
+    },
+    {
+      "at": "2026-10-04T10:38:42.523860+00:00",
+      "category": "grid_ft",
+      "field": "max_open_trades",
+      "old": 12,
+      "new": 20,
+      "text": "Макс. сделок (Grid) изменён: 12 → 20",
+      "source": "auto"
+    },
+    {
+      "at": "2026-10-04T10:38:20.004672+00:00",
+      "category": "grid_ft",
+      "field": "max_open_trades",
+      "old": 20,
+      "new": 12,
+      "text": "Макс. сделок (Grid) изменён: 20 → 12",
+      "source": "auto"
+    },
+    {
+      "at": "2026-10-04T10:33:44.495131+00:00",
+      "category": "grid_ft",
+      "field": "max_open_trades",
+      "old": 5,
+      "new": 20,
+      "text": "Макс. сделок (Grid) изменён: 5 → 20",
+      "source": "auto"
+    },
+    {
+      "at": "2026-10-04T10:33:09.749768+00:00",
+      "category": "finder",
+      "field": "max_open_trades",
+      "old": 3,
+      "new": 4,
+      "text": "Макс. сделок (ML Finder) изменён: 3 → 4",
+      "source": "auto"
+    },
+    {
+      "at": "2026-10-04T10:31:15.027986+00:00",
+      "category": "grid_ft",
+      "field": "max_open_trades",
+      "old": 20,
+      "new": 5,
+      "text": "Макс. сделок (Grid) изменён: 20 → 5",
+      "source": "auto"
+    },
+    {
+      "at": "2026-10-04T10:31:13.059398+00:00",
+      "category": "finder",
+      "field": "max_open_trades",
+      "old": 2,
+      "new": 3,
+      "text": "Макс. сделок (ML Finder) изменён: 2 → 3",
+      "source": "auto"
+    },
+    {
+      "at": "2026-10-04T10:02:02.206194+00:00",
+      "category": "grid_ft",
+      "field": "max_open_trades",
+      "old": 10,
+      "new": 20,
+      "text": "Макс. сделок (Grid) изменён: 10 → 20",
+      "source": "auto"
+    },
+    {
+      "at": "2026-10-03T21:16:52.751450+00:00",
+      "category": "grid_ft",
+      "field": "max_open_trades",
+      "old": 1,
+      "new": 10,
+      "text": "Макс. сделок (Grid) изменён: 1 → 10",
+      "source": "auto"
+    },
+    {
+      "at": "2026-10-03T20:20:17.500295+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия MacdEmaTestStrategy: включена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-10-03T20:20:17.488156+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия BollingerRsiTestStrategy: включена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-10-03T20:20:17.477414+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия AltVolumeBreakoutTestStrategy: включена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-10-03T20:20:17.461426+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия ElderRayTestStrategy: включена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-10-03T20:20:17.453814+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия ObvEmaCrossTestStrategy: включена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-10-03T20:20:17.440903+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия DonchianAdxVolComboTestStrategy: включена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-10-03T20:20:17.425514+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия PpoSignalTestStrategy: включена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-10-03T20:20:17.410850+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия DonchianBreakoutTestStrategy: включена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-10-03T20:20:17.399341+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия ChaikinOscTestStrategy: включена",
+      "source": "ui"
+    },
+    {
+      "at": "2026-10-03T20:20:17.394412+00:00",
+      "category": "strategy",
+      "field": "_note",
+      "text": "Стратегия ScalpEmaCrossTestStrategy: включена",
+      "source": "ui"
+    },
+    {
       "at": "2026-08-08T12:39:05.116086+00:00",
       "category": "strategy",
       "field": "stake_amount",
@@ -1781,116 +2045,6 @@
       "old": null,
       "new": null,
       "text": "Панель CriptoTools: свой UI вместо FreqUI (2 колонки → 4 бота)",
-      "source": "seed"
-    },
-    {
-      "at": "2026-06-22T14:00:00+00:00",
-      "category": "ui_infra",
-      "field": "_note",
-      "old": null,
-      "new": null,
-      "text": "FreqUI + nginx HTTPS на порту 8443, самоподписанный сертификат",
-      "source": "seed"
-    },
-    {
-      "at": "2026-06-22T12:00:00+00:00",
-      "category": "freqai",
-      "field": "max_open_trades",
-      "old": null,
-      "new": "3",
-      "text": "Макс. открытых сделок установлен: 3 (Бот FreqAI (LightGBM / FreqaiExampleStrategy))",
-      "source": "seed",
-      "note": "Бот FreqAI (LightGBM / FreqaiExampleStrategy)"
-    },
-    {
-      "at": "2026-06-22T12:00:00+00:00",
-      "category": "strategy",
-      "field": "max_open_trades",
-      "old": null,
-      "new": "2",
-      "text": "Макс. открытых сделок установлен: 2 (Бот стратегий (MultiStrategyRouter))",
-      "source": "seed",
-      "note": "Бот стратегий (MultiStrategyRouter)"
-    },
-    {
-      "at": "2026-06-22T10:00:00+00:00",
-      "category": "freqai",
-      "field": "_note",
-      "old": null,
-      "new": null,
-      "text": "Развёрнут Freqtrade на VPS 77.222.35.209, Bybit futures dry-run/live",
-      "source": "seed"
-    },
-    {
-      "at": "2026-06-21T15:00:00+00:00",
-      "category": "telegram_bot",
-      "field": "_note",
-      "old": null,
-      "new": null,
-      "text": "Исправлен минимум ордера futures (110094), расчёт qty с minNotional",
-      "source": "seed"
-    },
-    {
-      "at": "2026-06-21T14:00:00+00:00",
-      "category": "telegram_bot",
-      "field": "_note",
-      "old": null,
-      "new": null,
-      "text": "Исправлена синхронизация времени с Bybit (ошибка 10002)",
-      "source": "seed"
-    },
-    {
-      "at": "2026-06-21T10:00:00+00:00",
-      "category": "telegram_bot",
-      "field": "_note",
-      "old": null,
-      "new": null,
-      "text": "Торговля Bybit из Telegram: spot long + perp short по сигналам скана",
-      "source": "seed"
-    },
-    {
-      "at": "2026-06-20T18:00:00+00:00",
-      "category": "telegram_bot",
-      "field": "_note",
-      "old": null,
-      "new": null,
-      "text": "История сканов в БД (scan_runs), кнопка «Сканы» в боте",
-      "source": "seed"
-    },
-    {
-      "at": "2026-06-20T16:00:00+00:00",
-      "category": "telegram_bot",
-      "field": "_note",
-      "old": null,
-      "new": null,
-      "text": "Скан: облегчённый режим (lookback 128, 2 сэмпла), пагинация 1m для 10m/20m",
-      "source": "seed"
-    },
-    {
-      "at": "2026-06-20T08:00:00+00:00",
-      "category": "telegram_bot",
-      "field": "_note",
-      "old": null,
-      "new": null,
-      "text": "Таймфреймы 5m, 10m, 20m; скан 60 комбинаций (10 пар × 6 TF)",
-      "source": "seed"
-    },
-    {
-      "at": "2026-06-19T14:00:00+00:00",
-      "category": "telegram_bot",
-      "field": "_note",
-      "old": null,
-      "new": null,
-      "text": "Стабильный прогноз: только закрытые свечи, seed на период, кэш до закрытия TF",
-      "source": "seed"
-    },
-    {
-      "at": "2026-06-18T10:00:00+00:00",
-      "category": "telegram_bot",
-      "field": "_note",
-      "old": null,
-      "new": null,
-      "text": "Создан Telegram-бот: Chronos + Binance API, прогноз ALGO/BTC/ETH и др.",
       "source": "seed"
     }
   ]

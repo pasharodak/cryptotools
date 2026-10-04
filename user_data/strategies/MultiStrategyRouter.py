@@ -4,10 +4,15 @@
 from __future__ import annotations
 
 import json
+import logging
+import math
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
+
+_APP_TZ = timezone(timedelta(hours=3))  # UTC+3
 
 _ROOT = Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
@@ -18,6 +23,27 @@ from pandas import DataFrame
 import talib.abstract as ta
 from ctengine.persistence import Trade
 from ctengine.strategy import IStrategy
+
+logger = logging.getLogger(__name__)
+
+# OHLCV / signal columns skipped when snapshotting strategy indicators for entry logs.
+_ENTRY_LOG_SKIP_COLS = frozenset(
+    {
+        "date",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "enter_long",
+        "enter_short",
+        "enter_tag",
+        "exit_long",
+        "exit_short",
+        "exit_tag",
+    }
+)
+_ENTRY_LOG_MAX_INDICATORS = 16
 
 from AdxDiCrossStrategy import AdxDiCrossStrategy
 from AdxMacdVolComboStrategy import AdxMacdVolComboStrategy
@@ -65,6 +91,7 @@ from PsaraFlipTestStrategy import PsaraFlipTestStrategy
 from RocMomentumStrategy import RocMomentumStrategy
 from ScalpEmaCrossStrategy import ScalpEmaCrossStrategy
 from ScalpEmaCrossTestStrategy import ScalpEmaCrossTestStrategy
+from GruBarrierStrategy import GruBarrierStrategy
 from ScalpMacdHistStrategy import ScalpMacdHistStrategy
 from SupertrendRsiObvComboStrategy import SupertrendRsiObvComboStrategy
 from SupertrendStrategy import SupertrendStrategy
@@ -76,51 +103,114 @@ from VortexCrossStrategy import VortexCrossStrategy
 from WilliamsRReclaimStrategy import WilliamsRReclaimStrategy
 
 _USER_DATA = Path(__file__).resolve().parent.parent
-if str(_USER_DATA) not in sys.path:
-    sys.path.insert(0, str(_USER_DATA))
-from ml.gate import allow_trade_entry, persist_entry_ml  # noqa: E402
+# Prefer site/user_data/ml over simulation/ml when repo root is on PYTHONPATH.
+_ud = str(_USER_DATA)
+if _ud in sys.path:
+    sys.path.remove(_ud)
+sys.path.insert(0, _ud)
+# Drop shadowed simulation.ml if it was imported too early.
+if "ml" in sys.modules:
+    _ml_file = str(getattr(sys.modules["ml"], "__file__", "") or "")
+    if "simulation" in _ml_file.replace("\\", "/"):
+        del sys.modules["ml"]
+        for _k in list(sys.modules):
+            if _k.startswith("ml."):
+                del sys.modules[_k]
+from ml.gate import allow_trade_entry, get_live_ml_gate, persist_entry_ml  # noqa: E402
 from _sim_live import PROD_STRATEGY_MINIMAL_ROI, PROD_STRATEGY_STOPLOSS  # noqa: E402
+try:
+    from _pair_guard import claim_entry, pair_busy  # noqa: E402
+except Exception:  # noqa: BLE001
+    def claim_entry(bot: str, pair: str, side: str) -> bool:  # type: ignore[misc]
+        return True
+
+    def pair_busy(pair: str, side: str, *, bot: str | None = None) -> str | None:  # type: ignore[misc]
+        return None
 
 from ctengine.strategy import stoploss_from_open
 
-ENABLED_FILE = Path(
-    os.environ.get(
-        "CT_ENABLED_STRATEGIES",
-        str(Path(__file__).resolve().parent.parent / "enabled_strategies.json"),
-    )
+def _user_data_dir(config: dict | None = None) -> Path:
+    """Tenant dir when CT_ENABLED_STRATEGIES or config db_url points at tenants/{id}."""
+    env = os.environ.get("CT_ENABLED_STRATEGIES")
+    if env:
+        return Path(env).resolve().parent
+    cfg = config if isinstance(config, dict) else {}
+    raw = cfg.get("user_data_dir")
+    if raw:
+        p = Path(str(raw))
+        if p.is_dir():
+            return p.resolve()
+    db = str(cfg.get("db_url") or "").replace("\\", "/")
+    marker = "user_data/tenants/"
+    if marker in db:
+        tid = db.split(marker, 1)[1].split("/")[0]
+        if tid:
+            return (Path(__file__).resolve().parent.parent / "tenants" / tid).resolve()
+    return Path(__file__).resolve().parent.parent
+
+
+def _json_in_user_data(filename: str, env_key: str, config: dict | None = None) -> Path:
+    env = os.environ.get(env_key)
+    if env:
+        return Path(env)
+    return _user_data_dir(config) / filename
+
+
+# Import-time aliases (tenant env CT_ENABLED_STRATEGIES). Runtime loaders re-resolve.
+ENABLED_FILE = _json_in_user_data("enabled_strategies.json", "CT_ENABLED_STRATEGIES")
+DUAL_HEDGE_FILE = _json_in_user_data("dual_hedge.json", "CT_DUAL_HEDGE")
+MAX_PER_STRATEGY_FILE = _json_in_user_data(
+    "max_open_trades_per_strategy.json", "CT_MAX_OPEN_TRADES_PER_STRATEGY"
 )
-# Same user_data dir as enabled_strategies (tenant-aware when CT_ENABLED_STRATEGIES is set).
-_USER_DATA_DIR = ENABLED_FILE.parent
-DUAL_HEDGE_FILE = Path(
-    os.environ.get("CT_DUAL_HEDGE", str(_USER_DATA_DIR / "dual_hedge.json"))
-)
-MAX_PER_STRATEGY_FILE = Path(
-    os.environ.get(
-        "CT_MAX_OPEN_TRADES_PER_STRATEGY",
-        str(_USER_DATA_DIR / "max_open_trades_per_strategy.json"),
-    )
-)
-TEST_SETTINGS_FILE = Path(
-    os.environ.get(
-        "CT_TEST_STRATEGY_SETTINGS",
-        str(_USER_DATA_DIR / "test_strategy_settings.json"),
-    )
-)
-PLACEMENT_FILE = Path(
-    os.environ.get(
-        "CT_STRATEGY_UI_PLACEMENT",
-        str(_USER_DATA_DIR / "strategy_ui_placement.json"),
-    )
-)
+TEST_SETTINGS_FILE = _json_in_user_data("test_strategy_settings.json", "CT_TEST_STRATEGY_SETTINGS")
+PLACEMENT_FILE = _json_in_user_data("strategy_ui_placement.json", "CT_STRATEGY_UI_PLACEMENT")
 HEDGE_TAG_SUFFIX = ":hedge"
 INV_TAG_SUFFIX = ":inv"
 
+
+def is_signal_only(config: dict | None = None) -> bool:
+    cfg = config if isinstance(config, dict) else {}
+    if cfg.get("signal_only"):
+        return True
+    return os.environ.get("CT_SIGNAL_ONLY", "").strip().lower() in ("1", "true", "yes")
+
+
+def _publish_shared_entry_signal(
+    *,
+    pair: str,
+    side: str,
+    strategy_id: str,
+    rate: float,
+    entry_tag: str | None,
+    scenario: dict | None,
+    indicators: dict[str, str],
+    current_time: datetime,
+    ml: dict | None = None,
+) -> None:
+    scripts = _ROOT / "scripts"
+    if str(scripts) not in sys.path:
+        sys.path.insert(0, str(scripts))
+    from signal_bus import publish_entry_signal  # noqa: WPS433
+
+    publish_entry_signal(
+        pair=pair,
+        side=side,
+        strategy_id=strategy_id,
+        rate=rate,
+        entry_tag=entry_tag,
+        scenario=scenario,
+        indicators=indicators,
+        ml=ml,
+        timestamp=current_time,
+    )
+
+
 DEFAULT_TEST_SETTINGS: dict = {
-    "max_open_trades": 3,
-    "max_open_trades_per_strategy": 0,
+    "max_open_trades": 8,
+    "max_open_trades_per_strategy": 2,
     "stake_amount": 5.0,
-    "stoploss": -0.03,
-    "take_profit": 0.012,
+    "stoploss": -0.02,
+    "take_profit": 0.02,
 }
 
 # Birth-test catalog ids (fallback when placement file missing).
@@ -141,16 +231,21 @@ _FALLBACK_TEST_STRATEGY_TAGS = frozenset(
         "AltVolumeBreakoutTestStrategy",
         "BollingerRsiTestStrategy",
         "MacdEmaTestStrategy",
+        "GruBarrierStrategy",
     }
 )
+
+# Strategies with built-in neural gate (skip LightGBM pnl_classifier).
+NEURAL_GATE_TAGS = frozenset({"GruBarrierStrategy"})
 
 
 def load_test_strategy_tags() -> frozenset[str]:
     """Strategies currently in the Тестовые panel (not promoted to main)."""
-    if not PLACEMENT_FILE.is_file():
+    path = _json_in_user_data("strategy_ui_placement.json", "CT_STRATEGY_UI_PLACEMENT")
+    if not path.is_file():
         return _FALLBACK_TEST_STRATEGY_TAGS
     try:
-        data = json.loads(PLACEMENT_FILE.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return _FALLBACK_TEST_STRATEGY_TAGS
     main = {str(x) for x in (data.get("main") or [])}
@@ -185,6 +280,7 @@ STRATEGY_REGISTRY: dict[str, type[IStrategy]] = {
     "CmfZeroCrossTestStrategy": CmfZeroCrossTestStrategy,
     "ScalpEmaCrossStrategy": ScalpEmaCrossStrategy,
     "ScalpEmaCrossTestStrategy": ScalpEmaCrossTestStrategy,
+    "GruBarrierStrategy": GruBarrierStrategy,
     "ChaikinOscStrategy": ChaikinOscStrategy,
     "ChaikinOscTestStrategy": ChaikinOscTestStrategy,
     "DonchianBreakoutStrategy": DonchianBreakoutStrategy,
@@ -238,8 +334,8 @@ TAG_RISK: dict[str, dict] = {
     },
     "PsaraFlipTestStrategy": {
         "stoploss": -0.02,
-        "tp": 0.012,
-        "minimal_roi": {"0": 0.012, "45": 0.008, "120": 0.005, "360": 0.0},
+        "tp": 0.02,
+        "minimal_roi": {"0": 0.02, "90": 0.012, "240": 0.006, "480": 0.0},
     },
     "AtrChannelBreakoutStrategy": {"stoploss": -0.02, "tp": 0.014, "minimal_roi": {"0": 0.014, "60": 0.007, "180": 0.0}},
     "AtrChannelBreakoutTestStrategy": {
@@ -249,9 +345,9 @@ TAG_RISK: dict[str, dict] = {
     },
     "CmfZeroCrossStrategy": {"stoploss": -0.017, "tp": 0.011, "minimal_roi": {"0": 0.011, "45": 0.0055, "130": 0.0}},
     "CmfZeroCrossTestStrategy": {
-        "stoploss": -0.03,
-        "tp": 0.012,
-        "minimal_roi": {"0": 0.012, "60": 0.008, "180": 0.005, "480": 0.0},
+        "stoploss": -0.02,
+        "tp": 0.02,
+        "minimal_roi": {"0": 0.02, "60": 0.012, "180": 0.006, "480": 0.0},
     },
     "ScalpEmaCrossStrategy": {"stoploss": -0.01, "tp": 0.008, "minimal_roi": {"0": 0.008, "20": 0.004, "60": 0.0}},
     "ScalpEmaCrossTestStrategy": {
@@ -259,11 +355,16 @@ TAG_RISK: dict[str, dict] = {
         "tp": 0.012,
         "minimal_roi": {"0": 0.012, "60": 0.008, "180": 0.005, "480": 0.0},
     },
+    "GruBarrierStrategy": {
+        "stoploss": -0.01,
+        "tp": 0.008,
+        "minimal_roi": {"0": 0.008, "20": 0.004, "60": 0.0},
+    },
     "ChaikinOscStrategy": {"stoploss": -0.017, "tp": 0.011, "minimal_roi": {"0": 0.011, "45": 0.0055, "130": 0.0}},
     "ChaikinOscTestStrategy": {
-        "stoploss": -0.03,
-        "tp": 0.012,
-        "minimal_roi": {"0": 0.012, "60": 0.008, "180": 0.005, "480": 0.0},
+        "stoploss": -0.02,
+        "tp": 0.02,
+        "minimal_roi": {"0": 0.02, "60": 0.012, "180": 0.006, "480": 0.0},
     },
     "DonchianBreakoutStrategy": {"stoploss": -0.025, "tp": 0.018, "minimal_roi": {"0": 0.018, "90": 0.009, "240": 0.0}},
     "DonchianBreakoutTestStrategy": {
@@ -273,9 +374,9 @@ TAG_RISK: dict[str, dict] = {
     },
     "PpoSignalStrategy": {"stoploss": -0.016, "tp": 0.01, "minimal_roi": {"0": 0.01, "40": 0.005, "120": 0.0}},
     "PpoSignalTestStrategy": {
-        "stoploss": -0.03,
-        "tp": 0.012,
-        "minimal_roi": {"0": 0.012, "60": 0.008, "180": 0.005, "480": 0.0},
+        "stoploss": -0.02,
+        "tp": 0.02,
+        "minimal_roi": {"0": 0.02, "60": 0.012, "180": 0.006, "480": 0.0},
     },
     "DonchianAdxVolComboStrategy": {"stoploss": -0.022, "tp": 0.018, "minimal_roi": {"0": 0.018, "70": 0.009, "200": 0.0}},
     "DonchianAdxVolComboTestStrategy": {
@@ -285,9 +386,9 @@ TAG_RISK: dict[str, dict] = {
     },
     "ObvEmaCrossStrategy": {"stoploss": -0.018, "tp": 0.012, "minimal_roi": {"0": 0.012, "55": 0.006, "160": 0.0}},
     "ObvEmaCrossTestStrategy": {
-        "stoploss": -0.03,
-        "tp": 0.012,
-        "minimal_roi": {"0": 0.012, "60": 0.008, "180": 0.005, "480": 0.0},
+        "stoploss": -0.02,
+        "tp": 0.02,
+        "minimal_roi": {"0": 0.02, "60": 0.012, "180": 0.006, "480": 0.0},
     },
     "ElderRayStrategy": {"stoploss": -0.017, "tp": 0.011, "minimal_roi": {"0": 0.011, "45": 0.0055, "130": 0.0}},
     "ElderRayTestStrategy": {
@@ -330,21 +431,21 @@ TAG_RISK: dict[str, dict] = {
         "stoploss": -0.02,
         "tp": 0.025,
         "minimal_roi": {"0": 0.025, "60": 0.015, "180": 0.008, "720": 0},
-    "BollingerRsiTestStrategy": {
-        "stoploss": -0.03,
-        "tp": 0.012,
-        "minimal_roi": {"0": 0.012, "60": 0.008, "180": 0.005, "480": 0.0},
     },
+    "BollingerRsiTestStrategy": {
+        "stoploss": -0.02,
+        "tp": 0.02,
+        "minimal_roi": {"0": 0.02, "60": 0.012, "180": 0.006, "480": 0.0},
     },
     "MacdEmaStrategy": {
         "stoploss": -0.025,
         "tp": 0.03,
         "minimal_roi": {"0": 0.03, "180": 0.015, "480": 0.008, "960": 0},
-    "MacdEmaTestStrategy": {
-        "stoploss": -0.03,
-        "tp": 0.012,
-        "minimal_roi": {"0": 0.012, "60": 0.008, "180": 0.005, "480": 0.0},
     },
+    "MacdEmaTestStrategy": {
+        "stoploss": -0.02,
+        "tp": 0.02,
+        "minimal_roi": {"0": 0.02, "60": 0.012, "180": 0.006, "480": 0.0},
     },
     "SupertrendStrategy": {
         "stoploss": -0.025,
@@ -352,9 +453,9 @@ TAG_RISK: dict[str, dict] = {
         "minimal_roi": {"0": 0.03, "120": 0.015, "360": 0.008, "720": 0},
     },
     "SupertrendTestStrategy": {
-        "stoploss": -0.03,
-        "tp": 0.012,
-        "minimal_roi": {"0": 0.012, "60": 0.008, "180": 0.005, "480": 0.0},
+        "stoploss": -0.012,
+        "tp": 0.016,
+        "minimal_roi": {"0": 0.016, "60": 0.012, "180": 0.006, "480": 0},
     },
     "TripleEmaStrategy": {
         "stoploss": -0.025,
@@ -534,6 +635,13 @@ SCENARIO_BY_TAG: dict[str, dict[str, str]] = {
         "group": "scalp_test",
         "strategy": "ScalpEmaCrossTestStrategy",
         "label": "Scalp EMA 8/21 (test) wide",
+    },
+    "GruBarrierStrategy": {
+        "scenario_id": "seq_gru_gate",
+        "scan_type": "strategy",
+        "group": "ml_seq",
+        "strategy": "GruBarrierStrategy",
+        "label": "GRU seq-gate (EMA)",
     },
     "ChaikinOscStrategy": {
         "scenario_id": "chart3_adosc",
@@ -817,24 +925,30 @@ def load_dual_hedge_enabled() -> bool:
         return False
 
 
-def load_max_open_trades_per_strategy() -> int:
+def load_max_open_trades_per_strategy(config: dict | None = None) -> int:
     """Max concurrent open trades sharing the same strategy enter_tag. 0 = unlimited."""
-    if not MAX_PER_STRATEGY_FILE.is_file():
+    path = _json_in_user_data(
+        "max_open_trades_per_strategy.json", "CT_MAX_OPEN_TRADES_PER_STRATEGY", config
+    )
+    if not path.is_file():
         return 0
     try:
-        data = json.loads(MAX_PER_STRATEGY_FILE.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
         return max(0, int(data.get("value", 0)))
     except (json.JSONDecodeError, OSError, TypeError, ValueError):
         return 0
 
 
-def load_test_strategy_settings() -> dict:
+def load_test_strategy_settings(config: dict | None = None) -> dict:
     """Isolated test-block limits / stake / fallback SL-TP (no bot reload)."""
     out = dict(DEFAULT_TEST_SETTINGS)
-    if not TEST_SETTINGS_FILE.is_file():
+    path = _json_in_user_data(
+        "test_strategy_settings.json", "CT_TEST_STRATEGY_SETTINGS", config
+    )
+    if not path.is_file():
         return out
     try:
-        data = json.loads(TEST_SETTINGS_FILE.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError, TypeError):
         return out
     if not isinstance(data, dict):
@@ -892,6 +1006,92 @@ def base_enter_tag(tag: str | None) -> str:
     return t
 
 
+def _fmt_entry_num(value: Any) -> str:
+    try:
+        x = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if not math.isfinite(x):
+        return str(value)
+    ax = abs(x)
+    if ax >= 1000:
+        return f"{x:.2f}"
+    if ax >= 1:
+        return f"{x:.4f}".rstrip("0").rstrip(".")
+    if ax >= 0.0001:
+        return f"{x:.6f}".rstrip("0").rstrip(".")
+    return f"{x:.8g}"
+
+
+def _row_indicator_snapshot(row, *, max_items: int = _ENTRY_LOG_MAX_INDICATORS) -> dict[str, str]:
+    """Pick readable numeric indicator fields from a strategy indicator row."""
+    preferred_order = (
+        "sar",
+        "supertrend",
+        "st",
+        "rsi",
+        "rsi_14",
+        "adx",
+        "ema20",
+        "ema50",
+        "ema50_m",
+        "macd",
+        "macdsignal",
+        "macdhist",
+        "cmf",
+        "obv",
+        "obv_ema",
+        "ppo",
+        "atr",
+        "bb_lower",
+        "bb_mid",
+        "bb_upper",
+        "don_high",
+        "don_mid",
+        "don_low",
+        "vol_sma",
+        "range_pos_1h",
+        "above_sar",
+        "st_dir",
+    )
+    cols = [str(c) for c in row.index]
+    ranked: list[str] = []
+    for name in preferred_order:
+        for col in cols:
+            if col == name or col.lower() == name or col.lower().startswith(name + "_"):
+                if col not in ranked:
+                    ranked.append(col)
+    for col in cols:
+        if col not in ranked:
+            ranked.append(col)
+
+    out: dict[str, str] = {}
+    for name in ranked:
+        if name in _ENTRY_LOG_SKIP_COLS or name.startswith("enter_") or name.startswith("exit_"):
+            continue
+        if name.endswith("_prev"):
+            continue
+        val = row[name]
+        try:
+            if hasattr(val, "item"):
+                val = val.item()
+        except (ValueError, AttributeError):
+            pass
+        if isinstance(val, bool):
+            out[name] = "1" if val else "0"
+        else:
+            try:
+                num = float(val)
+            except (TypeError, ValueError):
+                continue
+            if not math.isfinite(num):
+                continue
+            out[name] = _fmt_entry_num(num)
+        if len(out) >= max_items:
+            break
+    return out
+
+
 class MultiStrategyRouter(IStrategy):
     INTERFACE_VERSION = 3
 
@@ -936,6 +1136,70 @@ class MultiStrategyRouter(IStrategy):
         if strategy_id not in self._instances:
             self._instances[strategy_id] = STRATEGY_REGISTRY[strategy_id](self.config)
         return self._instances[strategy_id]
+
+    def _strategy_indicator_snapshot(self, tag: str, pair: str) -> dict[str, str]:
+        """Recompute sub-strategy indicators for the pair and snapshot the last candle."""
+        if not tag or tag not in STRATEGY_REGISTRY:
+            return {}
+        try:
+            ohlcv = self.dp.get_pair_dataframe(pair, self.timeframe)
+        except Exception:
+            ohlcv = None
+        if ohlcv is None or getattr(ohlcv, "empty", True):
+            try:
+                ohlcv, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+            except Exception:
+                return {}
+        if ohlcv is None or ohlcv.empty:
+            return {}
+        try:
+            inst = self._get_instance(tag)
+            ind_df = inst.populate_indicators(ohlcv.copy(), {"pair": pair})
+            if ind_df is None or ind_df.empty:
+                return {}
+            return _row_indicator_snapshot(ind_df.iloc[-1])
+        except Exception as exc:
+            logger.debug("entry indicator snapshot failed %s %s: %s", tag, pair, exc)
+            return {}
+
+    def _log_strategy_entry(
+        self,
+        *,
+        strategy_id: str,
+        pair: str,
+        side: str,
+        rate: float,
+        stake_usdt: float | None = None,
+        amount: float | None = None,
+        entry_tag: str | None = None,
+    ) -> None:
+        side_l = (side or "").lower()
+        side_ru = (
+            "лонг"
+            if side_l in ("long", "buy")
+            else "шорт"
+            if side_l in ("short", "sell")
+            else side_l
+        )
+        indicators = self._strategy_indicator_snapshot(base_enter_tag(strategy_id), pair)
+        ind_txt = ", ".join(f"{k}={v}" for k, v in indicators.items()) if indicators else "н/д"
+        stake_txt = _fmt_entry_num(stake_usdt) if stake_usdt is not None else "н/д"
+        amount_txt = _fmt_entry_num(amount) if amount is not None else "н/д"
+        tag_txt = entry_tag or strategy_id
+        when = datetime.now(timezone.utc).astimezone(_APP_TZ).strftime("%Y-%m-%d %H:%M:%S")
+        logger.info(
+            "Стратегия %s на паре %s вошла в %s по цене %s, стоимость ~%s USDT "
+            "(amount=%s, tag=%s, время=%s UTC+3). Индикаторы: %s",
+            strategy_id,
+            pair,
+            side_ru,
+            _fmt_entry_num(rate),
+            stake_txt,
+            amount_txt,
+            tag_txt,
+            when,
+            ind_txt,
+        )
 
     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         dataframe["adx"] = ta.ADX(dataframe, timeperiod=14)
@@ -986,6 +1250,20 @@ class MultiStrategyRouter(IStrategy):
         dataframe["exit_short"] = 0
         return dataframe
 
+    def _pair_ohlcv(self, pair: str) -> DataFrame | None:
+        try:
+            df = self.dp.get_pair_dataframe(pair, self.timeframe)
+        except Exception:
+            df = None
+        if df is None or getattr(df, "empty", True):
+            try:
+                df, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+            except Exception:
+                return None
+        if df is None or getattr(df, "empty", True):
+            return None
+        return df
+
     def custom_exit(
         self,
         pair: str,
@@ -1003,16 +1281,8 @@ class MultiStrategyRouter(IStrategy):
         fn = getattr(inst, "exit_reason_from_ohlcv", None)
         if not callable(fn):
             return None
-        try:
-            df = self.dp.get_pair_dataframe(pair, self.timeframe)
-        except Exception:
-            df = None
-        if df is None or getattr(df, "empty", True):
-            try:
-                df, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
-            except Exception:
-                return None
-        if df is None or getattr(df, "empty", True):
+        df = self._pair_ohlcv(pair)
+        if df is None:
             return None
         return fn(df, trade, current_rate)
 
@@ -1050,7 +1320,7 @@ class MultiStrategyRouter(IStrategy):
         tag = base_enter_tag(entry_tag)
         if not is_test_strategy_tag(tag):
             return proposed_stake
-        stake = float(load_test_strategy_settings().get("stake_amount") or proposed_stake)
+        stake = float(load_test_strategy_settings(self.config).get("stake_amount") or proposed_stake)
         if min_stake is not None:
             stake = max(float(min_stake), stake)
         return min(stake, float(max_stake))
@@ -1066,25 +1336,37 @@ class MultiStrategyRouter(IStrategy):
         **kwargs,
     ) -> float | None:
         tag = base_enter_tag(trade.enter_tag)
+        sl: float | None = None
         if tag_uses_trained_risk(tag):
             risk = TAG_RISK.get(tag)
-            if not risk:
-                return None
-            return stoploss_from_open(
-                float(risk["stoploss"]),
-                current_profit,
-                is_short=trade.is_short,
-                leverage=float(trade.leverage or 1.0),
+            if risk:
+                sl = float(risk["stoploss"])
+        elif is_test_strategy_tag(tag):
+            sl = float(
+                load_test_strategy_settings(self.config).get("stoploss")
+                or DEFAULT_TEST_SETTINGS["stoploss"]
             )
-        if is_test_strategy_tag(tag):
-            sl = float(load_test_strategy_settings().get("stoploss") or DEFAULT_TEST_SETTINGS["stoploss"])
-            return stoploss_from_open(
-                sl,
-                current_profit,
-                is_short=trade.is_short,
-                leverage=float(trade.leverage or 1.0),
-            )
-        return None
+        if tag in STRATEGY_REGISTRY:
+            inst = self._get_instance(tag)
+            fn = getattr(inst, "custom_stoploss_from_ohlcv", None)
+            if callable(fn):
+                df = self._pair_ohlcv(pair)
+                if df is not None:
+                    try:
+                        dyn = fn(df, trade, current_rate, current_profit)
+                        if dyn is not None and math.isfinite(float(dyn)):
+                            dyn_f = float(dyn)
+                            sl = dyn_f if sl is None else max(dyn_f, sl)
+                    except Exception:
+                        pass
+        if sl is None:
+            return None
+        return stoploss_from_open(
+            sl,
+            current_profit,
+            is_short=trade.is_short,
+            leverage=float(trade.leverage or 1.0),
+        )
 
     def custom_roi(
         self,
@@ -1112,7 +1394,7 @@ class MultiStrategyRouter(IStrategy):
             return float(risk["tp"])
         if is_test_strategy_tag(tag):
             return float(
-                load_test_strategy_settings().get("take_profit")
+                load_test_strategy_settings(self.config).get("take_profit")
                 or DEFAULT_TEST_SETTINGS["take_profit"]
             )
         return None
@@ -1132,10 +1414,103 @@ class MultiStrategyRouter(IStrategy):
         tag = base_enter_tag(entry_tag)
         # Hedge leg always follows the primary — do not re-check ML / cooldown / per-tag cap.
         if entry_tag and HEDGE_TAG_SUFFIX in str(entry_tag):
-            return True
+            return not is_signal_only(self.config)
+        if is_signal_only(self.config):
+            if tag in STRATEGY_REGISTRY:
+                inst = self._get_instance(tag)
+                cooldown = getattr(inst, "pair_in_cooldown", None)
+                if callable(cooldown) and cooldown(pair, current_time):
+                    return False
+            busy = pair_busy(pair, side, bot="strategy")
+            if busy:
+                logger.info(
+                    "SIGNAL skipped (pair busy): %s %s %s — %s",
+                    tag or "unknown",
+                    side,
+                    pair,
+                    busy,
+                )
+                return False
+            scenario = SCENARIO_BY_TAG.get(tag)
+            indicators = self._strategy_indicator_snapshot(tag, pair)
+            ml_payload: dict = {}
+            if tag in NEURAL_GATE_TAGS:
+                # Built-in seq gate already filtered entries — don't re-score LightGBM.
+                ml_payload = {
+                    "predicted": "profit",
+                    "confidence_profit": 0.99,
+                    "confidence_loss": 0.01,
+                    "ready": True,
+                    "model_scope": "builtin:seq_gate",
+                }
+            elif scenario:
+                df, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+                test_tag = is_test_strategy_tag(tag)
+                if test_tag:
+                    test_cfg = load_test_strategy_settings(self.config)
+                    stake = float(test_cfg.get("stake_amount") or self.config.get("stake_amount") or 5)
+                    sl = float(test_cfg.get("stoploss") or self.stoploss)
+                    roi = {"0": float(test_cfg.get("take_profit") or 0.05)}
+                else:
+                    stake = float(self.config.get("stake_amount") or 5)
+                    sl = float(self.stoploss)
+                    roi = dict(self.minimal_roi)
+                try:
+                    ml = get_live_ml_gate().score_trade_entry(
+                        scenario=scenario,
+                        pair=pair,
+                        rate=float(rate),
+                        side=side,
+                        current_time=current_time,
+                        stake_usdt=stake,
+                        stoploss=sl,
+                        minimal_roi=roi,
+                        timeframe=self.timeframe,
+                        ohlcv_df=df,
+                    )
+                    ml_payload = {
+                        k: ml.get(k)
+                        for k in (
+                            "predicted",
+                            "confidence_profit",
+                            "confidence_loss",
+                            "ready",
+                            "model_scope",
+                        )
+                    }
+                except Exception as exc:
+                    logger.warning("signal ml score failed %s %s: %s", tag, pair, exc)
+            try:
+                _publish_shared_entry_signal(
+                    pair=pair,
+                    side=side,
+                    strategy_id=tag,
+                    rate=float(rate),
+                    entry_tag=entry_tag,
+                    scenario=scenario,
+                    indicators=indicators,
+                    current_time=current_time,
+                    ml=ml_payload,
+                )
+                ml_pred = ml_payload.get("predicted") or "?"
+                ml_conf = float(ml_payload.get("confidence_profit") or 0) * 100
+                logger.info(
+                    "SIGNAL → executor: %s %s %s rate=%s ml pred=%s profit_conf=%.1f%% "
+                    "(сделку откроет trade-executor, если пройдёт gate/лимиты; "
+                    "в UI: Логи → Исполнитель)",
+                    tag or "unknown",
+                    side,
+                    pair,
+                    rate,
+                    ml_pred,
+                    ml_conf,
+                )
+            except Exception as exc:
+                logger.warning("signal publish failed %s %s: %s", tag, pair, exc)
+            return False
         test_tag = is_test_strategy_tag(tag)
         if test_tag:
-            test_cfg = load_test_strategy_settings()
+            test_cfg = load_test_strategy_settings(self.config)
             test_cap = int(test_cfg.get("max_open_trades") or 0)
             if test_cap <= 0 or count_open_test_trades() >= test_cap:
                 return False
@@ -1143,7 +1518,7 @@ class MultiStrategyRouter(IStrategy):
             if per_test > 0 and tag and count_open_trades_for_tag(tag) >= per_test:
                 return False
         else:
-            per_strat_limit = load_max_open_trades_per_strategy()
+            per_strat_limit = load_max_open_trades_per_strategy(self.config)
             if per_strat_limit > 0 and tag and count_open_trades_for_tag(tag) >= per_strat_limit:
                 return False
         if tag in STRATEGY_REGISTRY:
@@ -1153,10 +1528,12 @@ class MultiStrategyRouter(IStrategy):
                 return False
         scenario = SCENARIO_BY_TAG.get(tag)
         if not scenario:
-            return True
+            return claim_entry("strategy", pair, side)
+        if tag in NEURAL_GATE_TAGS:
+            return claim_entry("strategy", pair, side)
         df, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
         if test_tag:
-            test_cfg = load_test_strategy_settings()
+            test_cfg = load_test_strategy_settings(self.config)
             stake = float(test_cfg.get("stake_amount") or self.config.get("stake_amount") or 0)
         else:
             stake = float(self.config.get("stake_amount") or 0)
@@ -1169,13 +1546,13 @@ class MultiStrategyRouter(IStrategy):
             else:
                 roi = {"0": float(tp)} if tp is not None else dict(self.minimal_roi)
         elif test_tag:
-            test_cfg = load_test_strategy_settings()
+            test_cfg = load_test_strategy_settings(self.config)
             sl = float(test_cfg.get("stoploss") or self.stoploss)
             roi = {"0": float(test_cfg.get("take_profit") or 0.05)}
         else:
             sl = float(self.stoploss)
             roi = dict(self.minimal_roi)
-        return allow_trade_entry(
+        if not allow_trade_entry(
             scenario=scenario,
             pair=pair,
             rate=rate,
@@ -1186,7 +1563,9 @@ class MultiStrategyRouter(IStrategy):
             minimal_roi=roi,
             timeframe=self.timeframe,
             ohlcv_df=df,
-        )
+        ):
+            return False
+        return claim_entry("strategy", pair, side)
 
     def order_filled(
         self,
@@ -1199,15 +1578,33 @@ class MultiStrategyRouter(IStrategy):
         if order.ft_order_side != trade.entry_side:
             return
         tag = base_enter_tag(trade.enter_tag)
+        side = "short" if trade.is_short else "long"
+        fill_rate = float(
+            getattr(order, "average", None)
+            or getattr(order, "price", None)
+            or trade.open_rate
+            or 0
+        )
+        stake = float(getattr(trade, "stake_amount", None) or 0)
+        amount = float(getattr(trade, "amount", None) or getattr(order, "filled", None) or 0)
+        self._log_strategy_entry(
+            strategy_id=tag or str(trade.enter_tag or "unknown"),
+            pair=pair,
+            side=side,
+            rate=fill_rate,
+            stake_usdt=stake,
+            amount=amount,
+            entry_tag=trade.enter_tag,
+        )
         scenario = SCENARIO_BY_TAG.get(tag)
         if not scenario:
             return
         test_tag = is_test_strategy_tag(tag)
         if test_tag:
-            test_cfg = load_test_strategy_settings()
-            stake = float(test_cfg.get("stake_amount") or self.config.get("stake_amount") or 0)
+            test_cfg = load_test_strategy_settings(self.config)
+            stake_cfg = float(test_cfg.get("stake_amount") or self.config.get("stake_amount") or 0)
         else:
-            stake = float(self.config.get("stake_amount") or 0)
+            stake_cfg = float(self.config.get("stake_amount") or 0)
         if tag_uses_trained_risk(tag):
             risk = TAG_RISK.get(tag) or {}
             sl = float(risk.get("stoploss", self.stoploss))
@@ -1217,7 +1614,7 @@ class MultiStrategyRouter(IStrategy):
             else:
                 roi = {"0": float(tp)} if tp is not None else dict(self.minimal_roi)
         elif test_tag:
-            test_cfg = load_test_strategy_settings()
+            test_cfg = load_test_strategy_settings(self.config)
             sl = float(test_cfg.get("stoploss") or self.stoploss)
             roi = {"0": float(test_cfg.get("take_profit") or 0.05)}
         else:
@@ -1229,7 +1626,7 @@ class MultiStrategyRouter(IStrategy):
             scenario=scenario,
             ohlcv_df=df,
             current_time=current_time,
-            stake_usdt=stake,
+            stake_usdt=stake_cfg,
             stoploss=sl,
             minimal_roi=roi,
             timeframe=self.timeframe,

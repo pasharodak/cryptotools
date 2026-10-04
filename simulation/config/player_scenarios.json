@@ -156,6 +156,25 @@
         "settings": "Пробой диапазона · ретест · объём · 3x"
     },
     {
+        "id": "trend_breakout_test",
+        "label": "Breakout-Retest (test)",
+        "enabled": false,
+        "strategy": "SimBreakoutRetestTest",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_lite_base.json",
+        "scan_type": "strategy",
+        "group": "trend_test",
+        "stake_usdt": 15,
+        "stoploss": -0.03,
+        "minimal_roi": {
+            "0": 0.02,
+            "60": 0.012,
+            "180": 0.008,
+            "480": 0
+        },
+        "settings": "Тест · breakout-retest · 1x · SL −3% · TP 2%"
+    },
+    {
         "id": "trend_fib",
         "label": "Fib pullback (DCA) (ML Gate)",
         "enabled": true,
@@ -254,14 +273,14 @@
         "scan_type": "strategy",
         "group": "trend_test",
         "stake_usdt": 15,
-        "stoploss": -0.03,
+        "stoploss": -0.012,
         "minimal_roi": {
-            "0": 0.012,
-            "60": 0.008,
-            "180": 0.005,
-            "480": 0.0
+            "0": 0.016,
+            "60": 0.012,
+            "180": 0.006,
+            "480": 0
         },
-        "settings": "Тест · Supertrend flip · без chase RSI/1h · 1x · SL −3% · TP 1.2% · выход st_flip"
+        "settings": "Тест · ST · long-only · DI+/bull bar · ST dynamic SL · block hot UTC · SL −1.2% TP 1.6%"
     },
     {
         "id": "trend_macd_ema",
@@ -524,6 +543,25 @@
             "720": 0
         },
         "settings": "PSAR · SL −2% · TP 2.2%"
+    },
+    {
+        "id": "new_psar_test",
+        "label": "Parabolic SAR flip (test)",
+        "enabled": false,
+        "strategy": "PsaraFlipTestStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "newset_test",
+        "stake_usdt": 15,
+        "stoploss": -0.02,
+        "minimal_roi": {
+            "0": 0.012,
+            "45": 0.008,
+            "120": 0.005,
+            "360": 0.0
+        },
+        "settings": "Тест · PSAR · long-only · SL −2% · TP 1.2%"
     },
     {
         "id": "chart_willr",
@@ -1071,6 +1109,24 @@
         "settings": "ATR ch · SL −2% · TP 1.4%"
     },
     {
+        "id": "chart3_atrch_test",
+        "label": "ATR channel breakout (test)",
+        "enabled": false,
+        "strategy": "AtrChannelBreakoutTestStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "chart3_test",
+        "stake_usdt": 15,
+        "stoploss": -0.02,
+        "minimal_roi": {
+            "0": 0.012,
+            "45": 0.007,
+            "120": 0.0
+        },
+        "settings": "Тест · ATR channel · SL −2% · TP 1.2%"
+    },
+    {
         "id": "combo_ema_rsi_atr",
         "label": "EMA+RSI+ATR triad",
         "enabled": true,
@@ -1467,5 +1523,79 @@
             "150": 0
         },
         "settings": "BB inside KC release · SL −1.8% · TP 1.3%"
+    },
+    {
+        "id": "scalp_pattern",
+        "label": "Pattern Scalp (UTC open)",
+        "enabled": true,
+        "strategy": "PatternScalpStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "scalp",
+        "stake_usdt": 15,
+        "stoploss": -0.02,
+        "minimal_roi": {
+            "0": 0.025,
+            "60": 0.015,
+            "180": 0.008,
+            "360": 0
+        },
+        "settings": "Doug Pattern Scalp · OR 15m UTC · ATR20% · JW/engulf · SL -2%"
+    },
+    {
+        "id": "scalp_pattern_strong",
+        "label": "Pattern Scalp strong (ATR50%)",
+        "enabled": true,
+        "strategy": "PatternScalpStrongStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "scalp",
+        "stake_usdt": 15,
+        "stoploss": -0.025,
+        "minimal_roi": {
+            "0": 0.03,
+            "60": 0.018,
+            "180": 0.01,
+            "360": 0
+        },
+        "settings": "Pattern Scalp · manip >=50% ATR · SL -2.5%"
+    },
+    {
+        "id": "xf_barrier_5m",
+        "label": "Transformer barrier (5m)",
+        "enabled": true,
+        "strategy": "TransformerBarrierStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "ml_xf",
+        "stake_usdt": 15,
+        "stoploss": -0.01,
+        "minimal_roi": {
+            "0": 0.008,
+            "20": 0.004,
+            "60": 0
+        },
+        "settings": "XF gate v3 · Scalp EMA entries · Transformer profit gate · SL −1% · TP 0.8%"
+    },
+    {
+        "id": "seq_gru_gate",
+        "label": "GRU seq-gate (EMA)",
+        "enabled": true,
+        "strategy": "GruBarrierStrategy",
+        "strategy_path": "simulation/strategies",
+        "config": "simulation/config/backtest_scalp_base.json",
+        "scan_type": "strategy",
+        "group": "ml_seq",
+        "stake_usdt": 15,
+        "stoploss": -0.01,
+        "minimal_roi": {
+            "0": 0.008,
+            "20": 0.004,
+            "60": 0
+        },
+        "settings": "Seq-gate GRU (compare #1 PnL) · Scalp EMA entries · thr≈0.85 · SL −1% · TP 0.8%"
     }
 ]

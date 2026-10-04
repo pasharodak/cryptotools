@@ -3,12 +3,14 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <meta name="theme-color" content="#0f1419" />
   <meta name="mobile-web-app-capable" content="yes" />
   <title>CriptoTools — панель управления</title>
   <link rel="icon" type="image/png" href="bitcoin-icon.png?v=20260801" />
   <link rel="apple-touch-icon" href="bitcoin-icon.png?v=20260801" />
-  <link rel="stylesheet" href="styles.css?v=20260815r" />
+  <link rel="stylesheet" href="styles.css?v=20261004collapse" />
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
 <body>
   <div id="login-screen" class="screen">
@@ -183,15 +185,13 @@
             aria-expanded="false"
             aria-controls="test-strategy-panel-body"
           >
-            <span class="collapsible-title">Тестовые стратегии</span>
+            <span class="collapsible-title-group">
+              <span class="collapsible-title">Тестовые стратегии</span>
+            </span>
             <span class="collapsible-sub muted" id="test-strategy-panel-summary">—</span>
             <span class="collapsible-chevron" aria-hidden="true">▸</span>
           </button>
           <div class="collapsible-body" id="test-strategy-panel-body">
-            <details class="ui-hint ui-hint-block">
-              <summary class="ui-hint-btn">О блоке</summary>
-              <div class="ui-hint-body">Тестовый блок #101–115. Админ переносит выбранные в «Стратегии» (Настройки → Размещение). Прод-оригиналы скрыты из UI.</div>
-            </details>
             <div id="test-strategy-enable-bulk" class="strategy-enable-bulk"></div>
             <div id="test-strategy-ml-conf-bulk" class="strategy-ml-conf-bulk"></div>
             <ul id="test-strategy-panel-toggles" class="strategy-toggle-list"></ul>
@@ -282,15 +282,13 @@
             aria-expanded="false"
             aria-controls="strategy-panel-body"
           >
-            <span class="collapsible-title">Стратегии</span>
+            <span class="collapsible-title-group">
+              <span class="collapsible-title">Стратегии</span>
+            </span>
             <span class="collapsible-sub muted" id="strategy-panel-summary">—</span>
             <span class="collapsible-chevron" aria-hidden="true">▸</span>
           </button>
           <div class="collapsible-body" id="strategy-panel-body">
-            <details class="ui-hint ui-hint-block">
-              <summary class="ui-hint-btn">О блоке</summary>
-              <div class="ui-hint-body">Стратегии с ML gate. Включите нужные — вход по сигналу любой активной. Перенос из тестовых — в Настройки → Размещение.</div>
-            </details>
             <div id="strategy-enable-bulk" class="strategy-enable-bulk"></div>
             <div id="strategy-ml-conf-bulk" class="strategy-ml-conf-bulk"></div>
             <ul id="strategy-panel-toggles" class="strategy-toggle-list"></ul>
@@ -335,7 +333,13 @@
       <section class="panel panel-grid" id="panel-grid" data-block="grid">
         <div class="panel-head">
           <div class="panel-title">
-            <h2>Grid (волатильность) + ML gate</h2>
+            <div class="panel-title-row">
+              <h2>Grid (волатильность) + ML gate</h2>
+              <details class="ui-hint">
+                <summary class="ui-hint-btn" aria-label="Подсказка">i</summary>
+                <div class="ui-hint-body" id="grid-ml-gate">ML gate · LightGBM · block_loss ≥85% — сценарий live_grid</div>
+              </details>
+            </div>
             <p class="muted">Bollinger + ADX · ML-фильтр на входе</p>
           </div>
           <div class="panel-head-actions">
@@ -357,10 +361,6 @@
             <span class="collapsible-chevron" aria-hidden="true">▸</span>
           </button>
           <div class="collapsible-body" id="grid-settings-body">
-            <details class="ui-hint ui-hint-block">
-              <summary class="ui-hint-btn">ML gate</summary>
-              <div class="ui-hint-body" id="grid-ml-gate">ML gate · XGBoost · profit ≥60% — сценарий live_grid</div>
-            </details>
             <div class="stats" id="grid-stats"></div>
             <div class="actions" id="grid-actions"></div>
             <p class="muted grid-scan-info" id="grid-scan-info">Скан боковика: —</p>
@@ -405,7 +405,13 @@
       <section class="panel panel-bybitgrid" id="panel-bybitgrid" data-block="bybitgrid">
         <div class="panel-head">
           <div class="panel-title">
-            <h2>Bybit Grid</h2>
+            <div class="panel-title-row">
+              <h2>Bybit Grid</h2>
+              <details class="ui-hint">
+                <summary class="ui-hint-btn" aria-label="Подсказка">i</summary>
+                <div class="ui-hint-body">Нативная Futures Grid на Bybit. ML gate не использует. Лимит активных сеток — в настройках.</div>
+              </details>
+            </div>
             <p class="muted">Нативная сетка биржи · Long / Short / Neutral</p>
           </div>
           <div class="panel-head-actions">
@@ -464,15 +470,22 @@
         </div>
       </section>
 
-      <section class="panel panel-finder panel-finder-retired" id="panel-finder" data-block="finder">
+      <section class="panel panel-finder" id="panel-finder" data-block="finder">
         <div class="panel-head">
-          <h2>ML Finder</h2>
+          <div class="panel-title">
+            <div class="panel-title-row">
+              <h2>ML Finder</h2>
+              <details class="ui-hint">
+                <summary class="ui-hint-btn" aria-label="Подсказка">i</summary>
+                <div class="ui-hint-body">TradeFinderStrategy — barrier Transformer (thr≥60%). Не влияет на стратегии и Grid.</div>
+              </details>
+            </div>
+          </div>
           <div class="panel-head-actions">
             <button type="button" class="btn ghost btn-sm panel-stats-btn" data-stats-scope="finder">Статистика</button>
-            <span class="badge" id="finder-state" title="XGBoost scanner + pnl classifier gate">—</span>
+            <span class="badge" id="finder-state" title="Barrier Transformer scanner · thr ≥60%">—</span>
           </div>
         </div>
-        <p class="panel-retired-note">Пока отключён на сервере. TradeFinderStrategy — сканер рынка + pnl gate. Не влияет на стратегии и Grid.</p>
         <div class="collapsible-section is-collapsed bot-settings-collapsible" id="finder-settings-section">
           <button
             type="button"
@@ -554,6 +567,7 @@
         <h2 class="logs-title">Логи в реальном времени</h2>
         <div class="logs-filters" role="tablist" aria-label="Фильтр логов">
           <button type="button" class="btn btn-sm logs-filter is-active" data-logs-filter="all">Все</button>
+          <button type="button" class="btn btn-sm logs-filter" data-logs-filter="executor">Исполнитель</button>
           <button type="button" class="btn btn-sm logs-filter" data-logs-filter="finder">ML Finder</button>
           <button type="button" class="btn btn-sm logs-filter" data-logs-filter="strategy">Стратегии</button>
           <button type="button" class="btn btn-sm logs-filter" data-logs-filter="grid">Grid</button>
@@ -806,16 +820,74 @@
             <h3>Секреты биржи (Bybit)</h3>
             <details class="ui-hint">
               <summary class="ui-hint-btn" aria-label="Подсказка">i</summary>
-              <div class="ui-hint-body">API Key и Secret вашего аккаунта Bybit. Хранятся на сервере в зашифрованном виде.</div>
+              <div class="ui-hint-body">Можно сохранить несколько наборов ключей (Live и Demo). В блоке «Торговать на» выберите, каким аккаунтом пользоваться сейчас. Live → api.bybit.com, Demo → api-demo.bybit.com.</div>
             </details>
           </div>
           <p id="secrets-status" class="muted strategy-desc">—</p>
+          <div class="secrets-trade-on" id="secrets-trade-on" hidden>
+            <div class="secrets-trade-on-label">Торговать на</div>
+            <div id="secrets-trade-on-options" class="secrets-trade-on-options" role="radiogroup" aria-label="Аккаунт для торговли"></div>
+          </div>
+          <div id="secrets-profiles" class="secrets-profiles" aria-live="polite"></div>
           <div class="settings-add secrets-form">
+            <p class="muted secrets-add-label">Добавить ключи</p>
+            <fieldset class="secrets-mode" id="secrets-mode">
+              <legend class="secrets-mode-legend">Тип ключей</legend>
+              <label class="settings-field settings-check">
+                <input type="radio" name="secrets-key-mode" id="secrets-mode-live" value="live" checked />
+                Live (реальный аккаунт)
+              </label>
+              <label class="settings-field settings-check">
+                <input type="radio" name="secrets-key-mode" id="secrets-mode-demo" value="demo" />
+                Demo Trading (демо-аккаунт Bybit)
+              </label>
+            </fieldset>
+            <label class="settings-field">Название<input id="secrets-name" type="text" autocomplete="off" placeholder="Напр. Demo основной" /></label>
             <label class="settings-field">API Key<input id="secrets-api-key" type="text" autocomplete="off" placeholder="Bybit API Key" /></label>
             <label class="settings-field">API Secret<input id="secrets-api-secret" type="password" autocomplete="new-password" placeholder="Bybit API Secret" /></label>
-            <button id="secrets-save-btn" class="btn primary" type="button">Сохранить ключи</button>
+            <button id="secrets-save-btn" class="btn primary" type="button">Добавить ключи</button>
           </div>
           <p id="secrets-msg" class="pair-msg hidden"></p>
+        </div>
+
+        <div class="settings-section" id="telegram-settings-section">
+          <div class="settings-section-head">
+            <h3>Telegram</h3>
+            <details class="ui-hint">
+              <summary class="ui-hint-btn" aria-label="Подсказка">i</summary>
+              <div class="ui-hint-body">Откройте бота → /start → скопируйте chat id → вставьте сюда. Мини-приложение в боте открывает эту панель. Уведомления о сделках приходят на русском.</div>
+            </details>
+          </div>
+          <p id="telegram-status" class="muted strategy-desc">—</p>
+          <label class="settings-field">
+            Chat ID
+            <input id="telegram-chat-id" type="text" inputmode="numeric" autocomplete="off" placeholder="Напр. 123456789" />
+          </label>
+          <label class="settings-toggle-row">
+            <input type="checkbox" id="telegram-notify-enabled" checked />
+            <span>Присылать уведомления о сделках</span>
+          </label>
+          <div class="settings-add" style="margin-top:0.5rem">
+            <button id="telegram-save-btn" class="btn primary" type="button">Сохранить Telegram</button>
+            <button id="telegram-clear-btn" class="btn ghost" type="button">Отвязать</button>
+          </div>
+          <p id="telegram-msg" class="pair-msg hidden"></p>
+        </div>
+
+        <div class="settings-section" id="trading-toggle-section">
+          <div class="settings-section-head">
+            <h3>Автоторговля (общий движок)</h3>
+            <details class="ui-hint">
+              <summary class="ui-hint-btn" aria-label="Подсказка">i</summary>
+              <div class="ui-hint-body">Signal Engine один на всех — сигналы общие. При включении бот открывает сделки на вашем Bybit по вашим ключам, лимитам и включённым стратегиям.</div>
+            </details>
+          </div>
+          <p id="shared-stack-status" class="muted strategy-desc">—</p>
+          <label class="settings-toggle-row">
+            <input type="checkbox" id="trading-strategy-enabled" />
+            <span>Торговля стратегиями (per-user executor)</span>
+          </label>
+          <p id="trading-toggle-msg" class="pair-msg hidden"></p>
         </div>
 
         <div class="settings-section">
@@ -938,7 +1010,7 @@
 
   <div id="stats-modal" class="modal hidden" aria-hidden="true">
     <div class="modal-backdrop" data-close="stats"></div>
-    <div class="modal-card modal-card-wide">
+    <div class="modal-card modal-card-wide stats-modal-card">
       <div class="modal-head stats-modal-head">
         <div class="stats-modal-head-main">
           <div class="panel-title-row">
@@ -1078,7 +1150,7 @@
             </li>
             <li>
               У нового user по умолчанию <strong>1</strong> слот на Finder / Strategy / Grid и <strong>1</strong> Bybit Grid.
-              Можно поднять (до 50 позиций / до 5 Bybit Grid), как у admin.
+              Можно поднять любое число позиций и Bybit Grid (у admin потолок Bybit Grid — 5).
             </li>
           </ol>
           <p class="guide-note">
@@ -1242,6 +1314,18 @@
     </div>
   </div>
 
-  <script src="app.js?v=20260815r"></script>
+  <script src="app.js?v=20261004finderxf"></script>
+  <script>
+    (function () {
+      try {
+        var tg = window.Telegram && window.Telegram.WebApp;
+        if (!tg) return;
+        tg.ready();
+        tg.expand();
+        document.documentElement.classList.add("tg-webapp");
+        document.body.classList.add("tg-webapp");
+      } catch (e) { /* ignore */ }
+    })();
+  </script>
 </body>
 </html>

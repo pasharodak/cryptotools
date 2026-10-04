@@ -11,7 +11,9 @@ WorkingDirectory=/home/cryptotools/app
 ExecStart=/bin/bash -lc 'source /home/cryptotools/app/scripts/load_env.sh /home/cryptotools/.cryptotools.env && exec /home/cryptotools/app/.venv/bin/ctbot trade --config user_data/config.json --strategy TradeFinderStrategy --logfile user_data/logs/cryptotools-finder.log'
 Restart=on-failure
 RestartSec=30
-MemoryMax=5G
+Slice=cryptotools.slice
+MemoryHigh=800M
+MemoryMax=1000M
 
 [Install]
 WantedBy=multi-user.target

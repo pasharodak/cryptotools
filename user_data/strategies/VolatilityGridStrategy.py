@@ -16,6 +16,7 @@ _USER_DATA = Path(__file__).resolve().parent.parent
 if str(_USER_DATA) not in sys.path:
     sys.path.insert(0, str(_USER_DATA))
 from ml.gate import allow_trade_entry, persist_entry_ml  # noqa: E402
+from _pair_guard import claim_entry  # noqa: E402
 from _sim_live import PROD_MINIMAL_ROI, PROD_STOPLOSS  # noqa: E402
 
 GRID_SCENARIO = {
@@ -82,7 +83,7 @@ class VolatilityGridStrategy(IStrategy):
             return False
         df, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
         stake = float(self.config.get("stake_amount") or 0)
-        return allow_trade_entry(
+        if not allow_trade_entry(
             scenario=GRID_SCENARIO,
             pair=pair,
             rate=rate,
@@ -93,7 +94,9 @@ class VolatilityGridStrategy(IStrategy):
             minimal_roi=dict(self.minimal_roi),
             timeframe=self.timeframe,
             ohlcv_df=df,
-        )
+        ):
+            return False
+        return claim_entry("grid", pair, side)
 
     def order_filled(
         self,

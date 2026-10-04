@@ -15,9 +15,9 @@
 
 | Слой | Где | Зачем |
 |------|-----|-------|
-| Live-боты | `site/` | Strategy + Grid (+ Finder обычно off) на VPS |
+| Live-боты | `site/` | Shared Strategy (signal-engine + executor) + Grid + Finder на VPS |
 | UI | `site/custom-ui/` | Панель за nginx `:8443` |
-| Pair-config | `site/scripts/pair_config_server.py` | whitelist, лимиты, enable стратегий |
+| Pair-config | `site/scripts/pair_config_server.py` | whitelist, лимиты, enable, reconcile, control-plane |
 | ML gate | `site/user_data/ml/` + модели | Фильтр входа (`confirm_trade_entry`) |
 | Симы / ML train | `simulation/` | Replay, player, сравнение стратегий, обучение |
 
@@ -36,15 +36,16 @@ cryptotools/
 │   ├── ctengine/             # торговый движок (upstream-like)
 │   ├── custom-ui/            # веб-UI
 │   ├── deploy/               # systemd, nginx, SSH key id_rsa/
-│   ├── scripts/              # pair-config, scanners, deploy_*.ps1
+│   ├── scripts/              # pair-config, executor, guard, reconcile, deploy_*.ps1
 │   ├── user_data/
-│   │   ├── config_strategy.json / config_grid.json / config.json
+│   │   ├── config_signal_engine.json / config_strategy.json / config_grid.json / config.json
 │   │   ├── enabled_strategies.json   # какие саб-стратегии ON
 │   │   ├── bot_strategies.json       # snapshot для restore после деплоя
+│   │   ├── test_strategy_settings.json
 │   │   ├── ml_entry_gate.json
 │   │   ├── strategies/               # MultiStrategyRouter + wrappers
-│   │   ├── ml/                       # gate code
-│   │   └── models/                   # pnl_classifier, trade_finder
+│   │   ├── ml/                       # gate + finder_live
+│   │   └── models/                   # pnl_classifier, trade_finder, barrier XF
 │   └── .env                  # секреты (не коммитить)
 └── simulation/
     ├── config/               # player_scenarios, prod_ml_bots, backtest_*
@@ -77,24 +78,48 @@ cryptotools/
 
 ## 4. Прод: боты и сервисы
 
-| systemd | Config | Стратегия | API |
-|---------|--------|-----------|-----|
-| `cryptotools-strategy` | `config_strategy.json` | `MultiStrategyRouter` | `:8081` → `/api/strategy/` |
+| systemd | Config | Стратегия / процесс | API |
+|---------|--------|---------------------|-----|
+| `cryptotools-signal-engine` | `config_signal_engine.json` | `MultiStrategyRouter` (`CT_SIGNAL_ONLY`) | `:8081` → `/api/strategy/` |
+| `trade-executor` | — | `scripts/trade_executor.py` (сигналы → Bybit по юзеру) | — |
 | `cryptotools-grid` | `config_grid.json` | `VolatilityGridStrategy` | `:8082` → `/api/grid/` |
-| `cryptotools-finder` | `config.json` | `TradeFinderStrategy` | `:8080` (обычно **disabled/masked**) |
+| `cryptotools-finder` | `config.json` | `TradeFinderStrategy` (barrier XF) | `:8080` |
 | `pair-config` | — | `pair_config_server.py` | `:8090` → `/api/pair-config/` |
+| `cryptotools-telegram-bot` | — | `scripts/telegram_bot.py` | — |
+
+Legacy: `cryptotools-strategy` + `config_strategy.json` — старый путь «бот сам торгует»; продовый путь — **signal-engine → signal_bus → trade-executor**.
+
+### Cross-bot guard и reconcile
+
+- `scripts/pair_entry_guard.py` — first-wins по паре между Finder / Strategy / Grid (БД ботов + Bybit + короткий claim).
+- `scripts/reconcile_positions.py` — призраки (есть в БД, нет на бирже) и дубли (одна пара в нескольких ботах); UI «Синхронизировать» + auto ~5 мин в pair-config.
+- При закрытии позиции Strategy на общем счёте Finder может остаться «призраком» в своей БД — Sync/reconcile это чистит.
 
 ### Multi-user (tenants)
 
 - **Admin** = текущий `FREQUI_*` + `.cryptotools.env` Bybit + unit’ы выше.
 - **User** = запись в `user_data/users.json`, секреты `user_data/secrets/{id}.enc`, стек в `user_data/tenants/{id}/`, порты из пула `18100+`, systemd `cryptotools-{strategy,grid,finder}@{id}`.
 - UI логин → `POST /api/pair-config/auth/login` (JWT). Вызовы ботов → `/api/pair-config/bot-proxy/{bot}/...`.
-- Новые users: дефолт `max_open_trades=1` на категорию и Bybit `max_active_bots=1`; потолок как у админа (50 / 5).
+- Новые users: дефолт `max_open_trades=1` на категорию и Bybit `max_active_bots=1`; у max_open_trades нет верхнего потолка (любое целое ≥ 0); Bybit Grid у admin — до 5.
 - **Права пользователя** (`allowed_strategies` / `allowed_blocks` в `users.json`): админ в Настройки→Пользователи→«Права». `null` = всё; список = только выбранное. Блоки: `test_strategies`, `strategy`, `grid`, `bybitgrid`, `finder`, `history`, `dashboard`, `rating`.
 - **Войти как** → `POST /auth/impersonate`; возврат → `POST /auth/stop-impersonate` (JWT claim `imp_by`).
 - Sudoers: `deploy/sudoers-cryptotools-tenants`. Master key: `SECRETS_MASTER_KEY` в `.cryptotools.env`.
 
 UI: HTTPS **`:8443`**. Linux user на VPS: `cryptotools`. Секреты: `/home/cryptotools/.cryptotools.env`.
+
+### Control-plane (Старт/Стоп)
+
+- SQLite: `user_data/control_plane.sqlite` — desired/observed/outbox/events.
+- API: `GET|PATCH /api/pair-config/bots/{strategy|grid|finder}`, SSE `GET /bots/events`.
+- UI кнопки пишут **desired**; worker в pair-config reconcile (ctbot `/start|/stop`, Windows spawn / systemd).
+- `trading_enabled.json` синхронизируется с desired (strategy/grid/finder).
+
+### Telegram
+
+- Бот: `scripts/telegram_bot.py` (Mini App → `TELEGRAM_WEBAPP_URL`, обычно `https://77.222.35.209:8443/`), unit `cryptotools-telegram-bot`.
+- Привязка: Настройки → Telegram → chat id (из `/start` в боте) → `user_data/telegram_links.json`.
+- Уведомления о сделках (RU): `trade_executor` / `trade_exit_monitor` → `telegram_links.notify_user`.
+- Токен: `TELEGRAM_BOT_TOKEN` в `.env` / `.cryptotools.env`. Один polling-инстанс (иначе HTTP 409).
 
 ### Деплой
 
@@ -103,9 +128,9 @@ cd D:\cryptotools\site\scripts
 .\deploy_prod_ml.ps1
 ```
 
-Скрипт: `apply_prod_ml_config.py` → scp configs/strategies/models/simulation → restart strategy+grid+pair-config.
+Скрипт: `apply_prod_ml_config.py` → scp configs/strategies/models/simulation → restart signal-engine + executor + grid + pair-config (+ finder при необходимости).
 
-Подробнее: `site/SERVER_SETUP.md`, `site/README.md`.
+Подробнее: `site/SERVER_SETUP.md`, `site/README.md`, корневой `README.md`.
 
 ---
 
@@ -179,25 +204,27 @@ UI: `#num` стабильный; сверху по `ui_order=0` — **`AltVolume
 
 UI **«Тестовые стратегии»** (`test_group` / effective `ui_panel`, nums 101–115; **первый** блок панели). Основной блок **«Стратегии»** по умолчанию **пустой**: бывший live-набор (#1–39) скрыт (`strategy_ui_placement.json` → `hidden`), в sim/истории остаётся. Админ: **Настройки → Размещение стратегий** — promote тест→основной / demote обратно; после переноса `enabled=false`. Роутер читает placement: только panel=`test` живёт по `test_strategy_settings`.
 
-- #101 `PsaraFlipTestStrategy` (`new_psar_test`) — live #1
-- #102 `AtrChannelBreakoutTestStrategy` (`chart3_atrch_test`) — live #2
+- #101 `PsaraFlipTestStrategy` (`new_psar_test`) — live #1 · long-only · RSI≤55 · ADX≥20 · SL −2% · gate ≥70%
+- #102 `AtrChannelBreakoutTestStrategy` (`chart3_atrch_test`) — live #2 · gate ≥65%
 - #103 `AdxMomentumTestStrategy` (`trend_breakout_test`) — live #32
-- #104 `SupertrendTestStrategy` (`trend_supertrend_test`) — live #35 · 1x · SL −3% · без chase · выход `st_flip`
-- #105 `CmfZeroCrossTestStrategy` (`chart2_cmf_test`) — live #3 · 1x · SL −3% · без chase · выход `cmf_flip`
+- #104 `SupertrendTestStrategy` (`trend_supertrend_test`) — live #35 · 1x · long-only · SL −1.5% · EMA50/ADX/dist-ST · block hot UTC · выход `st_break`/`st_fade` · gate ≥90%
+- #105 `CmfZeroCrossTestStrategy` (`chart2_cmf_test`) — live #3 · 1x · long-only · SL −2% · gate ≥65% · выход `cmf_flip`
 - #106 `ScalpEmaCrossTestStrategy` (`scalp_ema_test`) — clone live #4 · 1x · SL −3% · без chase · выход `ema_flip`
-- #107 `ChaikinOscTestStrategy` (`chart3_adosc_test`) — clone live #5 · 1x · SL −3% · без chase · выход `adosc_flip`
+- #107 `ChaikinOscTestStrategy` (`chart3_adosc_test`) — clone live #5 · long-only · anti-chase/ADX · SL −2% · gate ≥70% · выход `adosc_flip`
 - #108 `DonchianBreakoutTestStrategy` (`new_donchian_test`) — clone live #6 · 1x · SL −3% · без chase · выход `don_mid`
-- #109 `PpoSignalTestStrategy` (`chart3_ppo_test`) — clone live #7 · 1x · SL −3% · без chase · выход `ppo_flip`
+- #109 `PpoSignalTestStrategy` (`chart3_ppo_test`) — clone live #7 · long-only · anti-chase/ADX · SL −2% · gate ≥70% · выход `ppo_flip`
 - #110 `DonchianAdxVolComboTestStrategy` (`combo_don_adx_vol_test`) — clone live #8 · 1x · SL −3% · без chase · выход `don_mid`
-- #111 `ObvEmaCrossTestStrategy` (`chart2_obv_test`) — clone live #9 · 1x · SL −3% · без chase · выход `obv_flip`
+- #111 `ObvEmaCrossTestStrategy` (`chart2_obv_test`) — clone live #9 · long-only · anti-chase/ADX · SL −2% · gate ≥70% · выход `obv_flip`
 - #112 `ElderRayTestStrategy` (`chart3_elder_test`) — clone live #10 · 1x · SL −3% · без chase · выход `elder_flip`
 - #113 `AltVolumeBreakoutTestStrategy` (`scalp_liq_breakout_test`) — clone live #31 · 1x · SL −3% · без chase · выход `don_mid`
-- #114 `BollingerRsiTestStrategy` (`lite_mean_rev_test`) — clone live #33 · 1x · SL −3% · без chase · выход `bb_mid`
-- #115 `MacdEmaTestStrategy` (`trend_macd_ema_test`) — clone live #34 · 1x · SL −3% · без chase · выход `macd_flip`
+- #114 `BollingerRsiTestStrategy` (`lite_mean_rev_test`) — clone live #33 · 1x · SL −2% · выход `bb_mid`
+- #115 `MacdEmaTestStrategy` (`trend_macd_ema_test`) — clone live #34 · long-only · anti-chase/ADX · SL −2% · gate ≥75% · выход `macd_flip`
+- #116 `GruBarrierStrategy` (`seq_gru_gate`) — EMA 8/21 + seq-gate **GRU** (leader seq_gate_compare) · thr≈85% · SL −1% · TP 0.8% · без LightGBM
 
-Порядок панели: Тестовые → Стратегии → Grid → Bybit Grid → ML Finder (внизу, обычно disabled).
+Порядок панели: Тестовые → Стратегии → Grid → Bybit Grid → ML Finder (внизу). Start/Stop Finder — только control-plane SQLite (`bots/finder`); файл `finder_bot.json` больше не блокирует запуск.
 
-Тестовый блок имеет **свои** настройки (`user_data/test_strategy_settings.json`, без рестарта): max open / на одну / stake / fallback SL·TP. Роутер режет входы тестовых тегов по этим лимитам; stake через `custom_stake_amount`.
+Тестовый блок имеет **свои** настройки (`user_data/test_strategy_settings.json`, без рестарта): max open / на одну / stake / fallback SL·TP. Ориентир после 2026-08-16: max_open=8, per=2, stake=5, SL **−2%**, TP **+2%**. Роутер режет входы тестовых тегов по этим лимитам; stake через `custom_stake_amount`.
+#101/#105/#113 после аудита 15–16 авг: ON с gate **65%** + long-only/chase в коде (код — после рестарта strategy).
 
 ML gate (strategy bots): `profit_only`, floor `min_confidence` **0.45**; per-scenario порог из `pnl_classifier_meta.json` (`min_profit_proba`).
 PnL classifiers: **sigmoid** calibration (smooth confidence %); isotonic historically collapsed live scores to 0%/100%.
@@ -231,7 +258,7 @@ Legacy retrain отчёт: `simulation/results/legacy_april_cut_ml/report.json`.
 |------|-------|
 | freqtrade / freqtrade.exe | ctengine / ctbot |
 | `FREQTRADE__*` | `CTENGINE__*` |
-| unit `freqtrade` / старые имена | `cryptotools-strategy`, `cryptotools-grid`, … |
+| unit `freqtrade` / старые имена | `cryptotools-signal-engine`, `trade-executor`, `cryptotools-grid`, … |
 
 В UI/продукте — **CryptoTools / CriptoTools**. В коде пакета — `ctengine`.
 
@@ -246,7 +273,9 @@ Legacy retrain отчёт: `simulation/results/legacy_april_cut_ml/report.json`.
 | Лимит сделок на одну стратегию | UI «На одну стратегию» → `max_open_trades_per_strategy.json` (0 = без лимита); читает роутер без reload |
 | Новая идея стратегии | сначала `simulation/`, потом wrapper → prod |
 | Деплой на VPS | `site/scripts/deploy_prod_ml.ps1` |
-| Логи strategy | `journalctl -u cryptotools-strategy -n 100` |
+| Логи strategy (signals) | `journalctl -u cryptotools-signal-engine -n 100` |
+| Логи executor | `journalctl -u trade-executor -n 100` |
+| Sync призраков/дублей | UI «Синхронизировать» или `reconcile_positions.py` |
 | Whitelist / stake / max trades | pair-config UI или `config_*.json` |
 | ML порог входа | `prod_ml_bots.json` → apply → deploy |
 | Иконка/UI | `site/custom-ui/` |
@@ -270,7 +299,12 @@ Legacy retrain отчёт: `simulation/results/legacy_april_cut_ml/report.json`.
 # Local strategy (осторожно — нужен .env)
 cd D:\cryptotools\site
 .\scripts\load_env.ps1
-.\.venv\Scripts\ctbot.exe trade --config user_data\config_strategy.json --strategy MultiStrategyRouter
+.\scripts\start_local_site.ps1
+
+# Shared Strategy stack (осторожно — нужен .env)
+$env:CT_SIGNAL_ONLY = "1"
+.\.venv\Scripts\ctbot.exe trade --config user_data\config_signal_engine.json --strategy MultiStrategyRouter --strategy-path user_data\strategies
+.\.venv\Scripts\python.exe scripts\trade_executor.py
 
 # Deploy prod
 cd D:\cryptotools\site\scripts
@@ -283,8 +317,9 @@ cd D:\cryptotools\simulation\scripts
 
 ```bash
 # VPS check
-systemctl is-active cryptotools-strategy cryptotools-grid pair-config
-journalctl -u cryptotools-strategy -n 80 --no-pager
+systemctl is-active cryptotools-signal-engine trade-executor cryptotools-grid pair-config
+journalctl -u cryptotools-signal-engine -n 80 --no-pager
+journalctl -u trade-executor -n 40 --no-pager
 ```
 
 ---
@@ -292,4 +327,4 @@ journalctl -u cryptotools-strategy -n 80 --no-pager
 ## 12. Поддержка документа
 
 При смене архитектуры (новые боты, другой risk model, другой деплой) — **обнови этот файл в том же PR/сессии**.  
-Дата ориентира: **2026-08-09**.
+Дата ориентира: **2026-10-04**.

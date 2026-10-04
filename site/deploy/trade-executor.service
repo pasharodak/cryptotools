@@ -1,0 +1,21 @@
+[Unit]
+Description=CryptoTools per-user trade executor (shared signals)
+After=network-online.target cryptotools-signal-engine.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cryptotools
+Group=cryptotools
+WorkingDirectory=/home/cryptotools/app
+Environment=CT_BASE=/home/cryptotools/app
+Environment=PYTHONPATH=/home/cryptotools/app/scripts:/home/cryptotools/app/user_data
+ExecStart=/home/cryptotools/app/.venv/bin/python3 /home/cryptotools/app/scripts/trade_executor.py
+Restart=on-failure
+RestartSec=10
+Slice=cryptotools.slice
+MemoryHigh=400M
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target

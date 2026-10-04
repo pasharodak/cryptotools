@@ -32,6 +32,9 @@ if str(_SCRIPTS_DIR) not in sys.path:
 
 import tenant_manager as tm
 import tenant_context as tc
+import user_trading
+import control_plane as control_plane
+import bot_reconcile
 from bybit_grid_manager import (
     close_grid,
     create_grid,
@@ -65,30 +68,66 @@ from reconcile_positions import (
 
 BASE = Path(os.environ.get("CT_BASE", "/home/cryptotools/app"))
 FINDER_BOT_CFG = BASE / "user_data" / "finder_bot.json"
+APP_TZ = timezone(timedelta(hours=3))  # UTC+3 (Moscow, no DST)
 
 _LOG_TS_RE = re.compile(
-    r"^(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[,.]\d+)?(?: UTC)?)"
+    r"^(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[,.]\d+)?(?: UTC(?:\+3)?)?)"
 )
 _server_log = logging.getLogger("pair_config")
 
 
 def _parse_log_ts(line: str) -> str | None:
+    """Extract log timestamp and normalize to UTC+3 display string."""
     m = _LOG_TS_RE.match(line.strip())
-    return m.group(1) if m else None
+    if not m:
+        return None
+    raw = m.group(1)
+    if "UTC+3" in raw:
+        return raw
+    body = raw.replace(" UTC", "").strip().replace("T", " ")
+    for fmt, cut in (
+        ("%Y-%m-%d %H:%M:%S,%f", 26),
+        ("%Y-%m-%d %H:%M:%S.%f", 26),
+        ("%Y-%m-%d %H:%M:%S", 19),
+    ):
+        try:
+            dt = datetime.strptime(body[:cut], fmt).replace(tzinfo=timezone.utc)
+            local = dt.astimezone(APP_TZ)
+            if "," in body or "." in body[19:]:
+                return (
+                    local.strftime("%Y-%m-%d %H:%M:%S,")
+                    + f"{int(local.microsecond / 1000):03d} UTC+3"
+                )
+            return local.strftime("%Y-%m-%d %H:%M:%S") + " UTC+3"
+        except ValueError:
+            continue
+    return raw
 
 
 def _setup_server_logging() -> None:
     log_dir = BASE / "user_data" / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / "pair-config.log"
-    fmt = logging.Formatter(
-        "%(asctime)s UTC - %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+
+    class _UtcPlus3Formatter(logging.Formatter):
+        def formatTime(self, record, datefmt=None):  # noqa: N802
+            dt = datetime.fromtimestamp(record.created, tz=APP_TZ)
+            if datefmt:
+                return dt.strftime(datefmt)
+            return dt.strftime("%Y-%m-%d %H:%M:%S")
+
+    fmt = _UtcPlus3Formatter(
+        "%(asctime)s UTC+3 - %(levelname)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
     )
     _server_log.setLevel(logging.INFO)
     if not _server_log.handlers:
         fh = logging.FileHandler(log_file, encoding="utf-8")
         fh.setFormatter(fmt)
         _server_log.addHandler(fh)
+    # Child loggers (adaptive_scan, …) share the same file without duplicate handlers.
+    _server_log.propagate = False
+    logging.getLogger("pair_config.adaptive_scan").setLevel(logging.INFO)
 
 
 STRATEGIES_DIR = BASE / "user_data" / "strategies"
@@ -118,11 +157,11 @@ def strategy_ui_placement_file() -> Path:
 
 
 DEFAULT_TEST_STRATEGY_SETTINGS: dict[str, Any] = {
-    "max_open_trades": 3,
-    "max_open_trades_per_strategy": 0,
+    "max_open_trades": 8,
+    "max_open_trades_per_strategy": 2,
     "stake_amount": 5.0,
-    "stoploss": -0.03,
-    "take_profit": 0.012,
+    "stoploss": -0.02,
+    "take_profit": 0.02,
 }
 MIN_TEST_TAKE_PROFIT = 0.005
 MAX_TEST_TAKE_PROFIT = 0.50
@@ -208,7 +247,8 @@ MAX_STRATEGY_STOPLOSS = -0.01
 MIN_STRATEGY_TAKE_PROFIT = 0.02
 MAX_STRATEGY_TAKE_PROFIT = 0.50
 MIN_MAX_TRADES = 0
-MAX_MAX_TRADES = 50
+# No hard cap: user may set any non-negative int. float("inf") from configs → this sentinel for JSON/int APIs.
+INF_MAX_OPEN_TRADES = 1_000_000
 MIN_STAKE_AMOUNT = 1
 MAX_STAKE_AMOUNT = 100
 
@@ -443,7 +483,7 @@ AVAILABLE_STRATEGIES = [
         "ui_order": 101,
         "name": "Parabolic SAR flip (test)",
         "test_group": True,
-        "desc": "Тест · wide XGB · без chase (RSI/1h range) · выход по SAR-флипу · gate из meta",
+        "desc": "Тест · long-only · chase RSI≤60 / range≤65% · gate≥65% · SL/TP из test settings",
     },
     {
         "id": "AtrChannelBreakoutTestStrategy",
@@ -467,7 +507,7 @@ AVAILABLE_STRATEGIES = [
         "ui_order": 104,
         "name": "Supertrend (ATR) (test)",
         "test_group": True,
-        "desc": "Тест · wide XGB · 1x · SL -3% · без chase (RSI/1h range) · выход по Supertrend-флипу · gate из meta",
+        "desc": "Тест · long-only · SL −1.2% · DI+/bull bar · ST dynamic SL · block hot UTC · gate ≥90%",
     },
     {
         "id": "CmfZeroCrossTestStrategy",
@@ -475,7 +515,7 @@ AVAILABLE_STRATEGIES = [
         "ui_order": 105,
         "name": "CMF zero cross (test)",
         "test_group": True,
-        "desc": "Тест · wide XGB · ML PnL ~78 · 1x · SL -3% · без chase (RSI/1h range) · выход cmf_flip · gate>=55%",
+        "desc": "Тест · long-only · chase RSI≤60 · SL/TP test settings · выход cmf_flip · gate≥65%",
     },
     {
         "id": "ScalpEmaCrossTestStrategy",
@@ -539,7 +579,7 @@ AVAILABLE_STRATEGIES = [
         "ui_order": 113,
         "name": "Alt volume breakout (test)",
         "test_group": True,
-        "desc": "Тест · wide XGB · 1x · SL -3% · без chase · выход don_mid · live #31 · gate>=55%",
+        "desc": "Тест · long-only · chase RSI≤60 · SL/TP test settings · выход don_mid · gate≥65%",
     },
     {
         "id": "BollingerRsiTestStrategy",
@@ -556,6 +596,14 @@ AVAILABLE_STRATEGIES = [
         "name": "MACD + EMA200 (test)",
         "test_group": True,
         "desc": "Тест · wide XGB · 1x · SL -3% · без chase · выход macd_flip · live #34 · gate>=45%",
+    },
+    {
+        "id": "GruBarrierStrategy",
+        "num": 116,
+        "ui_order": 116,
+        "name": "GRU seq-gate (EMA)",
+        "test_group": True,
+        "desc": "Тест · EMA 8/21 + GRU strategy-gate (seq_gate_compare #1) · thr≈85% · SL −1% · TP 0.8% · без LightGBM",
     },
     {
         "id": "BollingerRsiStrategy",
@@ -784,8 +832,17 @@ def _bot_db_path(bot: str) -> Path | None:
     if not db_url.startswith("sqlite:///"):
         return None
     name = db_url.replace("sqlite:///", "")
-    for candidate in ((BASE / name), (BASE / "user_data" / name)):
-        db_path = candidate.resolve()
+    raw = Path(name)
+    candidates = [
+        raw if raw.is_absolute() else (BASE / name),
+        BASE / "user_data" / name,
+        cfg_path.parent / raw.name,
+    ]
+    for candidate in candidates:
+        try:
+            db_path = candidate.resolve()
+        except OSError:
+            continue
         if db_path.is_file():
             return db_path
     return None
@@ -811,6 +868,21 @@ def load_trade_ml_meta(bot: str, trade_ids: list[int]) -> dict[int, dict[str, An
     out: dict[int, dict[str, Any]] = {}
     try:
         with sqlite3.connect(db_path) as conn:
+            # Local trade_executor DBs may predate this table — create if missing.
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS trade_custom_data (
+                    id INTEGER NOT NULL PRIMARY KEY,
+                    ft_trade_id INTEGER NOT NULL,
+                    cd_key VARCHAR(255) NOT NULL,
+                    cd_type VARCHAR(25) NOT NULL,
+                    cd_value TEXT NOT NULL,
+                    created_at DATETIME NOT NULL,
+                    updated_at DATETIME,
+                    UNIQUE (ft_trade_id, cd_key)
+                )
+                """
+            )
             for trade_id, key, value, cd_type in conn.execute(query, ids):
                 entry = out.setdefault(int(trade_id), {})
                 if cd_type == "float":
@@ -822,13 +894,51 @@ def load_trade_ml_meta(bot: str, trade_ids: list[int]) -> dict[int, dict[str, An
                 else:
                     entry[key] = value
     except sqlite3.Error as exc:
-        _server_log.warning("trade ml meta %s: %s", bot, exc)
+        msg = str(exc).lower()
+        if "no such table" in msg:
+            _server_log.debug("trade ml meta %s: %s", bot, exc)
+        else:
+            _server_log.warning("trade ml meta %s: %s", bot, exc)
     return out
 
 
 def get_trade_ml_meta_payload(bot: str, trade_ids: list[int]) -> dict[str, Any]:
     meta = load_trade_ml_meta(bot, trade_ids)
     return {"bot": bot, "meta": {str(k): v for k, v in meta.items()}}
+
+
+def _trade_row_id(trade: dict[str, Any]) -> int | None:
+    raw = trade.get("trade_id", trade.get("id"))
+    try:
+        tid = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return tid if tid > 0 else None
+
+
+def attach_trade_ml_meta(bot: str, trades: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Copy trades and attach ml_meta from sqlite (idempotent if already present)."""
+    if not trades:
+        return []
+    bot = resolve_bot(bot)
+    ids: list[int] = []
+    for t in trades:
+        tid = _trade_row_id(t)
+        if tid is not None and not (isinstance(t.get("ml_meta"), dict) and t["ml_meta"]):
+            ids.append(tid)
+    meta_by_id = load_trade_ml_meta(bot, ids) if ids else {}
+    out: list[dict[str, Any]] = []
+    for t in trades:
+        row = dict(t)
+        tid = _trade_row_id(row)
+        if tid is not None and "trade_id" not in row:
+            row["trade_id"] = tid
+        existing = row.get("ml_meta") if isinstance(row.get("ml_meta"), dict) else {}
+        extra = meta_by_id.get(tid or -1) or {}
+        if existing or extra:
+            row["ml_meta"] = {**existing, **extra}
+        out.append(row)
+    return out
 
 
 def _closed_trade_row_to_json(row: sqlite3.Row, ml: dict[str, Any]) -> dict[str, Any]:
@@ -862,6 +972,43 @@ def _closed_trade_row_to_json(row: sqlite3.Row, ml: dict[str, Any]) -> dict[str,
 
 # Hard safety cap for closed-trade dumps (UI history / stats "all time").
 CLOSED_TRADES_HARD_CAP = 50000
+
+
+def closed_profit_from_db(bot: str) -> dict[str, Any]:
+    """Sum closed PnL from sqlite (works when ctbot /profit is empty or shared-stack)."""
+    bot = resolve_bot(bot)
+    empty = {
+        "profit_closed_coin": 0.0,
+        "profit_closed_fiat": 0.0,
+        "trade_count": 0,
+        "source": "db",
+    }
+    if bot not in CONFIGS:
+        return empty
+    db_path = _bot_db_path(bot)
+    if not db_path:
+        return empty
+    query = """
+        SELECT
+            COUNT(*) AS n,
+            COALESCE(SUM(COALESCE(close_profit_abs, realized_profit, 0)), 0) AS pnl
+        FROM trades
+        WHERE is_open = 0 AND close_date IS NOT NULL
+    """
+    try:
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(query).fetchone()
+        n = int(row[0] or 0) if row else 0
+        pnl = float(row[1] or 0.0) if row else 0.0
+        return {
+            "profit_closed_coin": round(pnl, 6),
+            "profit_closed_fiat": round(pnl, 6),
+            "trade_count": n,
+            "source": "db",
+        }
+    except sqlite3.Error as exc:
+        _server_log.warning("closed profit %s: %s", bot, exc)
+        return empty
 
 
 def load_closed_trades_from_db(bot: str, limit: int = 500) -> list[dict[str, Any]]:
@@ -916,6 +1063,492 @@ def get_closed_trades_payload(limit: int = 500, bot: str | None = None) -> dict[
     return {name: load_closed_trades_from_db(name, limit) for name in CONFIGS}
 
 
+def _bot_api_v1_url(bot: str, path: str) -> str:
+    ports = tc.resolve_bot_ports()
+    port = ports.get(bot)
+    if not port:
+        raise KeyError(bot)
+    return f"http://127.0.0.1:{port}/api/v1/{path.lstrip('/')}"
+
+
+def _open_trades_backoff_key(bot: str, tenant_key: str | None = None) -> str:
+    return f"{tenant_key or _stats_tenant_key()}:{resolve_bot(bot)}"
+
+
+def _fetch_bot_open_trades_live(
+    bot: str, *, timeout: float = 1.5, tenant_key: str | None = None
+) -> list[dict[str, Any]] | None:
+    """Live open trades from bot API; None if bot is down / timed out."""
+    bot = resolve_bot(bot)
+    key = tenant_key or _stats_tenant_key()
+    backoff_key = _open_trades_backoff_key(bot, key)
+    now = time.monotonic()
+    until = _open_trades_live_backoff.get(backoff_key, 0.0)
+    if until > now:
+        return None
+    try:
+        url = _bot_api_v1_url(bot, "status")
+        req = urllib.request.Request(url, headers={"Authorization": _basic_header()}, method="GET")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read() or b"null")
+        if isinstance(data, list):
+            _open_trades_live_backoff.pop(backoff_key, None)
+            remember_open_trades(bot, data, source="live", tenant_key=key)
+            # Return the cached enriched copy (with ml_meta) when available.
+            cached = get_cached_open_trades(bot, max_age=None, tenant_key=key)
+            if cached and isinstance(cached.get("trades"), list):
+                return cached["trades"]
+            return attach_trade_ml_meta(bot, data)
+        return None
+    except Exception:  # noqa: BLE001
+        # ctbot wedged — stop hammering for a bit (UI uses cache/db).
+        _open_trades_live_backoff[backoff_key] = time.monotonic() + 30.0
+        return None
+
+
+def load_open_trades_from_db(bot: str) -> list[dict[str, Any]]:
+    """Open trades from sqlite (stake only; PnL may be missing without live mark)."""
+    bot = resolve_bot(bot)
+    if bot not in CONFIGS:
+        return []
+    db_path = _bot_db_path(bot)
+    if not db_path:
+        return []
+    query = """
+        SELECT id, pair, strategy, enter_tag, is_short,
+               open_date, open_rate, stake_amount, amount, leverage,
+               close_profit, close_profit_abs, realized_profit
+        FROM trades
+        WHERE is_open = 1
+        ORDER BY id DESC
+    """
+    try:
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(query).fetchall()
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            stake = float(r["stake_amount"] or 0)
+            ratio = r["close_profit"]
+            abs_pnl = r["close_profit_abs"]
+            if abs_pnl is None and ratio is not None:
+                try:
+                    abs_pnl = float(ratio) * stake
+                except (TypeError, ValueError):
+                    abs_pnl = 0.0
+            profit_abs = float(abs_pnl or 0)
+            profit_pct = float(ratio or 0) * 100.0 if ratio is not None else None
+            if ratio is None and r["open_rate"]:
+                try:
+                    from user_exchange import fetch_public_klines, ft_pair_to_symbol
+
+                    sym = ft_pair_to_symbol(str(r["pair"]))
+                    tick_rows = fetch_public_klines(sym, interval="1", limit=1)
+                    if tick_rows:
+                        mark = float(tick_rows[-1][4])
+                        open_rate = float(r["open_rate"])
+                        lev = float(r["leverage"] or 1) or 1.0
+                        is_short = bool(r["is_short"])
+                        if is_short:
+                            pr = ((open_rate - mark) / open_rate) * lev
+                        else:
+                            pr = ((mark - open_rate) / open_rate) * lev
+                        profit_abs = pr * stake
+                        profit_pct = pr * 100.0
+                except Exception:
+                    pass
+            out.append(
+                {
+                    "bot": bot,
+                    "trade_id": int(r["id"]),
+                    "pair": r["pair"],
+                    "strategy": r["strategy"],
+                    "enter_tag": r["enter_tag"],
+                    "is_short": bool(r["is_short"]),
+                    "open_date": r["open_date"],
+                    "open_rate": r["open_rate"],
+                    "amount": r["amount"],
+                    "leverage": r["leverage"],
+                    "stake_amount": stake,
+                    "profit_abs": profit_abs,
+                    "profit_pct": profit_pct,
+                    "total_profit_abs": profit_abs,
+                    "total_profit_ratio": (profit_pct / 100.0) if profit_pct is not None else None,
+                }
+            )
+        return attach_trade_ml_meta(bot, out)
+    except sqlite3.Error as exc:
+        _server_log.warning("open trades %s: %s", bot, exc)
+        return []
+
+
+# --- Open trades status cache (full /status payloads for UI) ---
+OPEN_TRADES_WARM_SEC = 12.0
+OPEN_TRADES_STALE_SEC = 180.0
+_open_trades_lock = threading.RLock()
+# tenant_key -> bot -> {trades, ts, source}
+_open_trades_cache: dict[str, dict[str, dict[str, Any]]] = {}
+# bot -> monotonic deadline; skip live probes while ctbot is wedged
+_open_trades_live_backoff: dict[str, float] = {}
+
+
+def remember_open_trades(
+    bot: str,
+    trades: list[dict[str, Any]],
+    *,
+    source: str = "live",
+    tenant_key: str | None = None,
+) -> None:
+    bot = resolve_bot(bot)
+    key = tenant_key or _stats_tenant_key()
+    enriched = attach_trade_ml_meta(bot, list(trades))
+    with _open_trades_lock:
+        bucket = _open_trades_cache.setdefault(key, {})
+        bucket[bot] = {
+            "trades": enriched,
+            "ts": time.time(),
+            "source": source,
+        }
+
+
+def get_cached_open_trades(
+    bot: str,
+    *,
+    max_age: float | None = OPEN_TRADES_STALE_SEC,
+    tenant_key: str | None = None,
+) -> dict[str, Any] | None:
+    bot = resolve_bot(bot)
+    key = tenant_key or _stats_tenant_key()
+    with _open_trades_lock:
+        entry = (_open_trades_cache.get(key) or {}).get(bot)
+        if not entry:
+            return None
+        age = time.time() - float(entry.get("ts") or 0)
+        if max_age is not None and age > max_age:
+            return None
+        return {
+            "trades": list(entry.get("trades") or []),
+            "age_sec": round(age, 1),
+            "source": entry.get("source") or "cache",
+            "ts": entry.get("ts"),
+        }
+
+
+def refresh_open_trades_cache_for_bots(
+    bots: list[str] | None = None,
+    *,
+    tenant_key: str | None = None,
+) -> dict[str, Any]:
+    """Pull live /status (short timeout) or fall back to last cache / sqlite."""
+    key = tenant_key or _stats_tenant_key()
+    out: dict[str, Any] = {}
+    for bot in bots or list(CONFIGS):
+        timeout = 0.6 if bot == "finder" else 2.0
+        live = _fetch_bot_open_trades_live(bot, timeout=timeout, tenant_key=key)
+        if live is not None:
+            # _fetch already remembered
+            cached = get_cached_open_trades(bot, max_age=None, tenant_key=key) or {}
+            out[bot] = {
+                "trades": live,
+                "age_sec": 0.0,
+                "source": "live",
+                "ts": cached.get("ts") or time.time(),
+            }
+            continue
+        cached = get_cached_open_trades(bot, max_age=None, tenant_key=key)
+        cached_trades = list((cached or {}).get("trades") or [])
+        if cached is not None and cached_trades:
+            out[bot] = {**cached, "source": f"cache:{cached.get('source') or 'live'}"}
+            continue
+        db_trades = load_open_trades_from_db(bot)
+        remember_open_trades(bot, db_trades, source="db", tenant_key=key)
+        out[bot] = {
+            "trades": db_trades,
+            "age_sec": 0.0,
+            "source": "db",
+            "ts": time.time(),
+        }
+    return out
+
+
+def get_open_trades_bundle(*, refresh: bool = False) -> dict[str, Any]:
+    """Warm payload of open trades per bot for the current tenant.
+
+    Request path is never blocked on ctbot: cache → sqlite only.
+    Live refresh happens in the background warmer (or refresh=1).
+    """
+    key = _stats_tenant_key()
+    if refresh:
+        # Still prefer not to stall the HTTP worker: kick a background refresh
+        # and return whatever we already have (cache/db).
+        threading.Thread(
+            target=lambda: refresh_open_trades_cache_for_bots(tenant_key=key),
+            name=f"open-trades-refresh-{key}",
+            daemon=True,
+        ).start()
+
+    bots: dict[str, Any] = {}
+    for bot in CONFIGS:
+        cached = get_cached_open_trades(bot, max_age=None, tenant_key=key)
+        cached_trades = list((cached or {}).get("trades") or [])
+        if cached is not None and cached_trades:
+            entry = dict(cached)
+        else:
+            db_trades = load_open_trades_from_db(bot)
+            if db_trades or cached is None:
+                remember_open_trades(bot, db_trades, source="db", tenant_key=key)
+                entry = {
+                    "trades": db_trades,
+                    "age_sec": 0.0,
+                    "source": "db",
+                    "ts": time.time(),
+                }
+            else:
+                entry = dict(cached)
+        entry["closed_profit"] = closed_profit_from_db(bot)
+        bots[bot] = entry
+    return {
+        "bots": bots,
+        "built_at": int(time.time() * 1000),
+        "cached": True,
+    }
+
+
+def start_open_trades_cache_scheduler() -> None:
+    """Keep open-trade lists warm so UI is not blocked on slow ctbot /status."""
+
+    def _loop() -> None:
+        time.sleep(2)
+        while True:
+            try:
+                admin_user = {"id": "admin", "role": "admin", "username": "admin"}
+                token = tc.set_request_user(admin_user)
+                try:
+                    refresh_open_trades_cache_for_bots(tenant_key="admin")
+                finally:
+                    tc.reset_request_user(token)
+                with _open_trades_lock:
+                    other_keys = [k for k in _open_trades_cache if k != "admin"]
+                for key in other_keys:
+                    if not key.startswith("user:"):
+                        continue
+                    uid = key.split(":", 1)[1]
+                    u = tm.get_user_by_id(uid)
+                    if not u:
+                        continue
+                    token = tc.set_request_user(u)
+                    try:
+                        refresh_open_trades_cache_for_bots(tenant_key=key)
+                    finally:
+                        tc.reset_request_user(token)
+            except Exception as exc:  # noqa: BLE001
+                _server_log.warning("open-trades warmer: %s", exc)
+            time.sleep(OPEN_TRADES_WARM_SEC)
+
+    threading.Thread(target=_loop, name="open-trades-warmer", daemon=True).start()
+    _server_log.info(
+        "open-trades cache warmer started (every %ss, stale<=%ss)",
+        int(OPEN_TRADES_WARM_SEC),
+        int(OPEN_TRADES_STALE_SEC),
+    )
+
+
+# Auto position reconcile (ghosts vs Bybit) — same path as UI «Синхронизировать».
+# Default 5m: Finder/Strategy share one Bybit account; ghosts appear within minutes.
+POSITION_RECONCILE_INTERVAL_SEC = float(
+    os.environ.get("CT_POSITION_RECONCILE_SEC", str(5 * 60))
+)
+_position_reconcile_lock = threading.Lock()
+_position_reconcile_last: dict[str, Any] = {
+    "ts": None,
+    "ok": None,
+    "ghost_count_before": None,
+    "ghost_count_after": None,
+    "fixed": 0,
+    "error": None,
+}
+
+
+def run_position_reconcile_auto(*, force: bool = False) -> dict[str, Any]:
+    """Scan ghosts and archive/forceexit them. Safe to call often (no-op if clean)."""
+    global _position_reconcile_last
+    if not _position_reconcile_lock.acquire(blocking=force):
+        return {"ok": False, "skipped": True, "reason": "busy"}
+    try:
+        before = reconcile_positions(BASE)
+        ghosts = int(before.get("ghost_count") or 0)
+        dupes = int(before.get("duplicate_count") or len(before.get("duplicates") or []))
+        if ghosts <= 0 and dupes <= 0:
+            _position_reconcile_last = {
+                "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "ok": True,
+                "ghost_count_before": 0,
+                "ghost_count_after": 0,
+                "duplicate_count_before": 0,
+                "duplicate_count_after": 0,
+                "fixed": 0,
+                "error": None,
+                "duplicate_pairs": before.get("duplicate_pairs") or [],
+            }
+            return {"ok": True, "fixed": 0, "before": before, "after": before}
+
+        result = fix_reconcile(BASE)
+        after = result.get("after") or {}
+        fixed_n = len(result.get("fixed") or [])
+        _position_reconcile_last = {
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "ok": bool(result.get("ok")),
+            "ghost_count_before": ghosts,
+            "ghost_count_after": int(after.get("ghost_count") or 0),
+            "duplicate_count_before": dupes,
+            "duplicate_count_after": int(
+                after.get("duplicate_count") or len(after.get("duplicates") or [])
+            ),
+            "fixed": fixed_n,
+            "error": None,
+            "duplicate_pairs": after.get("duplicate_pairs") or before.get("duplicate_pairs") or [],
+        }
+        _server_log.info(
+            "auto position-reconcile: ghosts %s→%s dupes %s→%s fixed=%s ok=%s",
+            ghosts,
+            after.get("ghost_count"),
+            dupes,
+            after.get("duplicate_count"),
+            fixed_n,
+            result.get("ok"),
+        )
+        return result
+    except Exception as exc:  # noqa: BLE001
+        _position_reconcile_last = {
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "ok": False,
+            "ghost_count_before": None,
+            "ghost_count_after": None,
+            "fixed": 0,
+            "error": str(exc),
+        }
+        _server_log.warning("auto position-reconcile failed: %s", exc)
+        return {"ok": False, "error": str(exc)}
+    finally:
+        _position_reconcile_lock.release()
+
+
+def start_position_reconcile_scheduler() -> None:
+    """Every ~30 min close ghost trades that no longer exist on Bybit."""
+
+    interval = max(60.0, float(POSITION_RECONCILE_INTERVAL_SEC))
+
+    def _loop() -> None:
+        # First pass shortly after boot (bots may still be starting).
+        time.sleep(90)
+        while True:
+            try:
+                run_position_reconcile_auto()
+            except Exception as exc:  # noqa: BLE001
+                _server_log.warning("position-reconcile scheduler: %s", exc)
+            time.sleep(interval)
+
+    threading.Thread(target=_loop, name="position-reconcile", daemon=True).start()
+    _server_log.info(
+        "position-reconcile auto-sync started (every %ss)",
+        int(interval),
+    )
+
+
+def effective_strategy_max_open() -> int:
+    """
+    Strategy-bot slot ceiling for UI/executor.
+    Test-block max_open_trades is a real concurrent limit and must not be
+    silently capped by a lower bot_limits.strategy value.
+    """
+    try:
+        strat = max(0, int(load_bot_limits().get("strategy", 0)))
+    except Exception:  # noqa: BLE001
+        strat = 0
+    try:
+        test_max = max(0, int(load_test_strategy_settings().get("max_open_trades") or 0))
+    except Exception:  # noqa: BLE001
+        test_max = 0
+    return max(strat, test_max)
+
+
+def build_open_trades_summary() -> dict[str, Any]:
+    """Warm payload for UI «Всего по сделкам» chip (count / margin / PnL)."""
+    t0 = time.monotonic()
+    try:
+        limits = load_bot_limits()
+    except Exception:  # noqa: BLE001
+        limits = {b: 0 for b in CONFIGS}
+    max_total = 0
+    for bot in CONFIGS:
+        try:
+            if bot == "strategy":
+                max_total += effective_strategy_max_open()
+            else:
+                max_total += max(0, int(limits.get(bot, 0)))
+        except (TypeError, ValueError):
+            pass
+
+    trades: list[dict[str, Any]] = []
+    sources: dict[str, str] = {}
+    for bot in CONFIGS:
+        # Finder is often offline — keep timeout tiny so warmer stays fast.
+        timeout = 0.6 if bot == "finder" else 1.5
+        live = _fetch_bot_open_trades_live(bot, timeout=timeout)
+        if live is None:
+            cached = get_cached_open_trades(bot, max_age=OPEN_TRADES_STALE_SEC)
+            if cached is not None:
+                sources[bot] = f"cache:{cached.get('source') or 'live'}"
+                for t in cached["trades"]:
+                    stake = float(t.get("stake_amount") or 0)
+                    raw_pnl = t.get("total_profit_abs")
+                    if raw_pnl is None:
+                        raw_pnl = t.get("profit_abs")
+                    trades.append(
+                        {
+                            "bot": bot,
+                            "trade_id": t.get("trade_id") or t.get("id"),
+                            "pair": t.get("pair"),
+                            "stake_amount": stake,
+                            "profit_abs": float(raw_pnl or 0),
+                            "total_profit_abs": float(raw_pnl or 0),
+                        }
+                    )
+                continue
+            sources[bot] = "db"
+            trades.extend(load_open_trades_from_db(bot))
+            continue
+        sources[bot] = "live"
+        for t in live:
+            stake = float(t.get("stake_amount") or 0)
+            raw_pnl = t.get("total_profit_abs")
+            if raw_pnl is None:
+                raw_pnl = t.get("profit_abs")
+            trades.append(
+                {
+                    "bot": bot,
+                    "trade_id": t.get("trade_id") or t.get("id"),
+                    "pair": t.get("pair"),
+                    "stake_amount": stake,
+                    "profit_abs": float(raw_pnl or 0),
+                    "total_profit_abs": float(raw_pnl or 0),
+                }
+            )
+
+    count = len(trades)
+    margin = sum(float(t.get("stake_amount") or 0) for t in trades)
+    pnl = sum(float(t.get("total_profit_abs") or t.get("profit_abs") or 0) for t in trades)
+    return {
+        "count": count,
+        "max_total": max_total,
+        "margin": round(margin, 4),
+        "pnl": round(pnl, 4),
+        "sources": sources,
+        "built_at": int(time.time() * 1000),
+        "build_ms": int((time.monotonic() - t0) * 1000),
+    }
+
+
 # --- Precomputed stats bundle (warm cache for UI) ---
 STATS_CACHE_TTL_SEC = 60.0
 STATS_CACHE_REFRESH_SEC = 30.0
@@ -947,12 +1580,14 @@ def build_stats_bundle(limit: int = 0) -> dict[str, Any]:
         strategies = get_strategy_catalog()
     except Exception:  # noqa: BLE001
         strategies = [dict(s) for s in AVAILABLE_STRATEGIES]
+    open_summary = build_open_trades_summary()
     return {
         "finder": closed.get("finder") or [],
         "strategy": closed.get("strategy") or [],
         "grid": closed.get("grid") or [],
         "bybit_history": bybit_history,
         "strategies": strategies,
+        "open_summary": open_summary,
         "built_at": int(time.time() * 1000),
         "build_ms": int((time.monotonic() - t0) * 1000),
         "cached": False,
@@ -1110,9 +1745,6 @@ def _strip_enter_tag(tag: str | None) -> str:
                 t = t[: -len(suffix)]
                 changed = True
     return t
-
-
-APP_TZ = timezone(timedelta(hours=3))  # UTC+3 (Moscow, no DST)
 
 
 def _parse_close_date_ms(value: Any) -> float | None:
@@ -1674,7 +2306,7 @@ def snapshot_limits_from_configs() -> dict[str, int]:
             cfg = load_config(path)
             raw = cfg.get("max_open_trades", DEFAULT_BOT_LIMITS.get(bot, 2))
             if raw == float("inf"):
-                raw = MAX_MAX_TRADES
+                raw = INF_MAX_OPEN_TRADES
             limits[bot] = int(raw)
             stakes[bot] = float(cfg.get("stake_amount", DEFAULT_STAKES.get(bot, 5)))
         except (OSError, json.JSONDecodeError, TypeError, ValueError):
@@ -1759,8 +2391,31 @@ def apply_bot_limits_to_configs() -> dict[str, int]:
         _save_max_open_trades_per_strategy_file(DEFAULT_MAX_OPEN_TRADES_PER_STRATEGY)
     return limits
 
+
+def apply_tenant_bot_limits() -> None:
+    """Apply each tenant's bot_limits.json into that tenant's config files."""
+    try:
+        rows = tm.load_users()
+    except Exception:  # noqa: BLE001
+        return
+    for user in rows or []:
+        if not isinstance(user, dict) or tm.is_admin(user):
+            continue
+        if not user.get("enabled", True):
+            continue
+        token = tc.set_request_user(user)
+        try:
+            apply_bot_limits_to_configs()
+        except Exception as exc:  # noqa: BLE001
+            _server_log.warning("tenant bot_limits %s: %s", user.get("id"), exc)
+        finally:
+            tc.reset_request_user(token)
+
 RELOAD_RETRIES = 8
 RELOAD_RETRY_DELAY = 2.0
+# Faster path for limit/stake apply (full RELOAD_RETRIES×30s blocks the UI).
+LIMIT_RELOAD_TIMEOUT = 12.0
+LIMIT_RELOAD_ATTEMPTS = 3
 
 
 def _is_transient_api_error(exc: BaseException) -> bool:
@@ -1785,6 +2440,7 @@ def api_call(
     *,
     retries: int = 1,
     retry_delay: float = 1.0,
+    timeout: float = 30.0,
 ) -> Any:
     last_exc: BaseException | None = None
     for attempt in range(max(1, retries)):
@@ -1795,7 +2451,7 @@ def api_call(
                 data = json.dumps(body).encode()
                 headers["Content-Type"] = "application/json"
             req = urllib.request.Request(url, data=data, headers=headers, method=method)
-            with urllib.request.urlopen(req, timeout=30) as resp:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
                 raw = resp.read()
                 return json.loads(raw) if raw else None
         except BaseException as exc:  # noqa: BLE001
@@ -1806,6 +2462,119 @@ def api_call(
     if last_exc is not None:
         raise last_exc
     return None
+
+
+def _live_max_open_trades(bot: str, *, timeout: float = 4.0) -> int | None:
+    """Read max_open_trades from the running bot (None if unreachable)."""
+    bot = resolve_bot(bot)
+    try:
+        url = _bot_api_v1_url(bot, "show_config")
+        req = urllib.request.Request(url, headers={"Authorization": _basic_header()}, method="GET")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read() or b"null") or {}
+        raw = data.get("max_open_trades")
+        if raw == float("inf"):
+            return INF_MAX_OPEN_TRADES
+        return int(raw)
+    except (TypeError, ValueError, OSError, urllib.error.URLError, json.JSONDecodeError):
+        return None
+
+
+def ensure_live_max_open_trades(bot: str, expected: int) -> dict[str, Any]:
+    """Reload until live show_config matches the value written to disk.
+
+    ``/reload_config`` is async (returns immediately, worker applies later), so we
+    poll ``show_config`` instead of a single short sleep.
+    Fail fast only when the bot API is completely unreachable *before* any reload.
+    Mid-reload flaps must not abort — POST can fail while the worker still applies.
+    """
+    bot = resolve_bot(bot)
+    expected = int(expected)
+    live = _live_max_open_trades(bot, timeout=2.0)
+    if live == expected:
+        return {"live_applied": True, "live_max_open_trades": live, "reloads": 0}
+    if live is None:
+        return {
+            "live_applied": False,
+            "live_max_open_trades": None,
+            "reloads": 0,
+            "reload_warning": (
+                "бот недоступен — лимит записан на диск и применится после запуска"
+            ),
+        }
+
+    last_err: str | None = None
+    reloads = 0
+    saw_live = True
+
+    def _fire_reload() -> bool:
+        nonlocal reloads, last_err
+        try:
+            api_call(
+                RELOAD[bot],
+                "POST",
+                retries=1,
+                timeout=min(LIMIT_RELOAD_TIMEOUT, 8.0),
+            )
+            reloads += 1
+            return True
+        except BaseException as exc:  # noqa: BLE001
+            last_err = str(exc)
+            return False
+
+    def _poll_until(timeout_sec: float) -> bool:
+        nonlocal live, saw_live
+        deadline = time.time() + timeout_sec
+        while time.time() < deadline:
+            time.sleep(0.6)
+            cur = _live_max_open_trades(bot, timeout=2.0)
+            if cur is None:
+                # Bot often flaps during RELOAD_CONFIG — keep waiting.
+                continue
+            saw_live = True
+            live = cur
+            if live == expected:
+                return True
+        return False
+
+    # Pass 1: reload + wait for async apply
+    _fire_reload()
+    if _poll_until(20.0):
+        return {"live_applied": True, "live_max_open_trades": live, "reloads": reloads}
+
+    # Pass 2: another reload (first may have raced with a concurrent write)
+    _fire_reload()
+    if _poll_until(15.0):
+        return {"live_applied": True, "live_max_open_trades": live, "reloads": reloads}
+
+    # Final read — value may have landed just after the last poll window
+    cur = _live_max_open_trades(bot, timeout=3.0)
+    if cur is not None:
+        saw_live = True
+        live = cur
+        if live == expected:
+            return {"live_applied": True, "live_max_open_trades": live, "reloads": reloads}
+
+    if not saw_live or live is None:
+        return {
+            "live_applied": False,
+            "live_max_open_trades": None,
+            "reloads": reloads,
+            "reload_warning": (
+                "бот недоступен — лимит записан на диск и применится после запуска"
+            ),
+        }
+
+    msg = (
+        last_err
+        or f"бот ещё показывает max_open_trades={live}, на диске {expected}"
+    )
+    return {
+        "live_applied": False,
+        "live_max_open_trades": live,
+        "reloads": reloads,
+        "reload_warning": msg,
+    }
 
 
 _CPU_SAMPLE: tuple[int, int] | None = None
@@ -1904,7 +2673,8 @@ def load_finder_bot_config() -> dict[str, Any]:
 
 
 def is_finder_bot_enabled() -> bool:
-    return bool(load_finder_bot_config().get("enabled", True))
+    """Legacy file flag — ignored for Start/Stop (control_plane SQLite is source of truth)."""
+    return True
 
 
 def reload_bot(bot: str) -> Any:
@@ -1944,7 +2714,7 @@ def safe_get_state(bot: str) -> dict[str, Any]:
         cfg = load_config(CONFIGS[bot])
         max_trades = cfg.get("max_open_trades", 1)
         if max_trades == float("inf"):
-            max_trades = MAX_MAX_TRADES
+            max_trades = INF_MAX_OPEN_TRADES
         fallback: dict[str, Any] = {
             "bot": bot,
             "config_whitelist": list(cfg.get("exchange", {}).get("pair_whitelist", [])),
@@ -1964,7 +2734,7 @@ def safe_get_state(bot: str) -> dict[str, Any]:
 def _basic_header() -> str:
     user = tc.current_user()
     if user and not tm.is_admin(user):
-        api_user, api_pass, _jwt = tm.derive_api_creds(str(user["id"]))
+        api_user, api_pass, _jwt = tm.tenant_api_creds(str(user["id"]))
     else:
         api_user, api_pass = AUTH_USER, AUTH_PASS
     token = base64.b64encode(f"{api_user}:{api_pass}".encode()).decode()
@@ -2059,12 +2829,22 @@ def default_enabled_map() -> dict[str, bool]:
     return {s["id"]: s["id"] in PROD_DEFAULT_STRATEGIES for s in AVAILABLE_STRATEGIES}
 
 
+def _object_map(value: Any) -> dict[str, Any]:
+    """enabled_strategies.json fields must be objects; a bool/list here used to crash /strategies."""
+    return value if isinstance(value, dict) else {}
+
+
 def load_enabled_map() -> dict[str, bool]:
-    if not enabled_strategies_file().is_file():
-        return default_enabled_map()
-    data = json.loads(enabled_strategies_file().read_text(encoding="utf-8"))
-    enabled = data.get("enabled", {})
     result = default_enabled_map()
+    if not enabled_strategies_file().is_file():
+        return result
+    try:
+        data = json.loads(enabled_strategies_file().read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return result
+    if not isinstance(data, dict):
+        return result
+    enabled = _object_map(data.get("enabled"))
     for sid in result:
         if sid in enabled:
             result[sid] = bool(enabled[sid])
@@ -2079,7 +2859,7 @@ def load_inverted_map() -> dict[str, bool]:
         data = json.loads(enabled_strategies_file().read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return result
-    inverted = data.get("inverted", {})
+    inverted = _object_map(data.get("inverted") if isinstance(data, dict) else None)
     for sid in result:
         if sid in inverted:
             result[sid] = bool(inverted[sid])
@@ -2087,34 +2867,73 @@ def load_inverted_map() -> dict[str, bool]:
 
 
 def _trained_risk_catalog() -> dict[str, dict[str, Any]]:
-    """SL/ROI from prod_top30_pack (sim training) keyed by strategy class."""
-    pack_path = BASE.parent / "simulation" / "config" / "prod_top30_pack.json"
-    # monorepo: site/../simulation ; VPS: app/simulation
-    candidates = [
+    """SL/ROI keyed by strategy class: prod pack + player_scenarios (test/seq bots)."""
+    out: dict[str, dict[str, Any]] = {}
+    pack_candidates = [
         BASE.parent / "simulation" / "config" / "prod_top30_pack.json",
         BASE / "simulation" / "config" / "prod_top30_pack.json",
         Path(__file__).resolve().parents[2] / "simulation" / "config" / "prod_top30_pack.json",
     ]
-    for pack_path in candidates:
-        if pack_path.is_file():
-            try:
-                pack = json.loads(pack_path.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
+    for pack_path in pack_candidates:
+        if not pack_path.is_file():
+            continue
+        try:
+            pack = json.loads(pack_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        for s in pack.get("strategies") or []:
+            cls = s.get("class_name")
+            if not cls:
                 continue
-            out: dict[str, dict[str, Any]] = {}
-            for s in pack.get("strategies") or []:
-                cls = s.get("class_name")
-                if not cls:
-                    continue
-                out[cls] = {
-                    "stoploss": float(s.get("stoploss") or 0),
-                    "tp": float(s.get("tp") or 0),
-                    "minimal_roi": s.get("minimal_roi") or {"0": float(s.get("tp") or 0)},
-                    "scenario_id": s.get("scenario_id"),
-                    "min_profit_proba": float(s.get("min_profit_proba") or 0.55),
-                }
-            return out
-    return {}
+            out[str(cls)] = {
+                "stoploss": float(s.get("stoploss") or 0),
+                "tp": float(s.get("tp") or 0),
+                "minimal_roi": s.get("minimal_roi") or {"0": float(s.get("tp") or 0)},
+                "scenario_id": s.get("scenario_id"),
+                "min_profit_proba": float(s.get("min_profit_proba") or 0.55),
+            }
+        break
+
+    # Test / seq-gate strategies live in player_scenarios, not the top30 pack.
+    scenario_candidates = [
+        BASE.parent / "simulation" / "config" / "player_scenarios.json",
+        BASE / "simulation" / "config" / "player_scenarios.json",
+        Path(__file__).resolve().parents[2] / "simulation" / "config" / "player_scenarios.json",
+    ]
+    for sc_path in scenario_candidates:
+        if not sc_path.is_file():
+            continue
+        try:
+            scenarios = json.loads(sc_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if not isinstance(scenarios, list):
+            break
+        for sc in scenarios:
+            if not isinstance(sc, dict):
+                continue
+            cls = sc.get("strategy")
+            if not cls or cls in out:
+                continue
+            sl = sc.get("stoploss")
+            roi = sc.get("minimal_roi")
+            if sl is None and not isinstance(roi, dict):
+                continue
+            tp = 0.0
+            if isinstance(roi, dict) and roi:
+                try:
+                    tp = float(roi.get("0") or next(iter(roi.values())))
+                except (TypeError, ValueError, StopIteration):
+                    tp = 0.0
+            out[str(cls)] = {
+                "stoploss": float(sl or 0),
+                "tp": float(tp),
+                "minimal_roi": roi if isinstance(roi, dict) else {"0": float(tp)},
+                "scenario_id": sc.get("id"),
+                "min_profit_proba": float(sc.get("min_profit_proba") or 0.55),
+            }
+        break
+    return out
 
 
 ML_CONFIDENCE_CHOICES: tuple[float, ...] = (
@@ -2167,7 +2986,7 @@ def load_ml_confidence_map() -> dict[str, float]:
         data = json.loads(enabled_strategies_file().read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return result
-    stored = data.get("ml_confidence") or {}
+    stored = _object_map(data.get("ml_confidence") if isinstance(data, dict) else None)
     for sid in result:
         if sid in stored:
             try:
@@ -2186,7 +3005,7 @@ def load_trained_risk_map() -> dict[str, bool]:
         data = json.loads(enabled_strategies_file().read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return result
-    stored = data.get("trained_risk") or {}
+    stored = _object_map(data.get("trained_risk") if isinstance(data, dict) else None)
     for sid in result:
         if sid in stored:
             result[sid] = bool(stored[sid])
@@ -2217,12 +3036,12 @@ def save_enabled_map(
     if inverted is not None:
         data["inverted"] = {sid: bool(inverted.get(sid, False)) for sid in enabled}
     else:
-        prev = data.get("inverted", {})
+        prev = _object_map(data.get("inverted"))
         data["inverted"] = {sid: bool(prev.get(sid, False)) for sid in enabled}
     if trained_risk is not None:
         data["trained_risk"] = {sid: bool(trained_risk.get(sid, False)) for sid in enabled}
     else:
-        prev_tr = data.get("trained_risk", {})
+        prev_tr = _object_map(data.get("trained_risk"))
         catalog = _trained_risk_catalog()
         data["trained_risk"] = {
             sid: bool(prev_tr.get(sid, sid in catalog)) for sid in enabled
@@ -2237,7 +3056,7 @@ def save_enabled_map(
             for sid in enabled
         }
     else:
-        prev_ml = data.get("ml_confidence") or {}
+        prev_ml = _object_map(data.get("ml_confidence"))
         data["ml_confidence"] = {}
         for sid in enabled:
             if sid in prev_ml:
@@ -2404,23 +3223,23 @@ def apply_strategies_prefs() -> dict[str, bool]:
     if not bot_strategies_file().is_file():
         return load_enabled_map()
     data = json.loads(bot_strategies_file().read_text(encoding="utf-8"))
-    stored = data.get("enabled", {})
+    stored = _object_map(data.get("enabled") if isinstance(data, dict) else None)
     result = default_enabled_map()
     for sid in result:
         if sid in stored:
             result[sid] = bool(stored[sid])
     inverted = load_inverted_map()
-    stored_inv = data.get("inverted", {})
+    stored_inv = _object_map(data.get("inverted") if isinstance(data, dict) else None)
     for sid in inverted:
         if sid in stored_inv:
             inverted[sid] = bool(stored_inv[sid])
     trained = load_trained_risk_map()
-    stored_tr = data.get("trained_risk", {})
+    stored_tr = _object_map(data.get("trained_risk") if isinstance(data, dict) else None)
     for sid in trained:
         if sid in stored_tr:
             trained[sid] = bool(stored_tr[sid])
     ml_conf = load_ml_confidence_map()
-    stored_ml = data.get("ml_confidence", {})
+    stored_ml = _object_map(data.get("ml_confidence") if isinstance(data, dict) else None)
     for sid in ml_conf:
         if sid in stored_ml:
             try:
@@ -2449,11 +3268,10 @@ def load_dual_hedge_enabled() -> bool:
 
 
 def _normalize_max_open_trades_per_strategy(value: int) -> int:
+    """0 = unlimited (only global max_open_trades). Any positive int allowed."""
     value = int(value)
-    if value < 0 or value > MAX_MAX_TRADES:
-        raise ValueError(
-            f"max_open_trades_per_strategy must be between 0 and {MAX_MAX_TRADES} (0 = unlimited)"
-        )
+    if value < 0:
+        raise ValueError("max_open_trades_per_strategy must be >= 0 (0 = unlimited)")
     return value
 
 
@@ -2513,8 +3331,8 @@ def _normalize_test_strategy_settings(raw: dict[str, Any] | None = None) -> dict
     if isinstance(raw, dict):
         src.update(raw)
     max_open = int(src.get("max_open_trades", DEFAULT_TEST_STRATEGY_SETTINGS["max_open_trades"]))
-    if max_open < MIN_MAX_TRADES or max_open > MAX_MAX_TRADES:
-        raise ValueError(f"test max_open_trades must be between {MIN_MAX_TRADES} and {MAX_MAX_TRADES}")
+    if max_open < MIN_MAX_TRADES:
+        raise ValueError(f"test max_open_trades must be >= {MIN_MAX_TRADES}")
     per = _normalize_max_open_trades_per_strategy(
         int(src.get("max_open_trades_per_strategy", 0))
     )
@@ -2606,9 +3424,23 @@ def set_test_strategy_settings(patch: dict[str, Any]) -> dict[str, Any]:
         merged["take_profit"] = float(patch["take_profit"])
     normalized = _normalize_test_strategy_settings(merged)
     _save_test_strategy_settings_file(normalized)
+    # Keep strategy bot ceiling ≥ test-block max so executor/ctengine don't clip earlier.
+    bumped = False
+    try:
+        limits = load_bot_limits()
+        test_max = int(normalized["max_open_trades"])
+        if test_max > int(limits.get("strategy", 0)):
+            limits["strategy"] = test_max
+            save_bot_limits(limits)
+            apply_bot_limits_to_configs()
+            bumped = True
+    except Exception:  # noqa: BLE001
+        _server_log.warning("could not bump strategy max_open_trades to test max", exc_info=True)
     return {
         "test_settings": test_strategy_settings_payload(normalized),
         "reload_required": False,
+        "strategy_max_bumped": bumped,
+        "strategy_max_open_trades": int(load_bot_limits().get("strategy", 0)),
         **get_strategies_payload(),
     }
 
@@ -2875,8 +3707,24 @@ def set_strategy_ml_confidence(strategy_id: str, confidence: float) -> dict[str,
     conf = _normalize_ml_confidence(raw)
     enabled = load_enabled_map()
     state = load_ml_confidence_map()
+    old = state.get(strategy_id)
     state[strategy_id] = conf
     save_enabled_map(enabled, ml_confidence=state)
+    try:
+        from grid_changelog import append_entry
+
+        label = next((s.get("name") or strategy_id for s in AVAILABLE_STRATEGIES if s.get("id") == strategy_id), strategy_id)
+        append_entry(
+            field="ml_gate_min_confidence",
+            old=None if old is None else round(float(old) * 100),
+            new=round(float(conf) * 100),
+            category="strategy",
+            source="ui",
+            label=f"Уверенность ML ({label})",
+            note=strategy_id,
+        )
+    except Exception:
+        pass
     return {
         "strategy": strategy_id,
         "ml_confidence": state[strategy_id],
@@ -2934,6 +3782,18 @@ def set_all_strategies_ml_confidence(
                 state[sid] = conf
         bulk_value = conf
     save_enabled_map(enabled, ml_confidence=state)
+    try:
+        from grid_changelog import append_note
+
+        scope_ru = {"all": "все", "main": "основные", "test": "тестовые"}.get(scope, scope)
+        if reset:
+            text = f"Уверенность ML сброшена к default ({scope_ru} стратегии)"
+        else:
+            pct = round(float(bulk_value) * 100)
+            text = f"Уверенность ML массово: {scope_ru} → {pct}%"
+        append_note(text=text, category="strategy", source="ui")
+    except Exception:
+        pass
     return {
         "ml_confidence_bulk": bulk_value,
         "group": scope,
@@ -2948,7 +3808,7 @@ def get_state(bot: str) -> dict[str, Any]:
     black = api_call(BLACKLIST[bot])
     max_trades = cfg.get("max_open_trades", 1)
     if max_trades == float("inf"):
-        max_trades = MAX_MAX_TRADES
+        max_trades = INF_MAX_OPEN_TRADES
     state = {
         "bot": bot,
         "config_whitelist": config_pairs,
@@ -3013,10 +3873,8 @@ def set_max_open_trades(bot: str, value: int) -> dict[str, Any]:
     if bot not in CONFIGS:
         raise ValueError("bot must be finder, strategy, or grid")
     value = int(value)
-    if value < MIN_MAX_TRADES or value > MAX_MAX_TRADES:
-        raise ValueError(
-            f"max_open_trades must be between {MIN_MAX_TRADES} and {MAX_MAX_TRADES}"
-        )
+    if value < MIN_MAX_TRADES:
+        raise ValueError(f"max_open_trades must be >= {MIN_MAX_TRADES} (0 = bot stopped)")
 
     cfg = load_config(CONFIGS[bot])
     old_val = int(cfg.get("max_open_trades", DEFAULT_BOT_LIMITS.get(bot, 2)))
@@ -3025,12 +3883,50 @@ def set_max_open_trades(bot: str, value: int) -> dict[str, Any]:
     limits = load_bot_limits()
     limits[bot] = value
     save_bot_limits(limits)
-    reload_result: Any = None
+
+    # Fast path: write disk, fire one reload, return. Long poll runs in background
+    # so the UI save button is not stuck for 20–35s (and a concurrent enable
+    # restart no longer races the poll).
+    live_now = _live_max_open_trades(bot, timeout=2.0)
+    reloads = 0
+    live_applied = live_now == value
     reload_warning: str | None = None
-    try:
-        reload_result = reload_bot(bot)
-    except BaseException as exc:  # noqa: BLE001
-        reload_warning = str(exc)
+    if live_now is None:
+        reload_warning = (
+            "бот недоступен — лимит записан на диск и применится после запуска"
+        )
+    elif not live_applied:
+        try:
+            api_call(
+                RELOAD[bot],
+                "POST",
+                retries=1,
+                timeout=min(LIMIT_RELOAD_TIMEOUT, 8.0),
+            )
+            reloads = 1
+        except BaseException as exc:  # noqa: BLE001
+            reload_warning = str(exc)
+        live_after = _live_max_open_trades(bot, timeout=2.0)
+        if live_after == value:
+            live_applied = True
+            live_now = live_after
+            reload_warning = None
+        else:
+            if live_after is not None:
+                live_now = live_after
+            if not reload_warning:
+                reload_warning = (
+                    f"лимит {value} сохранён; бот ещё показывает "
+                    f"{live_now if live_now is not None else '—'} — применяю в фоне"
+                )
+            threading.Thread(
+                target=ensure_live_max_open_trades,
+                args=(bot, value),
+                name=f"ensure-max-trades-{bot}",
+                daemon=True,
+            ).start()
+
+    reload_result: Any = {"reloads": reloads, "live_applied": live_applied}
 
     trade_action: str | None = None
     trade_result: Any = None
@@ -3043,19 +3939,18 @@ def set_max_open_trades(bot: str, value: int) -> dict[str, Any]:
         except BaseException as exc:  # noqa: BLE001
             trade_warning = str(exc)
     elif old_val <= 0 and value >= 1:
-        if bot == "finder" and not is_finder_bot_enabled():
-            trade_action = "skip_start_finder_disabled"
-        else:
-            trade_action = "start"
-            try:
-                trade_result = start_bot(bot)
-            except BaseException as exc:  # noqa: BLE001
-                trade_warning = str(exc)
+        trade_action = "start"
+        try:
+            trade_result = start_bot(bot)
+        except BaseException as exc:  # noqa: BLE001
+            trade_warning = str(exc)
 
     result: dict[str, Any] = {
         "bot": bot,
         "max_open_trades": value,
         "reloaded": reload_result,
+        "live_applied": bool(live_applied),
+        "live_max_open_trades": live_now,
         "state": safe_get_state(bot),
         "trading_disabled": value <= 0,
     }
@@ -3073,6 +3968,33 @@ def set_max_open_trades(bot: str, value: int) -> dict[str, Any]:
             record_max_open_trades(bot, old_val, value)
         except Exception:
             pass
+    # Keep control-plane desired in sync with slot count (0 = off).
+    # Enqueue only on 0↔N or when process is down — N→M must not restart a healthy bot.
+    try:
+        uid = "admin"
+        user = tc.current_user()
+        if user and not (tm.is_admin(user) and not tm.is_impersonating(user)):
+            uid = str(user.get("id") or "admin")
+        control_plane.ensure_init()
+        want = value >= 1
+        snap = control_plane.snapshot_bot(uid, bot)
+        prev_want = bool(snap.get("desired") if snap.get("desired") is not None else snap.get("enabled"))
+        observed = snap.get("observed") or {}
+        process_up = bool(observed.get("process_up"))
+        # Also recover if API port is closed even when observed lags.
+        port = int(bot_reconcile.bot_port(uid, bot) or 0)
+        api_up = bot_reconcile.port_open(port) if port else process_up
+        need_enqueue = (want != prev_want) or (want and not (process_up or api_up))
+        control_plane.set_desired(
+            uid,
+            bot,
+            want,
+            updated_by="set_max_open_trades",
+            enqueue=need_enqueue,
+        )
+        user_trading.save_trading_flags(uid, {bot: want})
+    except Exception:
+        pass
     return result
 
 
@@ -3153,13 +4075,46 @@ def remove_pair(pair: str) -> dict[str, Any]:
     return out
 
 
-LOG_SOURCES: dict[str, tuple[str, Path]] = {
-    "finder": ("ML Finder", BASE / "user_data" / "logs" / "cryptotools-finder.log"),
-    "strategy": ("Стратегии", BASE / "user_data" / "logs" / "cryptotools-strategy.log"),
-    "grid": ("Grid", BASE / "user_data" / "logs" / "cryptotools-grid.log"),
-    "scanner": ("Сканер Grid", BASE / "user_data" / "logs" / "ranging-scanner.log"),
-    "strategy_scanner": ("Сканер страт.", BASE / "user_data" / "logs" / "strategy-scanner.log"),
-    "pair_config": ("UI API", BASE / "user_data" / "logs" / "pair-config.log"),
+# Primary path first (VPS systemd --logfile); later entries are local fallbacks.
+LOG_SOURCES: dict[str, tuple[str, tuple[Path, ...]]] = {
+    "executor": (
+        "Исполнитель",
+        (BASE / "user_data" / "logs" / "trade-executor.log",),
+    ),
+    "finder": (
+        "ML Finder",
+        (
+            BASE / "user_data" / "logs" / "cryptotools-finder.log",
+            BASE / "user_data" / "logs" / "cryptotools-finder.err.log",
+        ),
+    ),
+    "strategy": (
+        "Стратегии",
+        (
+            BASE / "user_data" / "logs" / "cryptotools-strategy.log",
+            BASE / "user_data" / "logs" / "cryptotools-signal-engine.log",
+            BASE / "user_data" / "logs" / "signal-engine.err.log",
+        ),
+    ),
+    "grid": (
+        "Grid",
+        (
+            BASE / "user_data" / "logs" / "cryptotools-grid.log",
+            BASE / "user_data" / "logs" / "cryptotools-grid.err.log",
+        ),
+    ),
+    "scanner": ("Сканер Grid", (BASE / "user_data" / "logs" / "ranging-scanner.log",)),
+    "strategy_scanner": (
+        "Сканер страт.",
+        (BASE / "user_data" / "logs" / "strategy-scanner.log",),
+    ),
+    "pair_config": (
+        "UI API",
+        (
+            BASE / "user_data" / "logs" / "pair-config.log",
+            BASE / "user_data" / "logs" / "pair-config.err.log",
+        ),
+    ),
 }
 
 
@@ -3168,6 +4123,17 @@ def _resolve_log_bots(requested: str) -> list[str]:
         return list(LOG_SOURCES.keys())
     bots = [b.strip() for b in requested.split(",") if b.strip()]
     return [b for b in bots if b in LOG_SOURCES]
+
+
+def _pick_log_path(candidates: tuple[Path, ...]) -> Path:
+    """Prefer a non-empty existing file; else the primary (VPS) path."""
+    for path in candidates:
+        try:
+            if path.is_file() and path.stat().st_size > 0:
+                return path
+        except OSError:
+            continue
+    return candidates[0]
 
 
 def _tail_file(path: Path, max_lines: int = 200) -> tuple[list[str], int]:
@@ -3206,7 +4172,8 @@ def fetch_logs(
     positions: dict[str, int] = dict(since or {})
 
     for bot in bots:
-        label, path = LOG_SOURCES[bot]
+        label, candidates = LOG_SOURCES[bot]
+        path = _pick_log_path(candidates)
         if tail > 0 or bot not in positions:
             lines, pos = _tail_file(path, tail or 200)
             positions[bot] = pos
@@ -3222,15 +4189,137 @@ def fetch_logs(
                 entry["ts"] = ts
             entries.append(entry)
 
+    # Mixed sources: keep chronological order in the UI.
+    entries.sort(key=lambda e: (e.get("ts") or "", e.get("bot") or "", e.get("line") or ""))
     return {"entries": entries, "positions": positions}
 
 
 RANGING_PAIRS_FILE = BASE / "user_data" / "ranging_pairs.json"
 SCAN_SCRIPT = BASE / "scripts" / "scan_ranging_pairs.py"
 SCAN_LOCK = BASE / "user_data" / ".ranging_scan.lock"
+RANGING_SCAN_LOG = BASE / "user_data" / "logs" / "ranging-scanner.log"
 STRATEGY_PAIRS_FILE = BASE / "user_data" / "strategy_pairs.json"
 STRATEGY_SCAN_SCRIPT = BASE / "scripts" / "scan_strategy_pairs.py"
 STRATEGY_SCAN_LOCK = BASE / "user_data" / ".strategy_scan.lock"
+STRATEGY_SCAN_LOG = BASE / "user_data" / "logs" / "strategy-scanner.log"
+
+
+def _venv_python() -> Path:
+    """Resolve site venv interpreter (Windows Scripts/ vs Linux bin/)."""
+    candidates = (
+        BASE / ".venv" / "Scripts" / "python.exe",
+        BASE / ".venv" / "bin" / "python3",
+        BASE / ".venv" / "bin" / "python",
+    )
+    for path in candidates:
+        if path.is_file():
+            return path
+    return Path(sys.executable)
+
+
+def _scan_subprocess_env() -> dict[str, str]:
+    env = os.environ.copy()
+    env["CT_BASE"] = str(BASE)
+    if not env.get("CT_ENV"):
+        for candidate in (
+            BASE / ".env",
+            BASE / ".cryptotools.env",
+            Path("/home/cryptotools/.cryptotools.env"),
+        ):
+            if candidate.is_file():
+                env["CT_ENV"] = str(candidate)
+                break
+    return env
+
+
+def _append_scanner_log(log_path: Path, text: str, *, header: str | None = None) -> None:
+    """Write scan stdout/stderr into the file the UI log viewer tails."""
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    now = datetime.now(tz=APP_TZ).strftime("%Y-%m-%d %H:%M:%S UTC+3")
+    chunks: list[str] = []
+    if header:
+        chunks.append(f"{now} === {header} ===")
+    for raw in (text or "").splitlines():
+        line = raw.rstrip()
+        if not line:
+            continue
+        # Keep lines that already have a timestamp prefix.
+        if _LOG_TS_RE.match(line):
+            chunks.append(line)
+        else:
+            chunks.append(f"{now} {line}")
+    if not chunks:
+        return
+    with log_path.open("a", encoding="utf-8") as fh:
+        fh.write("\n".join(chunks) + "\n")
+        fh.flush()
+
+
+def _run_scan_script(script: Path, log_path: Path, *, label: str) -> subprocess.CompletedProcess[str]:
+    """Run scanner and stream stdout/stderr into the UI log file live."""
+    py = _venv_python()
+    _append_scanner_log(log_path, "", header=f"{label} start - {py.name}")
+    stdout_chunks: list[str] = []
+    try:
+        proc = subprocess.Popen(
+            [str(py), "-u", str(script), "-v"],
+            cwd=str(BASE),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+            env=_scan_subprocess_env(),
+        )
+    except FileNotFoundError as exc:
+        msg = f"python not found: {py}"
+        _append_scanner_log(log_path, msg, header=f"{label} failed")
+        raise RuntimeError(msg) from exc
+
+    deadline = time.time() + 600.0
+    assert proc.stdout is not None
+    try:
+        while True:
+            if time.time() > deadline:
+                proc.kill()
+                try:
+                    proc.wait(timeout=5)
+                except Exception:  # noqa: BLE001
+                    pass
+                _append_scanner_log(log_path, "timeout after 600s", header=f"{label} timeout")
+                raise RuntimeError(f"{label}: timeout after 600s")
+            line = proc.stdout.readline()
+            if line:
+                stdout_chunks.append(line)
+                _append_scanner_log(log_path, line.rstrip("\r\n"))
+                continue
+            if proc.poll() is not None:
+                rest = proc.stdout.read() or ""
+                if rest:
+                    stdout_chunks.append(rest)
+                    _append_scanner_log(log_path, rest)
+                break
+            time.sleep(0.05)
+    finally:
+        if proc.poll() is None:
+            try:
+                proc.kill()
+            except Exception:  # noqa: BLE001
+                pass
+
+    code = int(proc.returncode or 0)
+    combined = "".join(stdout_chunks)
+    if not combined.strip():
+        _append_scanner_log(log_path, f"(no output, exit={code})", header=f"{label} done")
+    if code != 0:
+        _append_scanner_log(log_path, f"exit={code}", header=f"{label} failed")
+    return subprocess.CompletedProcess(
+        args=[str(py), str(script), "-v"],
+        returncode=code,
+        stdout=combined,
+        stderr="",
+    )
 
 
 def get_ranging_scan_status() -> dict[str, Any]:
@@ -3269,20 +4358,9 @@ def trigger_ranging_scan() -> dict[str, Any]:
 
     SCAN_LOCK.parent.mkdir(parents=True, exist_ok=True)
     SCAN_LOCK.write_text(str(int(time.time())), encoding="utf-8")
-    py = BASE / ".venv" / "bin" / "python3"
-    env = os.environ.copy()
-    env["CT_BASE"] = str(BASE)
-    env.setdefault("CT_ENV", "/home/cryptotools/.cryptotools.env")
 
     try:
-        proc = subprocess.run(
-            [str(py), str(SCAN_SCRIPT), "-v"],
-            cwd=str(BASE),
-            capture_output=True,
-            text=True,
-            timeout=600,
-            env=env,
-        )
+        proc = _run_scan_script(SCAN_SCRIPT, RANGING_SCAN_LOG, label="ranging scan")
         if proc.returncode != 0:
             err = (proc.stderr or proc.stdout or "scan failed").strip()[-800:]
             raise RuntimeError(err or "scan failed")
@@ -3346,20 +4424,9 @@ def trigger_strategy_scan() -> dict[str, Any]:
 
     STRATEGY_SCAN_LOCK.parent.mkdir(parents=True, exist_ok=True)
     STRATEGY_SCAN_LOCK.write_text(str(int(time.time())), encoding="utf-8")
-    py = BASE / ".venv" / "bin" / "python3"
-    env = os.environ.copy()
-    env["CT_BASE"] = str(BASE)
-    env.setdefault("CT_ENV", "/home/cryptotools/.cryptotools.env")
 
     try:
-        proc = subprocess.run(
-            [str(py), str(STRATEGY_SCAN_SCRIPT), "-v"],
-            cwd=str(BASE),
-            capture_output=True,
-            text=True,
-            timeout=600,
-            env=env,
-        )
+        proc = _run_scan_script(STRATEGY_SCAN_SCRIPT, STRATEGY_SCAN_LOG, label="strategy scan")
         if proc.returncode != 0:
             err = (proc.stderr or proc.stdout or "scan failed").strip()[-800:]
             raise RuntimeError(err or "scan failed")
@@ -3464,45 +4531,225 @@ class Handler(BaseHTTPRequestHandler):
             return False
         return True
 
+    def _tcp_open(self, port: int, host: str = "127.0.0.1", timeout: float = 0.35) -> bool:
+        import socket
+
+        try:
+            with socket.create_connection((host, int(port)), timeout=timeout):
+                return True
+        except OSError:
+            return False
+
+    def _http_ok(self, url: str, timeout: float = 1.5) -> bool:
+        try:
+            with urllib.request.urlopen(url, timeout=timeout) as resp:
+                return 200 <= int(resp.status) < 300
+        except Exception:
+            return False
+
+    def _process_running_substr(self, needle: str) -> bool:
+        """Best-effort check that a process cmdline contains needle (Windows/Linux)."""
+        needle_l = needle.lower()
+        try:
+            if os.name == "nt":
+                cp = subprocess.run(
+                    [
+                        "powershell",
+                        "-NoProfile",
+                        "-Command",
+                        "Get-CimInstance Win32_Process | "
+                        "Select-Object -ExpandProperty CommandLine",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=8,
+                    check=False,
+                )
+                blob = (cp.stdout or "").lower()
+                return needle_l in blob
+            # Linux
+            proc = Path("/proc")
+            if proc.is_dir():
+                for p in proc.iterdir():
+                    if not p.name.isdigit():
+                        continue
+                    try:
+                        cmd = (p / "cmdline").read_bytes().replace(b"\x00", b" ").decode(
+                            "utf-8", "ignore"
+                        ).lower()
+                    except OSError:
+                        continue
+                    if needle_l in cmd:
+                        return True
+        except (OSError, subprocess.SubprocessError):
+            return False
+        return False
+
+    def _heartbeat_fresh(self, path: Path, max_age_sec: float = 90.0) -> bool:
+        try:
+            if not path.is_file():
+                return False
+            age = time.time() - path.stat().st_mtime
+            return age <= max_age_sec
+        except OSError:
+            return False
+
+    def _unit_active(self, unit: str) -> str:
+        if not unit:
+            return "unknown"
+        # Local/Windows: systemctl is absent — probe ports / processes / heartbeats.
+        local_fallbacks = {
+            "cryptotools-signal-engine": lambda: self._http_ok(
+                "http://127.0.0.1:8081/api/v1/ping"
+            )
+            or self._tcp_open(8081),
+            "cryptotools-strategy": lambda: self._http_ok(
+                "http://127.0.0.1:8081/api/v1/ping"
+            )
+            or self._tcp_open(8081),
+            "cryptotools-grid": lambda: self._http_ok("http://127.0.0.1:8082/api/v1/ping")
+            or self._tcp_open(8082),
+            "cryptotools-finder": lambda: self._http_ok("http://127.0.0.1:8080/api/v1/ping")
+            or self._tcp_open(8080),
+            "trade-executor": lambda: self._heartbeat_fresh(
+                Path(os.environ.get("CT_BASE", str(BASE)))
+                / "user_data"
+                / "logs"
+                / "trade-executor.heartbeat"
+            )
+            or self._process_running_substr("trade_executor.py"),
+            "pair-config": lambda: self._tcp_open(
+                int(os.environ.get("PAIR_CONFIG_PORT", "8090"))
+            ),
+        }
+        try:
+            cp = subprocess.run(
+                ["systemctl", "is-active", unit],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            state = (cp.stdout or "").strip() or "unknown"
+            # On Windows systemctl often missing → FileNotFound; if present but inactive,
+            # still allow local fallbacks (dev PC).
+            if state == "active":
+                return "active"
+            if unit in local_fallbacks and local_fallbacks[unit]():
+                return "active"
+            if state in ("inactive", "failed", "activating", "deactivating"):
+                return state
+            if unit in local_fallbacks:
+                return "active" if local_fallbacks[unit]() else "inactive"
+            return state
+        except (OSError, subprocess.SubprocessError):
+            if unit in local_fallbacks:
+                return "active" if local_fallbacks[unit]() else "inactive"
+            return "unknown"
+
+    def _shared_stack_status(self) -> dict[str, Any]:
+        signal_state = self._unit_active("cryptotools-signal-engine")
+        exec_state = self._unit_active("trade-executor")
+        return {
+            "mode": "shared",
+            "signal_engine": {
+                "unit": "cryptotools-signal-engine",
+                "active": signal_state == "active",
+                "state": signal_state,
+                "port": 8081,
+            },
+            "trade_executor": {
+                "unit": "trade-executor",
+                "active": exec_state == "active",
+                "state": exec_state,
+            },
+        }
+
+    def _control_uid(self) -> str:
+        user = self.user or {}
+        if tm.is_admin(user) and not tm.is_impersonating(user):
+            return "admin"
+        return str(user.get("id") or "")
+
     def _auth_me_payload(self) -> dict[str, Any]:
         user = self.user or {}
         public = tm._public_user(user) if user else {}
+        uid = self._control_uid()
+        try:
+            control_plane.ensure_init()
+            cp_snap = control_plane.snapshot_all(uid)
+        except Exception:
+            cp_snap = {"user_id": uid, "bots": {}}
         if tm.is_admin(user) and not tm.is_impersonating(user):
             secrets_st = tm.admin_secrets_status()
-            bots_running: dict[str, Any] = {}
-            for bot, port in tm.ADMIN_BOT_PORTS.items():
-                unit = {
-                    "finder": "cryptotools-finder",
-                    "strategy": "cryptotools-strategy",
-                    "grid": "cryptotools-grid",
-                }.get(bot, "")
-                state = "unknown"
-                if unit:
-                    try:
-                        cp = subprocess.run(
-                            ["systemctl", "is-active", unit],
-                            capture_output=True,
-                            text=True,
-                            timeout=5,
-                            check=False,
-                        )
-                        state = (cp.stdout or "").strip() or "unknown"
-                    except (OSError, subprocess.SubprocessError):
-                        state = "unknown"
-                bots_running[bot] = {
-                    "unit": unit,
-                    "active": state == "active",
-                    "state": state,
-                    "port": port,
-                }
+            shared = self._shared_stack_status()
+            grid_state = self._unit_active("cryptotools-grid")
+            finder_state = self._unit_active("cryptotools-finder")
+            bots_running: dict[str, Any] = {
+                "strategy": {
+                    **shared["signal_engine"],
+                    "label": "Signal Engine",
+                },
+                "grid": {
+                    "unit": "cryptotools-grid",
+                    "active": grid_state == "active",
+                    "state": grid_state,
+                    "port": 8082,
+                    "label": "Grid",
+                },
+                "finder": {
+                    "unit": "cryptotools-finder",
+                    "active": finder_state == "active",
+                    "state": finder_state,
+                    "port": 8080,
+                    "label": "ML Finder",
+                },
+            }
         else:
             secrets_st = tm.secrets_status(str(user["id"]))
-            bots_running = tm.tenant_bots_status(str(user["id"]))
+            shared = self._shared_stack_status()
+            flags = user_trading.load_trading_flags(str(user["id"]))
+            grid_state = self._unit_active("cryptotools-grid")
+            finder_state = self._unit_active("cryptotools-finder")
+            bots_running = {
+                "strategy": {
+                    **shared["signal_engine"],
+                    "user_trading": flags.get("strategy", False),
+                },
+                "grid": {
+                    "unit": "cryptotools-grid",
+                    "active": grid_state == "active",
+                    "state": grid_state,
+                    "port": 8082,
+                    "user_trading": flags.get("grid", False),
+                },
+                "finder": {
+                    "unit": "cryptotools-finder",
+                    "active": finder_state == "active",
+                    "state": finder_state,
+                    "port": 8080,
+                    "user_trading": flags.get("finder", False),
+                },
+            }
+        # Prefer control-plane desired/status for active flags when present.
+        for bname, brow in (cp_snap.get("bots") or {}).items():
+            if bname in bots_running and isinstance(brow, dict):
+                bots_running[bname]["control_status"] = brow.get("status")
+                bots_running[bname]["desired"] = bool(brow.get("desired"))
+                if brow.get("status") == "RUNNING":
+                    bots_running[bname]["active"] = True
+        flags = user_trading.load_trading_flags(uid)
+        for bname, brow in (cp_snap.get("bots") or {}).items():
+            if isinstance(brow, dict) and "desired" in brow:
+                flags[bname] = bool(brow.get("desired"))
         payload: dict[str, Any] = {
             "user": public,
             "role": public.get("role"),
             "secrets": secrets_st,
             "bots_running": bots_running,
+            "bots_control": cp_snap.get("bots") or {},
+            "shared_stack": shared,
+            "trading_flags": flags,
             "allowed_strategies": tm.user_allowed_strategies(user),
             "allowed_blocks": tm.user_allowed_blocks(user),
             "impersonating": tm.is_impersonating(user),
@@ -3541,6 +4788,16 @@ class Handler(BaseHTTPRequestHandler):
         qs = parse_qs(parsed.query)
         query = {k: (v[0] if len(v) == 1 else v) for k, v in qs.items()}
         body = self._read_raw_body() if self.command.upper() not in ("GET", "HEAD") else b""
+        method = self.command.upper()
+        is_status = method == "GET" and rest.rstrip("/") == "status"
+        is_light = rest.rstrip("/") in ("show_config", "count", "ping", "version")
+        # Heavy/wedged ctbot must not freeze the UI for 60s.
+        if is_status:
+            timeout = 2.0
+        elif is_light:
+            timeout = 3.0
+        else:
+            timeout = 60.0
         status, headers, body_out = tm.proxy_bot_request(
             self.user or {},
             bot,
@@ -3549,10 +4806,44 @@ class Handler(BaseHTTPRequestHandler):
             query=query or None,
             body_bytes=body or None,
             content_type=self.headers.get("Content-Type"),
+            timeout=timeout,
         )
+        if is_status and status == 200:
+            try:
+                data = json.loads(body_out or b"null")
+                if isinstance(data, list):
+                    remember_open_trades(bot, data, source="live")
+                    _open_trades_live_backoff.pop(_open_trades_backoff_key(bot), None)
+            except Exception:  # noqa: BLE001
+                pass
+        elif is_status and status in (401, 403, 502, 504, 503):
+            _open_trades_live_backoff[_open_trades_backoff_key(bot)] = time.monotonic() + 30.0
+            cached = get_cached_open_trades(bot, max_age=OPEN_TRADES_STALE_SEC)
+            if cached is not None and cached.get("trades"):
+                payload = cached["trades"]
+                body_out = json.dumps(payload).encode("utf-8")
+                status = 200
+                headers = {
+                    "content-type": "application/json",
+                    "x-open-trades-cache": "1",
+                    "x-open-trades-age": str(cached.get("age_sec") or 0),
+                }
+            else:
+                db_trades = load_open_trades_from_db(bot)
+                remember_open_trades(bot, db_trades, source="db")
+                body_out = json.dumps(db_trades).encode("utf-8")
+                status = 200
+                headers = {
+                    "content-type": "application/json",
+                    "x-open-trades-cache": "db",
+                }
         self.send_response(status)
         ct = headers.get("content-type") or "application/octet-stream"
         self.send_header("Content-Type", ct)
+        if headers.get("x-open-trades-cache"):
+            self.send_header("X-Open-Trades-Cache", headers["x-open-trades-cache"])
+        if headers.get("x-open-trades-age"):
+            self.send_header("X-Open-Trades-Age", headers["x-open-trades-age"])
         self.send_header("Content-Length", str(len(body_out)))
         self.end_headers()
         self.wfile.write(body_out)
@@ -3609,6 +4900,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._handle_put(path, parsed)
             elif method == "PATCH":
                 self._handle_patch(path, parsed)
+            elif method == "DELETE":
+                self._handle_delete(path, parsed)
             else:
                 self._json(405, {"error": "method not allowed"})
         finally:
@@ -3629,9 +4922,99 @@ class Handler(BaseHTTPRequestHandler):
     def do_DELETE(self) -> None:
         self._dispatch()
 
+    def _sse_bots_events(self, parsed) -> None:
+        """Long-lived SSE stream of control-plane events for the current user."""
+        uid = self._control_uid()
+        qs = parse_qs(parsed.query)
+        try:
+            after_id = int((qs.get("after") or ["0"])[0] or 0)
+        except ValueError:
+            after_id = 0
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+
+        queue: list[dict[str, Any]] = []
+        qlock = threading.Lock()
+
+        def _on_event(ev: dict[str, Any]) -> None:
+            if str(ev.get("user_id") or "") != uid:
+                return
+            with qlock:
+                queue.append(ev)
+
+        control_plane.add_listener(_on_event)
+        try:
+            # Initial snapshot
+            snap = control_plane.snapshot_all(uid)
+            init = {
+                "id": after_id,
+                "user_id": uid,
+                "bot": None,
+                "type": "bot.snapshot",
+                "payload": snap,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            chunk = f"event: bot.snapshot\ndata: {json.dumps(init, ensure_ascii=False)}\n\n"
+            self.wfile.write(chunk.encode("utf-8"))
+            self.wfile.flush()
+
+            # Catch-up from DB
+            for ev in control_plane.events_since(uid, after_id=after_id, limit=200):
+                after_id = max(after_id, int(ev["id"]))
+                line = f"event: {ev['type']}\ndata: {json.dumps(ev, ensure_ascii=False)}\n\n"
+                self.wfile.write(line.encode("utf-8"))
+            self.wfile.flush()
+
+            last_ping = time.time()
+            while True:
+                batch: list[dict[str, Any]] = []
+                with qlock:
+                    if queue:
+                        batch = list(queue)
+                        queue.clear()
+                for ev in batch:
+                    after_id = max(after_id, int(ev.get("id") or 0))
+                    line = f"event: {ev['type']}\ndata: {json.dumps(ev, ensure_ascii=False)}\n\n"
+                    self.wfile.write(line.encode("utf-8"))
+                if batch:
+                    self.wfile.flush()
+                now = time.time()
+                if now - last_ping >= 15:
+                    self.wfile.write(b": ping\n\n")
+                    self.wfile.flush()
+                    last_ping = now
+                time.sleep(0.35)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            pass
+        finally:
+            control_plane.remove_listener(_on_event)
+
     def _handle_get(self, path: str, parsed) -> None:
         if path == "/auth/me":
             self._json(200, self._auth_me_payload())
+            return
+        if path == "/bots":
+            uid = self._control_uid()
+            control_plane.ensure_init()
+            self._json(200, control_plane.snapshot_all(uid))
+            return
+        if path == "/bots/events":
+            self._sse_bots_events(parsed)
+            return
+        if path.startswith("/bots/"):
+            bot = path.split("/")[2] if len(path.split("/")) >= 3 else ""
+            bot = resolve_bot(bot)
+            if bot not in CONFIGS:
+                self._json(400, {"error": "invalid bot"})
+                return
+            if not tm.user_may_use_bot(self.user, bot):
+                self._json(403, {"error": "block not allowed", "bot": bot})
+                return
+            self._json(200, control_plane.snapshot_bot(self._control_uid(), bot))
             return
         if path == "/permission-catalog":
             if not self._require_admin():
@@ -3657,6 +5040,26 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/system":
             self._json(200, get_system_stats())
             return
+        if path == "/trading-enabled":
+            uid = self._control_uid()
+            # Prefer control-plane desired when present
+            flags = user_trading.load_trading_flags(uid)
+            for b in ("strategy", "grid", "finder"):
+                d = control_plane.get_desired(uid, b)
+                if d is not None:
+                    flags[b] = bool(d)
+            self._json(200, {"user_id": uid, "flags": flags})
+            return
+        if path == "/telegram":
+            import telegram_links as tg_links
+
+            uid = (
+                "admin"
+                if tm.is_admin(self.user) and not tm.is_impersonating(self.user)
+                else str(self.user["id"])
+            )
+            self._json(200, tg_links.get_link(uid))
+            return
         if path == "/pairs":
             payload = {b: safe_get_state(b) for b in CONFIGS}
             mode_path = tc.user_data_dir(BASE) / "pairlist_mode.json"
@@ -3671,6 +5074,7 @@ class Handler(BaseHTTPRequestHandler):
                 payload["_pairlist_mode"] = "scanner"
             payload["_finder_bot_enabled"] = is_finder_bot_enabled()
             payload["_finder_bot"] = load_finder_bot_config()
+            payload["test_settings"] = test_strategy_settings_payload()
             self._json(200, payload)
             return
         if path == "/strategies":
@@ -3731,6 +5135,24 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:  # noqa: BLE001
                 self._json(500, {"error": str(exc)})
             return
+        if path == "/open-summary":
+            try:
+                bundle = get_stats_bundle(force=False)
+                summary = bundle.get("open_summary") or build_open_trades_summary()
+                summary = dict(summary)
+                summary["cached"] = bool(bundle.get("cached"))
+                self._json(200, summary)
+            except Exception as exc:  # noqa: BLE001
+                self._json(500, {"error": str(exc)})
+            return
+        if path == "/open-trades":
+            qs = parse_qs(parsed.query)
+            refresh = str((qs.get("refresh") or [""])[0]).lower() in ("1", "true", "yes")
+            try:
+                self._json(200, get_open_trades_bundle(refresh=refresh))
+            except Exception as exc:  # noqa: BLE001
+                self._json(500, {"error": str(exc)})
+            return
         if path == "/strategy-rating":
             qs = parse_qs(parsed.query)
             period = (qs.get("period") or ["all"])[0]
@@ -3772,7 +5194,12 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/position-reconcile":
             try:
-                self._json(200, reconcile_positions(BASE))
+                payload = reconcile_positions(BASE)
+                payload["auto_sync"] = {
+                    "interval_sec": int(POSITION_RECONCILE_INTERVAL_SEC),
+                    "last": dict(_position_reconcile_last),
+                }
+                self._json(200, payload)
             except Exception as exc:  # noqa: BLE001
                 self._json(500, {"error": str(exc), "ok": False})
             return
@@ -3814,6 +5241,31 @@ class Handler(BaseHTTPRequestHandler):
 
     def _handle_post(self, path: str, parsed) -> None:
         data = self._read_json()
+        if path == "/secrets/activate":
+            profile_id = str(data.get("profile_id") or data.get("id") or "").strip()
+            if not profile_id:
+                self._json(400, {"error": "profile_id required"})
+                return
+            target_id = self._secrets_owner_id(data)
+            if not (tm.is_admin(self.user) and not tm.is_impersonating(self.user)):
+                if data.get("user_id") and str(data.get("user_id")) != str(self.user["id"]):
+                    self._json(403, {"error": "cannot activate secrets for another user"})
+                    return
+                target_id = str(self.user["id"])
+            try:
+                result = tm.activate_key_profile(target_id, profile_id)
+                try:
+                    import trade_executor as te
+
+                    te.clear_exchange_cache(None if target_id == "admin" else target_id)
+                except Exception:
+                    pass
+                self._json(200, result)
+            except KeyError as exc:
+                self._json(404, {"error": str(exc)})
+            except ValueError as exc:
+                self._json(400, {"error": str(exc)})
+            return
         if path == "/auth/impersonate":
             if not self._require_admin():
                 return
@@ -3901,7 +5353,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/position-reconcile/fix":
             try:
-                self._json(200, fix_reconcile(BASE))
+                # Same path as the 30m auto job (demo/live Bybit + archive ghosts).
+                self._json(200, run_position_reconcile_auto(force=True))
             except Exception as exc:  # noqa: BLE001
                 self._json(500, {"error": str(exc), "ok": False})
             return
@@ -4159,6 +5612,13 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:  # noqa: BLE001
             self._json(500, {"error": str(exc)})
 
+    def _secrets_owner_id(self, data: dict[str, Any] | None = None, qs=None) -> str:
+        data = data or {}
+        qs = qs or {}
+        if tm.is_admin(self.user) and not tm.is_impersonating(self.user):
+            return str(data.get("user_id") or (qs.get("user_id") or [None])[0] or "admin")
+        return str(self.user["id"])
+
     def _handle_put(self, path: str, parsed) -> None:
         if path != "/secrets":
             self._json(404, {"error": "not found"})
@@ -4167,13 +5627,39 @@ class Handler(BaseHTTPRequestHandler):
         qs = parse_qs(parsed.query)
         key = str(data.get("bybit_api_key") or "")
         secret = str(data.get("bybit_api_secret") or "")
-        if tm.is_admin(self.user):
-            target_id = str(data.get("user_id") or (qs.get("user_id") or [None])[0] or "")
-            if not target_id:
-                self._json(400, {"error": "user_id required for admin secrets write"})
-                return
-            if target_id == "admin":
-                self._json(400, {"error": "admin secrets come from process env"})
+        name = str(data.get("name") or data.get("label") or "").strip() or None
+        demo_raw = data.get("bybit_demo_trading", data.get("demo_trading", False))
+        if isinstance(demo_raw, bool):
+            demo_trading = demo_raw
+        else:
+            demo_trading = str(demo_raw or "").strip().lower() in (
+                "1",
+                "true",
+                "t",
+                "yes",
+                "y",
+                "on",
+            )
+        target_id = self._secrets_owner_id(data, qs)
+        if tm.is_admin(self.user) and not tm.is_impersonating(self.user):
+            if target_id not in ("", "admin") and target_id != "admin":
+                # Admin writing another user's secrets
+                pass
+            elif target_id in ("", "admin"):
+                try:
+                    result = tm.save_admin_secrets(
+                        key, secret, demo_trading=demo_trading, name=name
+                    )
+                except ValueError as exc:
+                    self._json(400, {"error": str(exc)})
+                    return
+                try:
+                    import trade_executor as te
+
+                    te.clear_exchange_cache(None)
+                except Exception:
+                    pass
+                self._json(200, result)
                 return
         else:
             if data.get("user_id") and str(data.get("user_id")) != str(self.user["id"]):
@@ -4181,14 +5667,156 @@ class Handler(BaseHTTPRequestHandler):
                 return
             target_id = str(self.user["id"])
         try:
-            tm.save_user_secrets(target_id, key, secret)
-            bots = tm.restart_tenant_bots(target_id)
+            result = tm.save_user_secrets(
+                target_id, key, secret, demo_trading=demo_trading, name=name
+            )
+            try:
+                import trade_executor as te
+
+                te.clear_exchange_cache(target_id)
+            except Exception:
+                pass
         except ValueError as exc:
             self._json(400, {"error": str(exc)})
             return
-        self._json(200, {"ok": True, "user_id": target_id, "bots_restarted": bots})
+        self._json(200, result)
+
+    def _handle_delete(self, path: str, parsed) -> None:
+        if path == "/secrets":
+            data = self._read_json() if int(self.headers.get("Content-Length") or 0) else {}
+            qs = parse_qs(parsed.query)
+            profile_id = str(
+                data.get("profile_id")
+                or data.get("id")
+                or (qs.get("profile_id") or qs.get("id") or [None])[0]
+                or ""
+            ).strip()
+            if not profile_id:
+                self._json(400, {"error": "profile_id required"})
+                return
+            target_id = self._secrets_owner_id(data, qs)
+            if not (tm.is_admin(self.user) and not tm.is_impersonating(self.user)):
+                if data.get("user_id") and str(data.get("user_id")) != str(self.user["id"]):
+                    self._json(403, {"error": "cannot delete secrets for another user"})
+                    return
+                target_id = str(self.user["id"])
+            try:
+                result = tm.delete_key_profile(target_id, profile_id)
+                try:
+                    import trade_executor as te
+
+                    te.clear_exchange_cache(None if target_id == "admin" else target_id)
+                except Exception:
+                    pass
+                self._json(200, result)
+            except KeyError as exc:
+                self._json(404, {"error": str(exc)})
+            except ValueError as exc:
+                self._json(400, {"error": str(exc)})
+            return
+        self._json(404, {"error": "not found"})
 
     def _handle_patch(self, path: str, parsed) -> None:
+        if path.startswith("/bots/"):
+            parts = [p for p in path.split("/") if p]
+            # bots, {bot}
+            if len(parts) < 2:
+                self._json(400, {"error": "bot required"})
+                return
+            bot = resolve_bot(parts[1])
+            if bot not in ("finder", "strategy", "grid"):
+                self._json(400, {"error": "invalid bot"})
+                return
+            if not tm.user_may_use_bot(self.user, bot):
+                self._json(403, {"error": "block not allowed", "bot": bot})
+                return
+            data = self._read_json()
+            if "enabled" not in data:
+                self._json(400, {"error": "enabled bool required"})
+                return
+            enabled = bool(data.get("enabled"))
+            if enabled and bot_trading_disabled(bot):
+                self._json(
+                    400,
+                    {
+                        "error": "max_open_trades is 0 — set at least 1 active slot to start trading",
+                        "trading_disabled": True,
+                    },
+                )
+                return
+            uid = self._control_uid()
+            control_plane.ensure_init()
+            snap = control_plane.set_desired(
+                uid,
+                bot,
+                enabled,
+                updated_by=str((self.user or {}).get("username") or uid),
+                enqueue=True,
+            )
+            # Keep JSON flags in sync immediately for executor readers
+            user_trading.save_trading_flags(uid, {bot: enabled})
+            self._json(200, snap)
+            return
+        if path == "/trading-enabled":
+            uid = self._control_uid()
+            data = self._read_json()
+            flags = data.get("flags") if isinstance(data.get("flags"), dict) else data
+            if not isinstance(flags, dict):
+                self._json(400, {"error": "flags object required"})
+                return
+            control_plane.ensure_init()
+            saved_flags: dict[str, bool] = {}
+            snaps = {}
+            for key in ("strategy", "grid", "finder"):
+                if key not in flags:
+                    continue
+                enabled = bool(flags[key])
+                snaps[key] = control_plane.set_desired(
+                    uid,
+                    key,
+                    enabled,
+                    updated_by=str((self.user or {}).get("username") or uid),
+                    enqueue=True,
+                )
+                saved_flags[key] = enabled
+            # Persist full merged flags file
+            saved = user_trading.save_trading_flags(uid, flags)
+            self._json(200, {"user_id": uid, "flags": saved, "bots": snaps})
+            return
+        if path == "/telegram":
+            import telegram_links as tg_links
+
+            uid = (
+                "admin"
+                if tm.is_admin(self.user) and not tm.is_impersonating(self.user)
+                else str(self.user["id"])
+            )
+            data = self._read_json()
+            try:
+                chat_id = str(data.get("chat_id") if "chat_id" in data else "").strip()
+                enabled = bool(data.get("enabled", True)) if chat_id else False
+                # Optional Mini App auto-link: validate initData and take user.id
+                init_data = str(data.get("init_data") or data.get("initData") or "").strip()
+                if init_data and not chat_id:
+                    tg_user = tg_links.validate_webapp_init_data(init_data)
+                    if not tg_user or not tg_user.get("id"):
+                        self._json(400, {"error": "невалидные данные Telegram WebApp"})
+                        return
+                    chat_id = str(tg_user["id"])
+                saved = tg_links.set_link(uid, chat_id, enabled=enabled)
+                if chat_id:
+                    try:
+                        tg_links.send_message(
+                            chat_id,
+                            f"✅ CryptoTools: чат привязан к аккаунту «{uid}».\n"
+                            "Сюда будут приходить уведомления о сделках на русском.",
+                        )
+                    except Exception:
+                        pass
+                self._json(200, saved)
+            except ValueError as exc:
+                self._json(400, {"error": str(exc)})
+            return
         parts = path.split("/")
         if len(parts) != 3 or parts[1] != "users":
             self._json(404, {"error": "not found"})
@@ -4235,13 +5863,17 @@ def _clamp_tenant_enabled_strategies(
         return
     if not isinstance(raw, dict):
         return
+    enabled = raw.get("enabled")
+    if not isinstance(enabled, dict):
+        return
     changed = False
-    for sid, on in list(raw.items()):
+    for sid, on in list(enabled.items()):
         if on and sid not in allow:
-            raw[sid] = False
+            enabled[sid] = False
             changed = True
     if not changed:
         return
+    raw["enabled"] = enabled
     path.write_text(json.dumps(raw, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
@@ -4258,6 +5890,7 @@ def main() -> None:
     AUTH_PASS = os.environ.get("FREQUI_PASSWORD", AUTH_PASS)
     tm.ensure_users_migrated()
     apply_bot_limits_to_configs()
+    apply_tenant_bot_limits()
     apply_strategies_prefs()
     ensure_router_config()
     _setup_server_logging()
@@ -4271,6 +5904,15 @@ def main() -> None:
         poll_sec=60,
     )
     start_stats_cache_scheduler()
+    start_open_trades_cache_scheduler()
+    start_position_reconcile_scheduler()
+    try:
+        control_plane.init_db()
+        control_plane.seed_from_trading_flags()
+        bot_reconcile.start_reconcile_worker(poll_sec=2.5)
+        _server_log.info("control-plane + bot reconcile worker ready")
+    except Exception:
+        _server_log.exception("control-plane init failed")
     ThreadedHTTPServer((host, port), Handler).serve_forever()
 
 
