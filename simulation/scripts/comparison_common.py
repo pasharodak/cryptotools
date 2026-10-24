@@ -47,6 +47,14 @@ def pairs_from_source(root: Path, source: str, *, min_start: str | None = None) 
     elif source == "grid_priority":
         path = root / GRID_PRIORITY_PATH
         pairs = list(json.loads(path.read_text(encoding="utf-8")).get("pairs") or [])
+    elif source == "screen_6_20":
+        path = root / "simulation/config/screen_pairs_6_20.json"
+        pairs = list(json.loads(path.read_text(encoding="utf-8")).get("pairs") or [])
+    elif source.endswith(".json"):
+        path = Path(source)
+        if not path.is_file():
+            path = root / source
+        pairs = list(json.loads(path.read_text(encoding="utf-8")).get("pairs") or [])
     else:
         raise ValueError(f"unknown pairs source: {source}")
 

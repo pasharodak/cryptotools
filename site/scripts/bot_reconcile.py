@@ -112,6 +112,10 @@ def show_config_state(port: int) -> str:
     return str(data.get("state") or "unknown").lower()
 
 
+# ctbot flaps through these while applying whitelist / max_open / reload_config.
+_RUNNING_LIKE_STATES = frozenset({"running", "reload_config", "reloading"})
+
+
 def ctbot_start_stop(port: int, action: str) -> tuple[bool, str]:
     code, data = http_json(f"http://127.0.0.1:{port}/api/v1/{action}", method="POST", timeout=8.0)
     if code in (200, 201):
@@ -131,6 +135,46 @@ def ctbot_start_stop(port: int, action: str) -> tuple[bool, str]:
 
 
 def _systemctl(*args: str) -> subprocess.CompletedProcess[str]:
+    """Run systemctl; prefer NOPASSWD admin wrapper for shared units."""
+    wrapper = BASE / "deploy" / "admin-systemctl.sh"
+    if wrapper.is_file() and args:
+        action = args[0]
+        unit = args[1] if len(args) > 1 else ""
+        # Accept both short and .service names
+        if unit and not unit.endswith(".service") and action != "daemon-reload":
+            unit = f"{unit}.service"
+        if action == "daemon-reload":
+            try:
+                return subprocess.run(
+                    ["sudo", "-n", str(wrapper), "daemon-reload"],
+                    capture_output=True,
+                    text=True,
+                    timeout=45,
+                    check=False,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                return subprocess.CompletedProcess(
+                    args=["sudo", str(wrapper), "daemon-reload"],
+                    returncode=1,
+                    stdout="",
+                    stderr=str(exc),
+                )
+        if action in ("start", "stop", "restart", "enable", "disable", "is-active") and unit:
+            try:
+                return subprocess.run(
+                    ["sudo", "-n", str(wrapper), action, unit],
+                    capture_output=True,
+                    text=True,
+                    timeout=45,
+                    check=False,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                return subprocess.CompletedProcess(
+                    args=["sudo", str(wrapper), action, unit],
+                    returncode=1,
+                    stdout="",
+                    stderr=str(exc),
+                )
     try:
         return subprocess.run(
             ["systemctl", *args],
@@ -143,17 +187,48 @@ def _systemctl(*args: str) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(args=["systemctl", *args], returncode=1, stdout="", stderr=str(exc))
 
 
+def _shared_strategy(bot: str) -> bool:
+    """Strategy uses shared signal-engine + trade-executor for every user."""
+    return bot == "strategy"
+
+
+def _tenant_systemctl(*args: str) -> subprocess.CompletedProcess[str]:
+    """Prefer NOPASSWD wrapper; fall back to plain systemctl."""
+    wrapper = BASE / "deploy" / "tenant-systemctl.sh"
+    if wrapper.is_file() and args:
+        # Map: start|stop|restart|enable|disable|is-active UNIT → wrapper ACTION UNIT
+        action = args[0]
+        unit = args[1] if len(args) > 1 else ""
+        if action in ("start", "stop", "restart", "enable", "disable", "is-active") and unit:
+            try:
+                return subprocess.run(
+                    ["sudo", "-n", str(wrapper), action, unit],
+                    capture_output=True,
+                    text=True,
+                    timeout=45,
+                    check=False,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                return subprocess.CompletedProcess(
+                    args=["sudo", str(wrapper), action, unit],
+                    returncode=1,
+                    stdout="",
+                    stderr=str(exc),
+                )
+    return _systemctl(*args)
+
+
 def ensure_process_linux(user_id: str, bot: str) -> tuple[bool, str]:
+    if _shared_strategy(bot):
+        # Shared stack for admin AND tenants (no cryptotools-strategy@user).
+        for unit in ("cryptotools-signal-engine", "trade-executor"):
+            st = _systemctl("is-active", unit)
+            if (st.stdout or "").strip() != "active":
+                cp_res = _systemctl("start", unit)
+                if cp_res.returncode != 0:
+                    return False, (cp_res.stderr or cp_res.stdout or f"start {unit} failed").strip()
+        return True, ""
     if user_id == "admin":
-        if bot == "strategy":
-            # Shared stack: signal-engine + trade-executor
-            for unit in ("cryptotools-signal-engine", "trade-executor"):
-                st = _systemctl("is-active", unit)
-                if (st.stdout or "").strip() != "active":
-                    cp_res = _systemctl("start", unit)
-                    if cp_res.returncode != 0:
-                        return False, (cp_res.stderr or cp_res.stdout or f"start {unit} failed").strip()
-            return True, ""
         unit = ADMIN_UNITS[bot]
         st = _systemctl("is-active", unit)
         if (st.stdout or "").strip() == "active":
@@ -162,17 +237,15 @@ def ensure_process_linux(user_id: str, bot: str) -> tuple[bool, str]:
         if cp_res.returncode != 0:
             return False, (cp_res.stderr or cp_res.stdout or f"start {unit} failed").strip()
         return True, ""
-    # Tenant units
-    unit = f"cryptotools-{bot}@{user_id}"
-    if bot == "strategy":
-        unit = f"cryptotools-strategy@{user_id}"
-    st = _systemctl("is-active", unit)
+    # Tenant grid/finder units (need sudoers → tenant-systemctl.sh)
+    unit = f"cryptotools-{bot}@{user_id}.service"
+    st = _tenant_systemctl("is-active", unit)
     if (st.stdout or "").strip() == "active":
         return True, ""
-    en = _systemctl("enable", unit)
-    cp_res = _systemctl("start", unit)
+    _tenant_systemctl("enable", unit)
+    cp_res = _tenant_systemctl("start", unit)
     if cp_res.returncode != 0:
-        return False, (cp_res.stderr or en.stderr or f"start {unit} failed").strip()
+        return False, (cp_res.stderr or cp_res.stdout or f"start {unit} failed").strip()
     return True, ""
 
 
@@ -210,16 +283,8 @@ def _spawn_windows(args: list[str], log_tag: str) -> tuple[bool, str]:
 
 
 def ensure_process_windows(user_id: str, bot: str) -> tuple[bool, str]:
-    if user_id != "admin":
-        # Local multi-tenant spawn not implemented — rely on flags + existing ports
-        port = bot_port(user_id, bot)
-        if port_open(port):
-            return True, ""
-        return False, f"tenant bot process not running on :{port}"
-
-    port = ADMIN_PORTS[bot]
-    if bot == "strategy":
-        # signal engine on 8081 + trade_executor heartbeat
+    if _shared_strategy(bot):
+        # Shared signal-engine + executor for every user (tenant = flags only).
         if not port_open(8081):
             ok, err = _spawn_windows(
                 [
@@ -238,7 +303,6 @@ def ensure_process_windows(user_id: str, bot: str) -> tuple[bool, str]:
             )
             if not ok:
                 return False, err
-        # executor
         hb = BASE / "user_data" / "logs" / "trade-executor.heartbeat"
         fresh = False
         if hb.is_file():
@@ -253,13 +317,20 @@ def ensure_process_windows(user_id: str, bot: str) -> tuple[bool, str]:
             )
             if not ok:
                 return False, err
-        # wait for port
         for _ in range(20):
             if port_open(8081):
                 return True, ""
             time.sleep(0.5)
         return False, "signal-engine port 8081 not up"
 
+    if user_id != "admin":
+        # Local multi-tenant grid/finder spawn not implemented
+        port = bot_port(user_id, bot)
+        if port_open(port):
+            return True, ""
+        return False, f"tenant bot process not running on :{port}"
+
+    port = ADMIN_PORTS[bot]
     if port_open(port):
         return True, ""
 
@@ -309,17 +380,25 @@ def ensure_process(user_id: str, bot: str) -> tuple[bool, str]:
 
 def refresh_observed(user_id: str, bot: str) -> dict[str, Any]:
     port = bot_port(user_id, bot)
-    if bot == "strategy" and user_id == "admin":
+    if _shared_strategy(bot):
         process_up = port_open(8081)
         trading = "unknown"
         if process_up:
             trading = show_config_state(8081)
         # Trading enabled flag gates "effective" running for strategy
         flagged = user_trading.is_trading_enabled(user_id, "strategy")
-        if process_up and flagged and trading == "running":
+        if process_up and flagged and trading in _RUNNING_LIKE_STATES:
+            # reload_config is a brief healthy flap — not a fresh STARTING.
+            eff = "running"
+        elif process_up and flagged and trading == "unknown":
+            # show_config timeout must NOT flip UI to STOPPED/STARTING every poll.
+            eff = "running"
+        elif process_up and flagged and trading in ("stopped", "paused"):
+            # Shared signal-engine can briefly report stopped while still serving API;
+            # keep running if process is up and user wants trading on.
             eff = "running"
         elif process_up and flagged:
-            eff = trading if trading != "unknown" else "stopped"
+            eff = trading if trading else "running"
         else:
             eff = "stopped"
         return cp.update_observed(
@@ -332,15 +411,29 @@ def refresh_observed(user_id: str, bot: str) -> dict[str, Any]:
             clear_starting=eff == "running",
         )
 
-    process_up = port_open(port) and ping_bot(port)
-    trading = show_config_state(port) if process_up else "unknown"
+    # Grid / Finder: port open is enough for process_up. Requiring ping AND port
+    # made brief API timeouts flip UI STARTING↔RUNNING forever.
+    process_up = port_open(port)
+    # Accept-queue full / DDoS backoff: connect fails but systemd unit is still up.
+    if not process_up and user_id == "admin" and bot in ADMIN_UNITS:
+        st_unit = _systemctl("is-active", ADMIN_UNITS[bot])
+        if (st_unit.stdout or "").strip() == "active":
+            process_up = True
+    trading = "unknown"
+    if process_up and port_open(port):
+        trading = show_config_state(port)
     flagged = user_trading.is_trading_enabled(user_id, bot)
-    if process_up and flagged and trading == "running":
+    if process_up and flagged and trading in _RUNNING_LIKE_STATES:
         eff = "running"
+    elif process_up and flagged and trading in ("unknown", "stopped", "paused"):
+        # Same sticky rule as shared strategy — avoid badge flap during reload.
+        eff = "running"
+    elif process_up and flagged:
+        eff = trading if trading else "running"
     elif process_up and not flagged:
         eff = "stopped"
     else:
-        eff = trading if process_up else "unknown"
+        eff = "unknown"
     return cp.update_observed(
         user_id,
         bot,
@@ -359,42 +452,86 @@ def apply_enable(user_id: str, bot: str) -> tuple[bool, str]:
         cp.update_observed(user_id, bot, process_up=False, last_error=err)
         return False, err
 
-    port = bot_port(user_id, bot)
-    # Wait briefly for API
-    for _ in range(15):
-        if ping_bot(port if bot != "strategy" or user_id != "admin" else 8081):
-            break
-        time.sleep(0.4)
-
-    api_port = 8081 if (bot == "strategy" and user_id == "admin") else port
-    if bot != "strategy" or user_id != "admin":
-        started, start_err = ctbot_start_stop(api_port, "start")
-        if not started:
-            # Process up but start failed — still record
-            cp.update_observed(user_id, bot, process_up=True, trading_state="stopped", last_error=start_err)
-            return False, start_err
+    if _shared_strategy(bot):
+        # Shared strategy: trading flag is enough; keep signal-engine running.
+        for _ in range(15):
+            if ping_bot(8081):
+                break
+            time.sleep(0.4)
+        # Skip /start if already running — avoids reload flap.
+        if show_config_state(8081) not in _RUNNING_LIKE_STATES:
+            ctbot_start_stop(8081, "start")
     else:
-        # Shared strategy: flag is enough; try start signal engine trading state
-        ctbot_start_stop(8081, "start")
+        port = bot_port(user_id, bot)
+        for _ in range(15):
+            if port_open(port):
+                break
+            time.sleep(0.4)
+        st = show_config_state(port) if port_open(port) else "unknown"
+        # unknown = API timeout while process is up (Finder exchange backoff /
+        # accept queue full). Calling /start here caused endless reload flaps.
+        if st in _RUNNING_LIKE_STATES or st == "unknown":
+            pass
+        elif st in ("stopped", "paused"):
+            started, start_err = ctbot_start_stop(port, "start")
+            if not started:
+                cp.update_observed(
+                    user_id, bot, process_up=True, trading_state="stopped", last_error=start_err
+                )
+                return False, start_err
+        elif not port_open(port):
+            # Unit may already be active; do not hammer a wedged API.
+            pass
+        else:
+            started, start_err = ctbot_start_stop(port, "start")
+            if not started:
+                cp.update_observed(
+                    user_id, bot, process_up=True, trading_state="stopped", last_error=start_err
+                )
+                return False, start_err
 
     snap = refresh_observed(user_id, bot)
     cp.append_event(user_id, "bot.status", snap, bot=bot)
+    try:
+        import telegram_links as tg_links
+
+        tg_links.notify_user(
+            user_id,
+            tg_links.format_bot_event_ru(action="start", bot=bot, user_id=user_id),
+            kind="bot_start",
+        )
+    except Exception:
+        pass
     return True, ""
 
 
 def apply_disable(user_id: str, bot: str) -> tuple[bool, str]:
     user_trading.save_trading_flags(user_id, {bot: False})
-    port = bot_port(user_id, bot)
-    api_port = 8081 if (bot == "strategy" and user_id == "admin") else port
 
-    if bot == "strategy" and user_id == "admin":
-        # Shared: only flag off — leave signal process running
+    if _shared_strategy(bot):
+        # Shared: only flag off — leave signal process running for other users.
         snap = refresh_observed(user_id, bot)
         cp.append_event(user_id, "bot.status", snap, bot=bot)
+        try:
+            import telegram_links as tg_links
+
+            tg_links.notify_user(
+                user_id,
+                tg_links.format_bot_event_ru(
+                    action="stop",
+                    bot=bot,
+                    user_id=user_id,
+                    detail="Автоторговля стратегиями выключена",
+                ),
+                kind="bot_stop",
+            )
+        except Exception:
+            pass
         return True, ""
 
-    if port_open(api_port):
-        ok, err = ctbot_start_stop(api_port, "stop")
+    port = bot_port(user_id, bot)
+    if port_open(port):
+        ok, err = ctbot_start_stop(port, "stop")
         if not ok:
             cp.update_observed(user_id, bot, process_up=True, last_error=err)
             snap = refresh_observed(user_id, bot)
@@ -403,6 +540,16 @@ def apply_disable(user_id: str, bot: str) -> tuple[bool, str]:
 
     snap = refresh_observed(user_id, bot)
     cp.append_event(user_id, "bot.status", snap, bot=bot)
+    try:
+        import telegram_links as tg_links
+
+        tg_links.notify_user(
+            user_id,
+            tg_links.format_bot_event_ru(action="stop", bot=bot, user_id=user_id),
+            kind="bot_stop",
+        )
+    except Exception:
+        pass
     return True, ""
 
 

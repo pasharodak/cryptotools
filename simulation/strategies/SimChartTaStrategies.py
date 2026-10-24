@@ -13,7 +13,7 @@ from simulation.strategies.LiteFinanceStrategies import _LiteBase
 class WilliamsRReclaimStrategy(_LiteBase):
     """Williams %R — fade oversold/overbought reclaim of −80 / −20."""
 
-    stoploss = -0.015
+    stoploss = -0.009
     minimal_roi = {"0": 0.01, "40": 0.005, "100": 0}
     pair_cooldown_minutes = 90
 
@@ -43,7 +43,7 @@ class WilliamsRReclaimStrategy(_LiteBase):
 class AdxDiCrossStrategy(_LiteBase):
     """ADX / DI+/DI− — directional index cross with ADX trend filter."""
 
-    stoploss = -0.02
+    stoploss = -0.008
     minimal_roi = {"0": 0.014, "60": 0.007, "180": 0}
     pair_cooldown_minutes = 120
 
@@ -81,7 +81,7 @@ class AdxDiCrossStrategy(_LiteBase):
 class BbSqueezeBreakoutStrategy(_LiteBase):
     """Bollinger squeeze breakout — narrow BB width then close outside bands."""
 
-    stoploss = -0.018
+    stoploss = -0.012
     minimal_roi = {"0": 0.013, "50": 0.006, "150": 0}
     pair_cooldown_minutes = 100
     startup_candle_count = 80
@@ -121,7 +121,7 @@ class BbSqueezeBreakoutStrategy(_LiteBase):
 class HeikinAshiFlipStrategy(_LiteBase):
     """Heikin Ashi color flip — HA close vs open with EMA trend filter."""
 
-    stoploss = -0.016
+    stoploss = -0.01
     minimal_roi = {"0": 0.011, "45": 0.0055, "120": 0}
     pair_cooldown_minutes = 90
 
@@ -160,7 +160,7 @@ class HeikinAshiFlipStrategy(_LiteBase):
 class PivotBounceStrategy(_LiteBase):
     """Classic floor pivots — bounce off prior-day S1 / R1 with RSI confirm."""
 
-    stoploss = -0.017
+    stoploss = -0.011
     minimal_roi = {"0": 0.012, "50": 0.006, "140": 0}
     pair_cooldown_minutes = 120
     startup_candle_count = 320  # need ~1 day of 5m bars for pivot lookback

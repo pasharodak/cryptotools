@@ -20,7 +20,7 @@ from simulation.strategies.LiteFinanceStrategies import _LiteBase
 class AltVolumeBreakoutStrategy(_LiteBase):
     """Active-coin Donchian breakout with volume/ATR pulse filter."""
 
-    stoploss = -0.015
+    stoploss = -0.009
     minimal_roi = {"0": 0.012, "25": 0.006, "75": 0}
     pair_cooldown_minutes = 45
     startup_candle_count = 80
@@ -75,7 +75,7 @@ class AltVolumeBreakoutStrategy(_LiteBase):
 class LiquiditySweepReclaimStrategy(_LiteBase):
     """Liquidity sweep (wick beyond swing) + reclaim close — candle proxy for 'прострел'."""
 
-    stoploss = -0.012
+    stoploss = -0.006
     minimal_roi = {"0": 0.009, "20": 0.0045, "60": 0}
     pair_cooldown_minutes = 40
     startup_candle_count = 80
@@ -139,7 +139,7 @@ class LiquiditySweepReclaimStrategy(_LiteBase):
 class AltVolumeBreakoutTestStrategy(AltVolumeBreakoutStrategy):
     """UI test clone of #31: tighter chase, long-only (short SL −3% Aug 15)."""
 
-    stoploss = -0.02
+    stoploss = -0.014
     minimal_roi = {"0": 0.02, "60": 0.012, "180": 0.008, "480": 0.0}
     pair_cooldown_minutes = 180
     sim_leverage = 1.0

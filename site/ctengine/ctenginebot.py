@@ -2250,8 +2250,18 @@ class CtengineBot(LoggingMixin):
 
         logger.info(f"{side} order {order_obj.ft_cancel_reason} for {trade}.")
 
-        # Using filled to determine the filled amount
-        filled_amount = safe_value_fallback2(corder, order, "filled", "filled")
+        # Missing exchange orders are stored with filled=None. isclose() crashes on None
+        # and the bot then restart-loops on startup.
+        filled_amount = safe_value_fallback2(corder, order, "filled", "filled", 0.0)
+        if filled_amount is None:
+            filled_amount = 0.0
+        if not trade.is_open:
+            order_obj.ft_is_open = False
+            if corder.get("status"):
+                order_obj.status = corder["status"]
+            Trade.commit()
+            logger.info(f"{side} order closed on already closed trade {trade}.")
+            return True
         if isclose(filled_amount, 0.0, abs_tol=constants.MATH_CLOSE_PREC):
             was_trade_fully_canceled = True
             # if trade is not partially completed and it's the only order, just delete the trade
@@ -2291,6 +2301,15 @@ class CtengineBot(LoggingMixin):
         """
         order_id = order_obj.order_id
         cancelled = False
+        if not trade.is_open:
+            order_obj.ft_is_open = False
+            if order.get("status"):
+                order_obj.status = order["status"]
+            Trade.commit()
+            logger.info(
+                f"{trade.exit_side.capitalize()} order closed on already closed trade {trade}."
+            )
+            return True
         # Cancelled orders may have the status of 'canceled' or 'closed'
         if order["status"] not in constants.NON_OPEN_EXCHANGE_STATES:
             filled_amt: float = order.get("filled", 0.0) or 0.0

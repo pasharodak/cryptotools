@@ -59,6 +59,7 @@ STRATEGY_IDS = [
     "AltVolumeBreakoutTestStrategy",
     "BollingerRsiTestStrategy",
     "MacdEmaTestStrategy",
+    "OkalaRange8020Strategy",
 ]
 
 # Unknown / pack strategies reuse a known scoring profile.
@@ -81,6 +82,7 @@ SCORE_AS: dict[str, str] = {
     "AltVolumeBreakoutTestStrategy": "AdxMomentumStrategy",
     "BollingerRsiTestStrategy": "BollingerRsiStrategy",
     "MacdEmaTestStrategy": "MacdEmaStrategy",
+    "OkalaRange8020Strategy": "AdxMomentumStrategy",
 }
 
 

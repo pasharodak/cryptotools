@@ -73,6 +73,34 @@ def _open_db_keys(conn: sqlite3.Connection) -> set[tuple[str, int]]:
     return {(str(r[0]), int(r[1])) for r in rows}
 
 
+def _other_bot_holds_pair(user_id: str, pair: str) -> str | None:
+    """
+    Skip import when Finder/Grid (or another bot DB) already owns this pair.
+
+    Without this, executor reconcile steals Finder positions into strategy DB;
+    auto position-reconcile then archives Finder as reconcile_duplicate.
+    """
+    tid = "admin" if user_id == "admin" else user_id
+    try:
+        from pair_entry_guard import open_trades_holding_pair_any_side
+
+        holders = open_trades_holding_pair_any_side(pair, tenant_id=tid)
+    except Exception as exc:  # noqa: BLE001
+        # Fail-closed for admin shared account: do not invent strategy rows
+        # when we cannot see Finder/Grid ownership.
+        if user_id == "admin":
+            return f"guard unavailable: {exc}"
+        return None
+    for h in holders:
+        bot = str(h.get("bot") or "")
+        if bot and bot != "strategy":
+            return (
+                f"owned by {bot} #{h.get('trade_id')} "
+                f"({h.get('enter_tag') or h.get('strategy') or '?'})"
+            )
+    return None
+
+
 def _last_feed_strategy(pair: str) -> str | None:
     sid = None
     for ev in signal_bus.iter_events():
@@ -173,7 +201,15 @@ def import_positions(
     ex = _load_exchange(user_id)
     db = _db_path(user_id)
     if not db.is_file():
-        raise RuntimeError(f"db missing: {db}")
+        # Shared-stack tenants: create empty ctengine-compatible DB on first use.
+        try:
+            from trade_executor import ensure_trades_db
+
+            db = ensure_trades_db(user_id)
+        except Exception as exc:
+            raise RuntimeError(f"db missing: {db} ({exc})") from exc
+        if not db.is_file():
+            raise RuntimeError(f"db missing: {db}")
 
     strategy_by_pair = dict(strategy_by_pair or {})
     imported: list[dict[str, Any]] = []
@@ -188,6 +224,11 @@ def import_positions(
             key = (pair, 1 if is_short else 0)
             if key in existing:
                 skipped.append({"pair": pair, "reason": "already_in_db"})
+                continue
+
+            other = _other_bot_holds_pair(user_id, pair)
+            if other:
+                skipped.append({"pair": pair, "reason": f"other_bot:{other}"})
                 continue
 
             size = float(pos.get("size") or 0)

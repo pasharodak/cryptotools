@@ -14,8 +14,8 @@ logger = logging.getLogger(__name__)
 
 # site/scripts/pair_entry_guard.py -> parents[1] == site/
 _SITE_ROOT = Path(__file__).resolve().parent.parent
-CLAIM_TTL_SEC = float(os.environ.get("CT_PAIR_CLAIM_TTL_SEC", "60"))
-BYBIT_CACHE_TTL_SEC = float(os.environ.get("CT_PAIR_BYBIT_CACHE_SEC", "8"))
+CLAIM_TTL_SEC = float(os.environ.get("CT_PAIR_CLAIM_TTL_SEC", "180"))
+BYBIT_CACHE_TTL_SEC = float(os.environ.get("CT_PAIR_BYBIT_CACHE_SEC", "5"))
 
 # bot -> config relative to BASE (admin / shared stack)
 _BOT_CONFIGS: dict[str, str] = {
@@ -53,8 +53,9 @@ def _normalize_side(side: str | int | bool) -> str:
     return "sell" if s in ("sell", "short", "1", "true") else "buy"
 
 
-def lock_key(pair: str, side: str | int | bool) -> str:
-    return f"{pair}:{_normalize_side(side)}"
+def lock_key(pair: str, side: str | int | bool | None = None) -> str:
+    """One-way Bybit: one claim per pair (side kept only as metadata)."""
+    return str(pair or "").strip()
 
 
 def user_data_dir(tenant_id: str | None = None) -> Path:
@@ -138,6 +139,7 @@ def _scan_db(db: Path, *, bot: str, pair: str, want_short: int) -> list[dict[str
                 SELECT id, pair, is_short, amount, open_date, strategy, enter_tag
                 FROM trades
                 WHERE is_open = 1 AND pair = ?
+                  AND COALESCE(amount, 0) > 0
                   AND (
                     is_short = ?
                     OR is_short = ?
@@ -153,13 +155,16 @@ def _scan_db(db: Path, *, bot: str, pair: str, want_short: int) -> list[dict[str
                     "1" if want_short else "0",
                 ),
             ):
+                amt = float(row["amount"] or 0)
+                if amt <= 0:
+                    continue
                 out.append(
                     {
                         "bot": bot,
                         "trade_id": int(row["id"]),
                         "pair": row["pair"],
                         "side": "sell" if row["is_short"] else "buy",
-                        "amount": float(row["amount"] or 0),
+                        "amount": amt,
                         "open_date": row["open_date"],
                         "strategy": row["strategy"],
                         "enter_tag": row["enter_tag"],
@@ -217,6 +222,139 @@ def open_trades_holding_pair(
             continue
         hits.extend(_scan_db(db, bot=bot, pair=pair, want_short=want_short))
     return hits
+
+
+def _trade_db_paths(tenant_id: str | None = None) -> list[Path]:
+    tid = (tenant_id or "admin").strip() or "admin"
+    if tid != "admin":
+        ud = user_data_dir(tid)
+        return [
+            ud / name
+            for name in (
+                "tradesv3-strategy.sqlite",
+                "tradesv3.sqlite",
+                "tradesv3-finder.sqlite",
+                "tradesv3-grid.sqlite",
+            )
+        ]
+    base = get_base()
+    paths: list[Path] = []
+    for cfg_rel in _BOT_CONFIGS.values():
+        db = _db_path_for_config(base, cfg_rel)
+        if db is not None:
+            paths.append(db)
+    return paths
+
+
+_OPEN_BY_BOT: dict[str, Any] = {"at": 0.0, "pairs": {}}
+_OPEN_BY_BOT_TTL_SEC = 20.0
+
+
+def _trade_bot(db_bot: str, enter_tag: str, strategy: str) -> str:
+    tag = enter_tag or strategy or ""
+    if tag.startswith("Deepseek50") or strategy == "Deepseek50":
+        return "llm50"
+    if tag.startswith("DeepseekLlmStrategy") or strategy == "DeepseekLlmStrategy":
+        return "llm"
+    if tag.startswith("Cursor50") or strategy == "Cursor50":
+        return "cursor50"
+    if tag.startswith("CursorLlmStrategy") or strategy == "CursorLlmStrategy":
+        return "cursor"
+    if db_bot in {"finder", "grid"}:
+        return db_bot
+    return "strategy"
+
+
+def _all_trade_dbs() -> list[tuple[str, Path]]:
+    names = {
+        "tradesv3-strategy.sqlite": "strategy",
+        "tradesv3.sqlite": "strategy",
+        "tradesv3-finder.sqlite": "finder",
+        "tradesv3-grid.sqlite": "grid",
+    }
+    base = get_base() / "user_data"
+    roots = [base]
+    tenants = base / "tenants"
+    if tenants.is_dir():
+        roots.extend(path for path in tenants.iterdir() if path.is_dir())
+    found: list[tuple[str, Path]] = []
+    for root in roots:
+        for name, bot in names.items():
+            path = root / name
+            if path.is_file() and path.stat().st_size > 0:
+                found.append((bot, path))
+    return found
+
+
+def open_pairs_by_bot() -> dict[str, set[str]]:
+    """Open pairs grouped by the bot that holds them. Cached for a few seconds."""
+    now = time.monotonic()
+    cached = _OPEN_BY_BOT.get("pairs")
+    if cached and now - float(_OPEN_BY_BOT.get("at") or 0) < _OPEN_BY_BOT_TTL_SEC:
+        return cached
+    grouped: dict[str, set[str]] = {}
+    for db_bot, db in _all_trade_dbs():
+        try:
+            conn = sqlite3.connect(str(db), timeout=15)
+            rows = conn.execute(
+                """
+                SELECT pair, enter_tag, strategy
+                FROM trades
+                WHERE is_open = 1 AND pair IS NOT NULL AND pair != ''
+                """
+            ).fetchall()
+            conn.close()
+        except sqlite3.Error as exc:
+            logger.warning("open pairs by bot %s: %s", db, exc)
+            continue
+        for pair, enter_tag, strategy in rows:
+            bot = _trade_bot(db_bot, str(enter_tag or ""), str(strategy or ""))
+            grouped.setdefault(bot, set()).add(str(pair).strip())
+    _OPEN_BY_BOT["at"] = now
+    _OPEN_BY_BOT["pairs"] = grouped
+    return grouped
+
+
+def pairs_blocked_for(bot: str) -> set[str]:
+    """Pairs another bot already holds. They stay out of this bot's entry search until close."""
+    blocked: set[str] = set()
+    for other, pairs in open_pairs_by_bot().items():
+        if other != bot:
+            blocked.update(pairs)
+    return blocked
+
+
+def open_pairs(*, tenant_id: str | None = None) -> set[str]:
+    """Pairs that already have an open trade in strategy, finder, or grid."""
+    found: set[str] = set()
+    for db in _trade_db_paths(tenant_id):
+        if not db.is_file() or db.stat().st_size <= 0:
+            continue
+        try:
+            conn = sqlite3.connect(str(db), timeout=15)
+            rows = conn.execute(
+                "SELECT DISTINCT pair FROM trades WHERE is_open = 1 AND pair IS NOT NULL AND pair != ''"
+            ).fetchall()
+            conn.close()
+        except sqlite3.Error as exc:
+            logger.warning("open pairs scan %s: %s", db, exc)
+            continue
+        for row in rows:
+            pair = str(row[0] or "").strip()
+            if pair:
+                found.add(pair)
+    return found
+
+
+def market_for_entries(
+    market: list[dict[str, Any]],
+    *,
+    bot: str,
+    own_pairs: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Drop pairs held by other bots. This bot's own positions stay so a book can close them."""
+    blocked = pairs_blocked_for(bot) - set(own_pairs or ())
+    return [row for row in market if str(row.get("pair") or "") not in blocked]
 
 
 def bot_dbs_available(tenant_id: str | None = None) -> int:
@@ -377,21 +515,22 @@ def busy_reason(
         conn = _connect(tenant_id)
         try:
             _purge_expired(conn, now)
-            row = conn.execute(
-                "SELECT bot, ts FROM claims WHERE key = ?", (key,)
-            ).fetchone()
+            # One-way account: any live claim on this pair (either side) blocks others.
+            rows = conn.execute(
+                "SELECT bot, side, ts FROM claims WHERE pair = ?", (pair,)
+            ).fetchall()
             conn.commit()
         finally:
             conn.close()
     except sqlite3.Error as exc:
         logger.warning("pair_entry_guard claim read: %s", exc)
-        row = None
+        rows = []
 
-    if row:
-        owner_bot, ts = str(row[0]), float(row[1])
+    for row in rows or []:
+        owner_bot, _claim_side, ts = str(row[0]), str(row[1]), float(row[2])
         if bot and owner_bot == bot:
-            pass  # our own claim — not busy for us
-        elif (now - ts) <= CLAIM_TTL_SEC:
+            continue  # our own claim — not busy for us
+        if (now - ts) <= CLAIM_TTL_SEC:
             age = int(now - ts)
             return f"пара занята claim бота {owner_bot} ({age}s назад)"
 
@@ -432,7 +571,8 @@ def claim_pair(
     check_bybit: bool = True,
 ) -> tuple[bool, str | None]:
     """
-    Atomically claim pair+side for ``bot`` (first-wins).
+    Atomically claim pair for ``bot`` (first-wins, any side).
+    Network/Bybit checks happen outside the SQLite write lock for speed.
     Returns (True, None) on success, (False, reason) if busy.
     """
     if not pair:
@@ -440,7 +580,7 @@ def claim_pair(
     if not bot:
         return False, "нет bot"
     side_key = _normalize_side(side)
-    key = lock_key(pair, side_key)
+    key = lock_key(pair)
     now = time.time()
 
     dbs = bot_dbs_available(tenant_id)
@@ -463,15 +603,16 @@ def claim_pair(
         try:
             conn.execute("BEGIN IMMEDIATE")
             _purge_expired(conn, now)
-            row = conn.execute(
-                "SELECT bot, ts FROM claims WHERE key = ?", (key,)
-            ).fetchone()
-            if row:
+            # Any live claim on this pair blocks other bots (one-way account).
+            for row in conn.execute(
+                "SELECT bot, ts FROM claims WHERE pair = ? OR key = ?",
+                (pair, key),
+            ).fetchall():
                 owner_bot, ts = str(row[0]), float(row[1])
                 if owner_bot != bot and (now - ts) <= CLAIM_TTL_SEC:
                     conn.rollback()
                     return False, f"пара занята claim бота {owner_bot}"
-            # Re-check other bot DBs inside the write transaction.
+            # Re-check other bot DBs inside the write transaction (no network).
             try:
                 holders = open_trades_holding_pair_any_side(pair, tenant_id=tenant_id)
             except sqlite3.Error as exc:
@@ -484,14 +625,11 @@ def claim_pair(
                         f"уже открыто в {h['bot']} #{h['trade_id']} "
                         f"({h.get('enter_tag') or h.get('strategy') or '?'})"
                     )
+            # Drop legacy pair:side keys so only one row owns the pair.
+            conn.execute("DELETE FROM claims WHERE pair = ?", (pair,))
             conn.execute(
                 """
                 INSERT INTO claims(key, bot, pair, side, ts) VALUES(?,?,?,?,?)
-                ON CONFLICT(key) DO UPDATE SET
-                    bot=excluded.bot,
-                    pair=excluded.pair,
-                    side=excluded.side,
-                    ts=excluded.ts
                 """,
                 (key, bot, pair, side_key, now),
             )
@@ -501,6 +639,20 @@ def claim_pair(
     except sqlite3.Error as exc:
         logger.warning("pair_entry_guard claim failed: %s", exc)
         return False, f"claim error: {exc}"
+
+    # Bybit after claim (keeps SQLite lock short). If exchange already held — release.
+    if check_bybit and (tenant_id or "admin") == "admin":
+        held = bybit_holds_pair(pair, side_key, any_side=True, use_cache=True)
+        if held is True:
+            holders = open_trades_holding_pair_any_side(pair, tenant_id=tenant_id)
+            ours = [h for h in holders if h["bot"] == bot]
+            if not ours:
+                release_pair(bot, pair, side_key, tenant_id=tenant_id, force=True)
+                return False, f"на Bybit уже есть позиция по {pair}"
+        elif held is None:
+            # Fail-closed: do not keep a soft claim if we cannot verify exchange.
+            release_pair(bot, pair, side_key, tenant_id=tenant_id, force=True)
+            return False, "не удалось проверить Bybit — вход заблокирован"
 
     logger.info(
         "pair claim ok bot=%s %s %s ttl=%ss base=%s dbs=%s",
@@ -522,19 +674,18 @@ def release_pair(
     tenant_id: str | None = None,
     force: bool = False,
 ) -> bool:
-    """Drop claim for pair+side. If bot set and not force, only owner can release."""
+    """Drop claim for pair (any side). If bot set and not force, only owner can release."""
     if not pair:
         return False
-    key = lock_key(pair, side)
     try:
         conn = _connect(tenant_id)
         try:
             if force or not bot:
-                conn.execute("DELETE FROM claims WHERE key = ?", (key,))
+                conn.execute("DELETE FROM claims WHERE pair = ?", (pair,))
             else:
                 conn.execute(
-                    "DELETE FROM claims WHERE key = ? AND bot = ?",
-                    (key, bot),
+                    "DELETE FROM claims WHERE pair = ? AND bot = ?",
+                    (pair, bot),
                 )
             conn.commit()
             return True

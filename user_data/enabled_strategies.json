@@ -345,5 +345,450 @@
         "BollingerRsiTestStrategy",
         "MacdEmaTestStrategy",
         "GruBarrierStrategy"
-    ]
+    ],
+    "pairs": {
+        "AltVolumeBreakoutStrategy": [
+            "ALGO/USDT:USDT",
+            "ID/USDT:USDT",
+            "ARB/USDT:USDT",
+            "MOVR/USDT:USDT",
+            "STRK/USDT:USDT",
+            "WLD/USDT:USDT",
+            "MINA/USDT:USDT"
+        ],
+        "PsaraFlipStrategy": [
+            "IMX/USDT:USDT",
+            "FIL/USDT:USDT",
+            "AGLD/USDT:USDT",
+            "GMT/USDT:USDT",
+            "NEAR/USDT:USDT",
+            "MOVR/USDT:USDT",
+            "EIGEN/USDT:USDT",
+            "APT/USDT:USDT",
+            "CRV/USDT:USDT",
+            "BLUR/USDT:USDT",
+            "GALA/USDT:USDT",
+            "KAS/USDT:USDT"
+        ],
+        "AtrChannelBreakoutStrategy": [
+            "PYTH/USDT:USDT",
+            "SPX/USDT:USDT",
+            "M/USDT:USDT",
+            "GMT/USDT:USDT"
+        ],
+        "CmfZeroCrossStrategy": [
+            "HEI/USDT:USDT",
+            "STG/USDT:USDT"
+        ],
+        "ScalpEmaCrossStrategy": [
+            "BCH/USDT:USDT",
+            "SOL/USDT:USDT",
+            "NOT/USDT:USDT",
+            "APE/USDT:USDT",
+            "ID/USDT:USDT",
+            "AGLD/USDT:USDT"
+        ],
+        "ChaikinOscStrategy": [
+            "BCH/USDT:USDT",
+            "SOL/USDT:USDT",
+            "NOT/USDT:USDT",
+            "APE/USDT:USDT",
+            "ID/USDT:USDT",
+            "AGLD/USDT:USDT"
+        ],
+        "DonchianBreakoutStrategy": [
+            "BCH/USDT:USDT",
+            "SOL/USDT:USDT",
+            "NOT/USDT:USDT",
+            "APE/USDT:USDT",
+            "ID/USDT:USDT",
+            "AGLD/USDT:USDT"
+        ],
+        "PpoSignalStrategy": [
+            "BCH/USDT:USDT",
+            "SOL/USDT:USDT",
+            "NOT/USDT:USDT",
+            "APE/USDT:USDT",
+            "ID/USDT:USDT",
+            "AGLD/USDT:USDT"
+        ],
+        "DonchianAdxVolComboStrategy": [
+            "BCH/USDT:USDT",
+            "SOL/USDT:USDT",
+            "NOT/USDT:USDT",
+            "APE/USDT:USDT",
+            "ID/USDT:USDT",
+            "AGLD/USDT:USDT"
+        ],
+        "ObvEmaCrossStrategy": [
+            "BCH/USDT:USDT",
+            "SOL/USDT:USDT",
+            "NOT/USDT:USDT",
+            "APE/USDT:USDT",
+            "ID/USDT:USDT",
+            "AGLD/USDT:USDT"
+        ],
+        "ElderRayStrategy": [
+            "MINA/USDT:USDT",
+            "PENGU/USDT:USDT"
+        ],
+        "ScalpMacdHistStrategy": [
+            "BCH/USDT:USDT",
+            "SOL/USDT:USDT",
+            "NOT/USDT:USDT",
+            "APE/USDT:USDT",
+            "ID/USDT:USDT",
+            "AGLD/USDT:USDT"
+        ],
+        "KeltnerBreakoutStrategy": [
+            "BCH/USDT:USDT",
+            "SOL/USDT:USDT",
+            "NOT/USDT:USDT",
+            "APE/USDT:USDT",
+            "ID/USDT:USDT",
+            "AGLD/USDT:USDT"
+        ],
+        "HeikinAshiFlipStrategy": [
+            "APT/USDT:USDT",
+            "IMX/USDT:USDT"
+        ],
+        "VortexCrossStrategy": [
+            "BCH/USDT:USDT",
+            "SOL/USDT:USDT",
+            "NOT/USDT:USDT",
+            "APE/USDT:USDT",
+            "ID/USDT:USDT",
+            "AGLD/USDT:USDT"
+        ],
+        "AwesomeOscStrategy": [
+            "BCH/USDT:USDT",
+            "SOL/USDT:USDT",
+            "NOT/USDT:USDT",
+            "APE/USDT:USDT",
+            "ID/USDT:USDT",
+            "AGLD/USDT:USDT"
+        ],
+        "KeltnerStochVolComboStrategy": [
+            "BCH/USDT:USDT",
+            "SOL/USDT:USDT",
+            "NOT/USDT:USDT",
+            "APE/USDT:USDT",
+            "ID/USDT:USDT",
+            "AGLD/USDT:USDT"
+        ],
+        "TemaCrossStrategy": [
+            "BCH/USDT:USDT",
+            "SOL/USDT:USDT",
+            "NOT/USDT:USDT",
+            "APE/USDT:USDT",
+            "ID/USDT:USDT",
+            "AGLD/USDT:USDT"
+        ],
+        "TrixSignalStrategy": [
+            "BCH/USDT:USDT",
+            "SOL/USDT:USDT",
+            "NOT/USDT:USDT",
+            "APE/USDT:USDT",
+            "ID/USDT:USDT",
+            "AGLD/USDT:USDT"
+        ],
+        "RocMomentumStrategy": [
+            "BCH/USDT:USDT",
+            "SOL/USDT:USDT",
+            "NOT/USDT:USDT",
+            "APE/USDT:USDT",
+            "ID/USDT:USDT",
+            "AGLD/USDT:USDT"
+        ],
+        "HmaPpoAtrComboStrategy": [
+            "BCH/USDT:USDT",
+            "SOL/USDT:USDT",
+            "NOT/USDT:USDT",
+            "APE/USDT:USDT",
+            "ID/USDT:USDT",
+            "AGLD/USDT:USDT"
+        ],
+        "WilliamsRReclaimStrategy": [
+            "ETHFI/USDT:USDT",
+            "IMX/USDT:USDT",
+            "AGLD/USDT:USDT",
+            "TAO/USDT:USDT",
+            "S/USDT:USDT",
+            "NOT/USDT:USDT",
+            "ID/USDT:USDT",
+            "BCH/USDT:USDT",
+            "MANA/USDT:USDT",
+            "APE/USDT:USDT",
+            "O/USDT:USDT",
+            "STRK/USDT:USDT"
+        ],
+        "BbSqueezeBreakoutStrategy": [
+            "BCH/USDT:USDT",
+            "SOL/USDT:USDT",
+            "NOT/USDT:USDT",
+            "APE/USDT:USDT",
+            "ID/USDT:USDT",
+            "AGLD/USDT:USDT"
+        ],
+        "EmaRsiAtrComboStrategy": [
+            "BCH/USDT:USDT",
+            "SOL/USDT:USDT",
+            "NOT/USDT:USDT",
+            "APE/USDT:USDT",
+            "ID/USDT:USDT",
+            "AGLD/USDT:USDT"
+        ],
+        "AroonCrossStrategy": [
+            "BCH/USDT:USDT",
+            "SOL/USDT:USDT",
+            "NOT/USDT:USDT",
+            "APE/USDT:USDT",
+            "ID/USDT:USDT",
+            "AGLD/USDT:USDT"
+        ],
+        "AdxMacdVolComboStrategy": [
+            "BCH/USDT:USDT",
+            "SOL/USDT:USDT",
+            "NOT/USDT:USDT",
+            "APE/USDT:USDT",
+            "ID/USDT:USDT",
+            "AGLD/USDT:USDT"
+        ],
+        "EngulfingTrendStrategy": [
+            "BCH/USDT:USDT",
+            "SOL/USDT:USDT",
+            "NOT/USDT:USDT",
+            "APE/USDT:USDT",
+            "ID/USDT:USDT",
+            "AGLD/USDT:USDT"
+        ],
+        "AdxDiCrossStrategy": [
+            "BCH/USDT:USDT",
+            "SOL/USDT:USDT",
+            "NOT/USDT:USDT",
+            "APE/USDT:USDT",
+            "ID/USDT:USDT",
+            "AGLD/USDT:USDT"
+        ],
+        "MfiReclaimStrategy": [
+            "MINA/USDT:USDT"
+        ],
+        "IchimokuTkCrossStrategy": [
+            "BCH/USDT:USDT",
+            "SOL/USDT:USDT",
+            "NOT/USDT:USDT",
+            "APE/USDT:USDT",
+            "ID/USDT:USDT",
+            "AGLD/USDT:USDT"
+        ],
+        "SupertrendRsiObvComboStrategy": [
+            "BCH/USDT:USDT",
+            "SOL/USDT:USDT",
+            "NOT/USDT:USDT",
+            "APE/USDT:USDT",
+            "ID/USDT:USDT",
+            "AGLD/USDT:USDT"
+        ],
+        "AdxMomentumStrategy": [
+            "CRV/USDT:USDT",
+            "ETHFI/USDT:USDT",
+            "ARB/USDT:USDT",
+            "BNB/USDT:USDT",
+            "GOAT/USDT:USDT",
+            "XMR/USDT:USDT",
+            "HYPE/USDT:USDT",
+            "VIRTUAL/USDT:USDT",
+            "AXS/USDT:USDT",
+            "ADA/USDT:USDT",
+            "ETH/USDT:USDT",
+            "SOL/USDT:USDT"
+        ],
+        "PsaraFlipTestStrategy": [
+            "GMT/USDT:USDT",
+            "MANA/USDT:USDT",
+            "JTO/USDT:USDT"
+        ],
+        "AtrChannelBreakoutTestStrategy": [
+            "BCH/USDT:USDT",
+            "SOL/USDT:USDT",
+            "NOT/USDT:USDT",
+            "APE/USDT:USDT",
+            "ID/USDT:USDT",
+            "AGLD/USDT:USDT"
+        ],
+        "AdxMomentumTestStrategy": [
+            "BCH/USDT:USDT",
+            "SOL/USDT:USDT",
+            "NOT/USDT:USDT",
+            "APE/USDT:USDT",
+            "ID/USDT:USDT",
+            "AGLD/USDT:USDT"
+        ],
+        "SupertrendTestStrategy": [
+            "BCH/USDT:USDT",
+            "SOL/USDT:USDT",
+            "NOT/USDT:USDT",
+            "APE/USDT:USDT",
+            "ID/USDT:USDT",
+            "AGLD/USDT:USDT"
+        ],
+        "CmfZeroCrossTestStrategy": [
+            "ADA/USDT:USDT",
+            "IMX/USDT:USDT",
+            "DOT/USDT:USDT"
+        ],
+        "ScalpEmaCrossTestStrategy": [
+            "BCH/USDT:USDT",
+            "SOL/USDT:USDT",
+            "NOT/USDT:USDT",
+            "APE/USDT:USDT",
+            "ID/USDT:USDT",
+            "AGLD/USDT:USDT"
+        ],
+        "ChaikinOscTestStrategy": [
+            "BCH/USDT:USDT",
+            "SOL/USDT:USDT",
+            "NOT/USDT:USDT",
+            "APE/USDT:USDT",
+            "ID/USDT:USDT",
+            "AGLD/USDT:USDT"
+        ],
+        "DonchianBreakoutTestStrategy": [
+            "BCH/USDT:USDT",
+            "SOL/USDT:USDT",
+            "NOT/USDT:USDT",
+            "APE/USDT:USDT",
+            "ID/USDT:USDT",
+            "AGLD/USDT:USDT"
+        ],
+        "PpoSignalTestStrategy": [
+            "BCH/USDT:USDT",
+            "SOL/USDT:USDT",
+            "NOT/USDT:USDT",
+            "APE/USDT:USDT",
+            "ID/USDT:USDT",
+            "AGLD/USDT:USDT"
+        ],
+        "DonchianAdxVolComboTestStrategy": [
+            "BCH/USDT:USDT",
+            "SOL/USDT:USDT",
+            "NOT/USDT:USDT",
+            "APE/USDT:USDT",
+            "ID/USDT:USDT",
+            "AGLD/USDT:USDT"
+        ],
+        "ObvEmaCrossTestStrategy": [
+            "OP/USDT:USDT"
+        ],
+        "ElderRayTestStrategy": [
+            "STRK/USDT:USDT",
+            "ALICE/USDT:USDT",
+            "SEI/USDT:USDT",
+            "S/USDT:USDT",
+            "IMX/USDT:USDT",
+            "VIRTUAL/USDT:USDT",
+            "MINA/USDT:USDT",
+            "GALA/USDT:USDT"
+        ],
+        "AltVolumeBreakoutTestStrategy": [
+            "BCH/USDT:USDT",
+            "SOL/USDT:USDT",
+            "NOT/USDT:USDT",
+            "APE/USDT:USDT",
+            "ID/USDT:USDT",
+            "AGLD/USDT:USDT"
+        ],
+        "BollingerRsiTestStrategy": [
+            "1000FLOKI/USDT:USDT",
+            "STRK/USDT:USDT"
+        ],
+        "MacdEmaTestStrategy": [
+            "S/USDT:USDT"
+        ],
+        "GruBarrierStrategy": [
+            "BCH/USDT:USDT",
+            "SOL/USDT:USDT",
+            "NOT/USDT:USDT",
+            "APE/USDT:USDT",
+            "ID/USDT:USDT",
+            "AGLD/USDT:USDT"
+        ],
+        "BollingerRsiStrategy": [
+            "BCH/USDT:USDT",
+            "SOL/USDT:USDT",
+            "NOT/USDT:USDT",
+            "APE/USDT:USDT",
+            "ID/USDT:USDT",
+            "AGLD/USDT:USDT"
+        ],
+        "MacdEmaStrategy": [
+            "PYTH/USDT:USDT",
+            "ZK/USDT:USDT",
+            "ARPA/USDT:USDT",
+            "DEEP/USDT:USDT",
+            "APT/USDT:USDT",
+            "NEAR/USDT:USDT",
+            "ICP/USDT:USDT",
+            "ENA/USDT:USDT",
+            "B/USDT:USDT",
+            "ID/USDT:USDT",
+            "MINA/USDT:USDT",
+            "INJ/USDT:USDT"
+        ],
+        "SupertrendStrategy": [
+            "MINA/USDT:USDT",
+            "BLUR/USDT:USDT",
+            "BIO/USDT:USDT",
+            "ARPA/USDT:USDT",
+            "ZK/USDT:USDT",
+            "ZEREBRO/USDT:USDT",
+            "APE/USDT:USDT",
+            "B/USDT:USDT",
+            "SEI/USDT:USDT",
+            "JTO/USDT:USDT",
+            "TIA/USDT:USDT",
+            "O/USDT:USDT"
+        ],
+        "TripleEmaStrategy": [
+            "BCH/USDT:USDT",
+            "SOL/USDT:USDT",
+            "NOT/USDT:USDT",
+            "APE/USDT:USDT",
+            "ID/USDT:USDT",
+            "AGLD/USDT:USDT"
+        ],
+        "LiteRangeStrategy": [
+            "BCH/USDT:USDT",
+            "SOL/USDT:USDT",
+            "NOT/USDT:USDT",
+            "APE/USDT:USDT",
+            "ID/USDT:USDT",
+            "AGLD/USDT:USDT"
+        ],
+        "LiteIntradayStrategy": [
+            "BCH/USDT:USDT",
+            "SOL/USDT:USDT",
+            "NOT/USDT:USDT",
+            "APE/USDT:USDT",
+            "ID/USDT:USDT",
+            "AGLD/USDT:USDT"
+        ],
+        "FibPullbackStrategy": [
+            "BCH/USDT:USDT",
+            "SOL/USDT:USDT",
+            "NOT/USDT:USDT",
+            "APE/USDT:USDT",
+            "ID/USDT:USDT",
+            "AGLD/USDT:USDT"
+        ],
+        "CriptoPairsStrategy": [
+            "BCH/USDT:USDT",
+            "SOL/USDT:USDT",
+            "NOT/USDT:USDT",
+            "APE/USDT:USDT",
+            "ID/USDT:USDT",
+            "AGLD/USDT:USDT"
+        ]
+    },
+    "_pairs_cascade": true
 }

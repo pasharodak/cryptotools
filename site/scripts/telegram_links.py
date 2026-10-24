@@ -19,12 +19,57 @@ import tenant_manager as tm
 
 log = logging.getLogger("telegram_links")
 
-LINKS_PATH = tm.BASE / "user_data" / "telegram_links.json"
-DEFAULT_WEBAPP_URL = "https://77.222.35.209:8443/"
+LINKS_PATH = tm.BASE / "user_data" / "telegram_links.json"  # legacy; migrated → DB
+SETTINGS_DB_KEY = "telegram_links"
+DEFAULT_WEBAPP_URL = "https://194.163.149.122:8443/"
+
+# Stable keys for UI + notify filter (order = display order).
+NOTIFY_KIND_META: list[tuple[str, str]] = [
+    ("trade_open", "Открытия сделки"),
+    ("trade_close_profit", "Закрытие сделки (только успешные)"),
+    ("trade_close_loss", "Закрытие сделки (только минусовые)"),
+    ("trade_close_all", "Закрытие сделки (все)"),
+    ("bot_start", "Запуск ботов"),
+    ("bot_stop", "Остановка ботов"),
+    ("bot_reload", "Перезапуск конфигурации"),
+    ("other", "Другие"),
+]
+NOTIFY_KIND_KEYS = tuple(k for k, _ in NOTIFY_KIND_META)
+DEFAULT_NOTIFY: dict[str, bool] = {
+    "trade_open": True,
+    "trade_close_profit": True,
+    "trade_close_loss": True,
+    "trade_close_all": True,
+    "bot_start": False,
+    "bot_stop": False,
+    "bot_reload": False,
+    "other": True,
+}
 
 
 def bot_token() -> str:
     return (os.environ.get("TELEGRAM_BOT_TOKEN") or "").strip()
+
+
+def normalize_notify(raw: Any = None) -> dict[str, bool]:
+    out = dict(DEFAULT_NOTIFY)
+    if isinstance(raw, dict):
+        for key in NOTIFY_KIND_KEYS:
+            if key in raw:
+                out[key] = bool(raw[key])
+    # «Все закрытия» покрывает profit/loss — для UI держим согласованность.
+    if out.get("trade_close_all"):
+        out["trade_close_profit"] = True
+        out["trade_close_loss"] = True
+    return out
+
+
+def notify_kinds_catalog() -> list[dict[str, Any]]:
+    prefs = DEFAULT_NOTIFY
+    return [
+        {"id": key, "label": label, "default": bool(prefs.get(key, False))}
+        for key, label in NOTIFY_KIND_META
+    ]
 
 
 def webapp_url() -> str:
@@ -42,30 +87,85 @@ def _empty() -> dict[str, Any]:
     return {"by_user": {}, "by_chat": {}}
 
 
-def load_links() -> dict[str, Any]:
-    if not LINKS_PATH.is_file():
+def _control_plane():
+    import control_plane as cp
+
+    return cp
+
+
+def _normalize_store(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
         return _empty()
+    by_user = raw.get("by_user") if isinstance(raw.get("by_user"), dict) else {}
+    by_chat = raw.get("by_chat") if isinstance(raw.get("by_chat"), dict) else {}
+    # Normalize per-user notify prefs so old rows stay valid.
+    clean_users: dict[str, Any] = {}
+    for uid, row in by_user.items():
+        if not isinstance(row, dict):
+            continue
+        item = dict(row)
+        item["notify"] = normalize_notify(item.get("notify"))
+        clean_users[str(uid)] = item
+    clean_chat = {str(k): str(v) for k, v in by_chat.items() if k and v}
+    return {"by_user": clean_users, "by_chat": clean_chat}
+
+
+def _load_links_json() -> dict[str, Any] | None:
+    if not LINKS_PATH.is_file():
+        return None
     try:
         data = json.loads(LINKS_PATH.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return _empty()
+        return None
     if not isinstance(data, dict):
-        return _empty()
-    by_user = data.get("by_user") if isinstance(data.get("by_user"), dict) else {}
-    by_chat = data.get("by_chat") if isinstance(data.get("by_chat"), dict) else {}
-    return {"by_user": by_user, "by_chat": by_chat}
+        return None
+    return _normalize_store(data)
 
 
-def save_links(data: dict[str, Any]) -> None:
-    LINKS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    LINKS_PATH.write_text(
-        json.dumps(data, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
+def _migrate_json_to_db() -> dict[str, Any] | None:
+    payload = _load_links_json()
+    if not payload or (not payload["by_user"] and not payload["by_chat"]):
+        return None
     try:
-        os.chmod(LINKS_PATH, 0o600)
-    except OSError:
-        pass
+        _control_plane().set_app_setting(
+            SETTINGS_DB_KEY,
+            payload,
+            updated_by="migrate_json",
+        )
+        try:
+            LINKS_PATH.rename(LINKS_PATH.with_suffix(".json.migrated"))
+        except OSError:
+            pass
+        log.info("migrated telegram_links.json → control_plane.sqlite app_settings")
+        return payload
+    except Exception as exc:  # noqa: BLE001
+        log.warning("telegram_links migrate failed: %s", exc)
+        return payload
+
+
+def load_links() -> dict[str, Any]:
+    """Load links from control_plane.sqlite (app_settings); migrate legacy JSON once."""
+    cp = _control_plane()
+    try:
+        raw = cp.get_app_setting(SETTINGS_DB_KEY, None)
+    except Exception as exc:  # noqa: BLE001
+        log.debug("telegram app_settings read failed: %s", exc)
+        raw = None
+    if isinstance(raw, dict):
+        return _normalize_store(raw)
+    migrated = _migrate_json_to_db()
+    if migrated is not None:
+        return migrated
+    return _empty()
+
+
+def save_links(data: dict[str, Any], *, updated_by: str | None = None) -> None:
+    payload = _normalize_store(data)
+    _control_plane().set_app_setting(
+        SETTINGS_DB_KEY,
+        payload,
+        updated_by=updated_by or "api",
+    )
 
 
 def normalize_chat_id(raw: Any) -> str:
@@ -83,27 +183,51 @@ def normalize_chat_id(raw: Any) -> str:
 
 
 def get_link(user_id: str) -> dict[str, Any]:
+    try:
+        import tenant_manager as tm
+
+        owner_id = tm.telegram_owner_id(str(user_id))
+    except Exception:
+        owner_id = str(user_id)
     data = load_links()
-    row = data["by_user"].get(str(user_id)) or {}
+    row = data["by_user"].get(str(owner_id)) or {}
     if not isinstance(row, dict):
         row = {}
     chat_id = str(row.get("chat_id") or "").strip()
+    notify = normalize_notify(row.get("notify"))
     return {
         "user_id": str(user_id),
+        "owner_user_id": str(owner_id),
         "chat_id": chat_id,
         "enabled": bool(row.get("enabled", True)) if chat_id else False,
+        "notify": notify,
+        "notify_kinds": notify_kinds_catalog(),
         "linked_at": row.get("linked_at"),
         "bot_configured": bool(bot_token()),
         "webapp_url": webapp_url(),
+        "stored_in": "control_plane.sqlite",
     }
 
 
-def set_link(user_id: str, chat_id: str, *, enabled: bool = True) -> dict[str, Any]:
-    uid = str(user_id)
+def set_link(
+    user_id: str,
+    chat_id: str,
+    *,
+    enabled: bool = True,
+    notify: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    try:
+        import tenant_manager as tm
+
+        uid = tm.telegram_owner_id(str(user_id))
+    except Exception:
+        uid = str(user_id)
     cid = normalize_chat_id(chat_id) if str(chat_id or "").strip() else ""
     data = load_links()
     # Drop old reverse map for this user
     old = data["by_user"].get(uid) or {}
+    if not isinstance(old, dict):
+        old = {}
     old_cid = str(old.get("chat_id") or "").strip()
     if old_cid and data["by_chat"].get(old_cid) == uid:
         data["by_chat"].pop(old_cid, None)
@@ -111,15 +235,25 @@ def set_link(user_id: str, chat_id: str, *, enabled: bool = True) -> dict[str, A
         data["by_user"].pop(uid, None)
         save_links(data)
         return get_link(uid)
-    # One chat → one CryptoTools user
+    # One chat → one CryptoTools user (parent / live id)
     prev_uid = data["by_chat"].get(cid)
     if prev_uid and prev_uid != uid:
         data["by_user"].pop(prev_uid, None)
     now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # Merge notify: PATCH may omit → keep previous / defaults
+    if notify is None:
+        merged_notify = normalize_notify(old.get("notify"))
+    else:
+        base = normalize_notify(old.get("notify"))
+        if isinstance(notify, dict):
+            base.update({k: bool(notify[k]) for k in NOTIFY_KIND_KEYS if k in notify})
+        merged_notify = normalize_notify(base)
     data["by_user"][uid] = {
         "chat_id": cid,
         "enabled": bool(enabled),
-        "linked_at": now,
+        "notify": merged_notify,
+        "linked_at": old.get("linked_at") or now,
+        "updated_at": now,
     }
     data["by_chat"][cid] = uid
     save_links(data)
@@ -148,8 +282,16 @@ def api_call(method: str, payload: dict[str, Any] | None = None) -> dict[str, An
         headers={"Content-Type": "application/json"},
         method="POST",
     )
+    # getUpdates long-poll uses payload["timeout"] (e.g. 25s); HTTP client must wait longer.
+    poll_s = 0
+    if isinstance(payload, dict) and payload.get("timeout") is not None:
+        try:
+            poll_s = int(payload["timeout"])
+        except (TypeError, ValueError):
+            poll_s = 0
+    http_timeout = max(30, poll_s + 15)
     try:
-        with urllib.request.urlopen(req, timeout=20) as resp:
+        with urllib.request.urlopen(req, timeout=http_timeout) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         err_body = exc.read().decode("utf-8", errors="replace")
@@ -178,11 +320,73 @@ def send_message(chat_id: str, text: str, *, disable_preview: bool = True) -> bo
         return False
 
 
-def notify_user(user_id: str, text: str) -> bool:
+def allows_notify(
+    user_id: str,
+    kind: str,
+    *,
+    pnl_pct: float | None = None,
+) -> bool:
+    """Whether this user wants ``kind`` notifications (and master enabled)."""
     link = get_link(user_id)
     if not link.get("enabled") or not link.get("chat_id"):
         return False
+    prefs = normalize_notify(link.get("notify"))
+    key = str(kind or "other").strip() or "other"
+
+    if key in ("trade_close", "trade_close_all", "trade_close_profit", "trade_close_loss"):
+        if prefs.get("trade_close_all"):
+            return True
+        if key == "trade_close_all":
+            return True
+        if pnl_pct is None:
+            # Unknown PnL: only if at least one close bucket is on.
+            return bool(
+                prefs.get("trade_close_profit")
+                or prefs.get("trade_close_loss")
+                or prefs.get("trade_close_all")
+            )
+        if float(pnl_pct) >= 0:
+            return bool(prefs.get("trade_close_profit"))
+        return bool(prefs.get("trade_close_loss"))
+
+    if key not in NOTIFY_KIND_KEYS:
+        key = "other"
+    return bool(prefs.get(key))
+
+
+def notify_user(
+    user_id: str,
+    text: str,
+    *,
+    kind: str = "other",
+    pnl_pct: float | None = None,
+) -> bool:
+    if not allows_notify(user_id, kind, pnl_pct=pnl_pct):
+        return False
+    link = get_link(user_id)
     return send_message(str(link["chat_id"]), text)
+
+
+def format_bot_event_ru(*, action: str, bot: str, user_id: str = "", detail: str = "") -> str:
+    labels = {
+        "start": ("▶️ Запуск бота", "bot_start"),
+        "stop": ("⏹ Остановка бота", "bot_stop"),
+        "reload": ("🔄 Перезапуск конфигурации", "bot_reload"),
+    }
+    title, _ = labels.get(action, ("ℹ️ Событие бота", "other"))
+    bot_names = {
+        "strategy": "Strategy",
+        "grid": "Grid",
+        "finder": "ML Finder",
+        "signal-engine": "Signal Engine",
+        "trade-executor": "Executor",
+    }
+    lines = [title, f"Бот: {bot_names.get(bot, bot or '—')}"]
+    if user_id:
+        lines.append(f"Аккаунт: {user_id}")
+    if detail:
+        lines.append(detail)
+    return "\n".join(lines)
 
 
 def _side_ru(side: str, *, is_short: bool | None = None) -> str:
@@ -205,6 +409,88 @@ def _exit_reason_ru(reason: str) -> str:
         "custom_exit": "выход стратегии",
     }
     return mapping.get(reason, reason or "неизвестно")
+
+
+# Bybit USDT-perp taker fee — same as custom-ui / pair_config_server (0.1% open + 0.1% close).
+BYBIT_TAKER_FEE_RATE = 0.001
+
+
+def round_trip_fees(
+    *,
+    amount: float | None = None,
+    open_rate: float | None = None,
+    close_rate: float | None = None,
+    stake_amount: float | None = None,
+    leverage: float | None = None,
+) -> float:
+    """Estimate round-trip taker fees in USDT (matches UI «С комиссией»)."""
+    fee = BYBIT_TAKER_FEE_RATE
+    try:
+        amt = float(amount or 0)
+        open_px = float(open_rate or 0)
+        close_px = float(close_rate or 0)
+    except (TypeError, ValueError):
+        amt, open_px, close_px = 0.0, 0.0, 0.0
+    if amt > 0 and open_px > 0:
+        close_px = close_px if close_px > 0 else open_px
+        return amt * open_px * fee + amt * close_px * fee
+    try:
+        stake = float(stake_amount or 0)
+        lev = float(leverage or 1) or 1.0
+    except (TypeError, ValueError):
+        stake, lev = 0.0, 1.0
+    if stake > 0:
+        return 2.0 * stake * lev * fee
+    return 0.0
+
+
+def pnl_with_fees(
+    profit_abs: float,
+    *,
+    amount: float | None = None,
+    open_rate: float | None = None,
+    close_rate: float | None = None,
+    stake_amount: float | None = None,
+    leverage: float | None = None,
+    profit_pct: float | None = None,
+) -> dict[str, float]:
+    """Gross PnL → net after round-trip fees. Keys: gross, fees, net, net_pct, gross_pct."""
+    try:
+        gross = float(profit_abs or 0)
+    except (TypeError, ValueError):
+        gross = 0.0
+    fees = round_trip_fees(
+        amount=amount,
+        open_rate=open_rate,
+        close_rate=close_rate,
+        stake_amount=stake_amount,
+        leverage=leverage,
+    )
+    net = gross - fees
+    try:
+        stake = float(stake_amount or 0)
+    except (TypeError, ValueError):
+        stake = 0.0
+    if stake > 0:
+        net_pct = (net / stake) * 100.0
+        gross_pct = (gross / stake) * 100.0
+    else:
+        try:
+            gross_pct = float(profit_pct if profit_pct is not None else 0)
+        except (TypeError, ValueError):
+            gross_pct = 0.0
+        # Without stake, approximate net % from gross % by fee share if gross != 0.
+        if abs(gross) > 1e-12:
+            net_pct = gross_pct * (net / gross)
+        else:
+            net_pct = gross_pct
+    return {
+        "gross": gross,
+        "fees": fees,
+        "net": net,
+        "net_pct": net_pct,
+        "gross_pct": gross_pct,
+    }
 
 
 def format_entry_ru(
@@ -244,23 +530,40 @@ def format_exit_ru(
     close_rate: float | None = None,
     pnl_usdt: float | None = None,
     stake: float | None = None,
+    amount: float | None = None,
+    open_rate: float | None = None,
+    leverage: float | None = None,
 ) -> str:
-    emoji = "🟢" if pnl_pct >= 0 else "🔴"
     if pnl_usdt is None and stake is not None:
         try:
             pnl_usdt = float(pnl_pct) / 100.0 * float(stake)
         except (TypeError, ValueError):
             pnl_usdt = None
+    fee_info = pnl_with_fees(
+        float(pnl_usdt or 0),
+        amount=amount,
+        open_rate=open_rate,
+        close_rate=close_rate,
+        stake_amount=stake,
+        leverage=leverage,
+        profit_pct=pnl_pct,
+    )
+    net_pct = fee_info["net_pct"]
+    net_usdt = fee_info["net"]
+    fees = fee_info["fees"]
+    emoji = "🟢" if net_usdt >= 0 else "🔴"
     lines = [
         f"{emoji} Закрыта сделка",
         f"Пара: {pair}",
         f"Сторона: {_side_ru('', is_short=is_short)}",
         f"Стратегия: {strategy or '—'}",
         f"Причина: {_exit_reason_ru(reason)}",
-        f"Результат: {pnl_pct:+.2f}%",
+        f"С комиссией: {net_pct:+.2f}% · {net_usdt:+.2f} USDT",
     ]
     if pnl_usdt is not None:
-        lines.append(f"В валюте: {pnl_usdt:+.2f} USDT")
+        lines.append(f"Без комиссии: {float(pnl_usdt):+.2f} USDT")
+    if fees > 0:
+        lines.append(f"Комиссия: ≈{fees:.2f} USDT (0.1%×2)")
     if close_rate is not None and close_rate > 0:
         lines.append(f"Цена выхода: {close_rate:.6g}")
     return "\n".join(lines)

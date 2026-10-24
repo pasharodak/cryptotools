@@ -13,7 +13,7 @@ from simulation.strategies.LiteFinanceStrategies import _LiteBase
 class KeltnerBreakoutStrategy(_LiteBase):
     """Keltner Channel breakout — close outside EMA±ATR band with volume."""
 
-    stoploss = -0.02
+    stoploss = -0.014
     minimal_roi = {"0": 0.015, "60": 0.008, "180": 0}
     pair_cooldown_minutes = 120
 
@@ -44,7 +44,7 @@ class KeltnerBreakoutStrategy(_LiteBase):
 class DonchianBreakoutStrategy(_LiteBase):
     """Donchian / Turtle-style — break of 20-bar high/low."""
 
-    stoploss = -0.025
+    stoploss = -0.012
     minimal_roi = {"0": 0.018, "90": 0.009, "240": 0}
     pair_cooldown_minutes = 180
     startup_candle_count = 60
@@ -78,7 +78,7 @@ class DonchianBreakoutStrategy(_LiteBase):
 class CciReversalStrategy(_LiteBase):
     """CCI extremes — fade CCI ±100 reclaim (classic mean-reversion)."""
 
-    stoploss = -0.018
+    stoploss = -0.006
     minimal_roi = {"0": 0.012, "45": 0.006, "120": 0}
     pair_cooldown_minutes = 90
 
@@ -108,7 +108,7 @@ class CciReversalStrategy(_LiteBase):
 class IchimokuTkCrossStrategy(_LiteBase):
     """Ichimoku TK cross — Tenkan/Kijun cross with price vs cloud bias."""
 
-    stoploss = -0.022
+    stoploss = -0.01
     minimal_roi = {"0": 0.016, "80": 0.008, "200": 0}
     pair_cooldown_minutes = 150
     startup_candle_count = 80
@@ -149,7 +149,7 @@ class PsaraFlipStrategy(_LiteBase):
     """Parabolic SAR flip — enter on SAR side change with EMA filter."""
 
     # Live 3d: avg win ~0.9% / avg loss ~2% — raise TP, slow ROI decay (SL kept).
-    stoploss = -0.02
+    stoploss = -0.014
     minimal_roi = {"0": 0.022, "120": 0.012, "360": 0.006, "720": 0}
     pair_cooldown_minutes = 100
 
@@ -189,7 +189,7 @@ class PsaraFlipTestStrategy(PsaraFlipStrategy):
     max_long_range_pos = 0.55
     min_short_range_pos = 0.45
     allow_short_entries = False
-    stoploss = -0.02
+    stoploss = -0.014
     minimal_roi = {"0": 0.02, "90": 0.012, "240": 0.006, "480": 0}
     min_adx = 20.0
 
@@ -232,7 +232,7 @@ class PsaraFlipTestStrategy(PsaraFlipStrategy):
 class DonchianBreakoutTestStrategy(DonchianBreakoutStrategy):
     """UI test clone of #6: 1x, SL -3%, no RSI/range chase, custom exit."""
 
-    stoploss = -0.03
+    stoploss = -0.006
     minimal_roi = {'0': 0.012, '60': 0.008, '180': 0.005, '480': 0.0}
     pair_cooldown_minutes = 180
     sim_leverage = 1.0

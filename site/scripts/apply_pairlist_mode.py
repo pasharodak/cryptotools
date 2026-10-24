@@ -82,12 +82,25 @@ def backup_bot(mode: dict[str, Any], bot: str, cfg: dict[str, Any]) -> None:
 
 
 def set_scanner_apply(enabled: bool) -> None:
-    for path in (RANGING_SCAN_CFG, STRATEGY_SCAN_CFG):
-        if not path.is_file():
-            continue
-        cfg = load_json(path)
+    """Ranging/grid may auto-apply; Strategy StaticPairList never auto-applies."""
+    if RANGING_SCAN_CFG.is_file():
+        cfg = load_json(RANGING_SCAN_CFG)
         cfg["apply_whitelist"] = enabled
-        save_json(path, cfg)
+        save_json(RANGING_SCAN_CFG, cfg)
+    if STRATEGY_SCAN_CFG.is_file():
+        cfg = load_json(STRATEGY_SCAN_CFG)
+        # Hard policy: strategy scanners stay report-only (DB owns the big WL).
+        cfg["apply_whitelist"] = False
+        save_json(STRATEGY_SCAN_CFG, cfg)
+    try:
+        import user_prefs
+
+        user_prefs.save_strategy_scan_policy(
+            {"apply_whitelist": False, "allow_shrink": False},
+            base=ROOT,
+        )
+    except Exception:
+        pass
 
 
 def reload_bot(url: str, user: str, password: str) -> bool:

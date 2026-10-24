@@ -55,6 +55,10 @@ const FINDER_STATS_LABEL = "ML Finder (Transformer)";
 const GRID_STATS_LABEL = "Grid (BB+ADX) + ML gate";
 const STRATEGY_STATS_LABEL = "Стратегии + ML gate";
 const BYBIT_GRID_STATS_LABEL = "Bybit Grid";
+const LLM_STATS_LABEL = "DeepSeek";
+const LLM50_STATS_LABEL = "DeepSeek 50";
+const CURSOR_STATS_LABEL = "Cursor";
+const CURSOR50_STATS_LABEL = "Cursor 50";
 const ML_GATE_STRATEGY = "XGBoost · profit ≥60%";
 const ML_GATE_BLOCK_LOSS = "XGBoost · block loss";
 const BYBIT_GRID_MAX_LIMIT = 5;
@@ -96,8 +100,17 @@ let trainedRiskStrategies = {};
 let trainedRiskAvailable = {};
 let trainedRiskSpecs = {};
 let mlConfidenceStrategies = {};
+let entrySideStrategies = {};
 let mlConfidenceDefaults = {};
 let mlConfidenceChoices = [0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95];
+let htfSltp = {};
+let htfSltpDefaults = {};
+let htfSltpChoices = [2, 3, 5, 8, 10, 13, 15, 20];
+let sltpSlChoices = [2, 3, 5, 8, 10, 13, 15, 20];
+let sltpTpChoices = [2, 3, 5, 8, 10, 13, 15, 20, 30, 50];
+let htfStakeAmount = 5;
+let strategyPairsMap = {};
+let strategyPairsCascade = false;
 let strategyRisk = { stoploss_pct: 5, take_profit_pct: 10 };
 let testSettings = {
   max_open_trades: 8,
@@ -112,6 +125,12 @@ let allowedStrategies = null; // null = all
 let permissionCatalog = { blocks: [], strategies: [] };
 let isImpersonating = false;
 let impersonatedBy = null;
+let accountKind = "live"; // live | demo | admin
+let demoMirrorAdmin = false;
+let settingsReadonly = false;
+let canSwitchDemo = false;
+let canSwitchLive = false;
+let linkedAccountUsername = null;
 
 let lastBybitGridRefresh = 0;
 const BYBIT_GRID_REFRESH_MS = 30000;
@@ -164,6 +183,15 @@ function humanizeApiError(err) {
   }
   if (err.includes("trader is not running")) {
     return "Бот остановлен — нажмите «Старт» и повторите";
+  }
+  if (/invalid argument/i.test(err)) {
+    return "Не удалось закрыть через signal-engine — обновите страницу (Ctrl+F5) и попробуйте снова";
+  }
+  if (/нет API-ключей|no api.?key|has_secrets/i.test(err)) {
+    return "Нет API-ключей Bybit — сохраните ключи в Настройках";
+  }
+  if (/trade.?block|trading.?disabled|торговля выключена/i.test(err)) {
+    return "Торговля выключена — включите бота Стратегии (Старт) и повторите";
   }
   if (err === "Internal Server Error" || err.includes("InvalidOrderException")) {
     return "Биржа отклонила закрытие — попробуйте ещё раз (синхронизация с биржей)";
@@ -286,7 +314,17 @@ function isStaleTradeError(message) {
 }
 
 async function closeTrade(bot, tradeId) {
+  if (settingsReadonly || demoMirrorAdmin) {
+    throw new Error("Demo: только просмотр сделок администратора");
+  }
   const id = String(tradeId);
+  // Shared signal-engine has no local fills — close via trade-executor / Bybit.
+  if (bot === "strategy" && sharedStackMode) {
+    return await pairConfigApi("/force-close", "POST", {
+      bot: "strategy",
+      trade_id: Number(id),
+    });
+  }
   try {
     return await api(bot, "/forceexit", "POST", { tradeid: id, ordertype: "market" });
   } catch (firstErr) {
@@ -338,7 +376,7 @@ const limitPins = {
   testMaxPer: null,
   stake: {}, // bot -> { value, until }
 };
-const LIMIT_PIN_MS = 120000;
+const LIMIT_PIN_MS = 300000;
 /** Keep trade cards expanded across refreshAll / paintBotLive re-renders. */
 const expandedTradeIds = new Set(); // `${bot}:${tradeId}`
 
@@ -363,17 +401,51 @@ function pinMaxTrades(bot, value) {
   BOTS[bot].maxTrades = n;
 }
 
-function applyPinnedMaxTrades(bot, fromLive) {
+function applyPinnedMaxTrades(bot, fromDb) {
   const pin = limitPins.maxTrades[bot];
   if (pin && Date.now() < pin.until) {
     BOTS[bot].maxTrades = pin.value;
     return pin.value;
   }
-  const n = Number(fromLive);
+  const n = Number(fromDb);
   if (Number.isFinite(n) && n >= 0) {
     BOTS[bot].maxTrades = Math.round(n);
   }
   return BOTS[bot].maxTrades;
+}
+
+/** Apply slot/stake limits from pair-config DB payload only (never show_config). */
+function syncLimitsFromPairPayload(data) {
+  if (!data || typeof data !== "object") return;
+  const lim = data.limits || {};
+  const maxMap = lim.max_open_trades || {};
+  const stakeMap = lim.stake_amount || {};
+  for (const bot of Object.keys(BOTS)) {
+    const fromLimits = maxMap[bot];
+    const fromBot = data[bot]?.max_open_trades;
+    const v = fromLimits != null ? fromLimits : fromBot;
+    if (v != null) applyPinnedMaxTrades(bot, v);
+  }
+  if (lim.max_open_trades_per_strategy != null) {
+    applyPinnedMaxPerStrategy(lim.max_open_trades_per_strategy);
+  } else if (data.strategy?.max_open_trades_per_strategy != null) {
+    applyPinnedMaxPerStrategy(data.strategy.max_open_trades_per_strategy);
+  }
+  if (stakeMap.strategy != null && Number.isFinite(Number(stakeMap.strategy))) {
+    BOTS.strategy.stakeAmount = Number(stakeMap.strategy);
+  } else if (data.strategy?.stake_amount != null) {
+    BOTS.strategy.stakeAmount = Number(data.strategy.stake_amount);
+  }
+  if (stakeMap.grid != null && Number.isFinite(Number(stakeMap.grid))) {
+    BOTS.grid.stakeAmount = Number(stakeMap.grid);
+  } else if (data.grid?.stake_amount != null) {
+    BOTS.grid.stakeAmount = Number(data.grid.stake_amount);
+  }
+  if (lim.htf_stake_amount != null && Number.isFinite(Number(lim.htf_stake_amount))) {
+    htfStakeAmount = Number(lim.htf_stake_amount);
+  }
+  updateMaxTradesHint();
+  updateBotSettingsSummaries();
 }
 
 function pinMaxPerStrategy(value) {
@@ -548,9 +620,30 @@ async function refreshAuthMe() {
 function applyAuthMeState(me) {
   isImpersonating = !!me?.impersonating;
   impersonatedBy = me?.impersonated_by || null;
-  // null = unrestricted; [] = none
-  allowedBlocks = me?.allowed_blocks === undefined ? null : me.allowed_blocks;
-  allowedStrategies = me?.allowed_strategies === undefined ? null : me.allowed_strategies;
+  // Prefer explicit kind from /auth/me or user; never fall back to stale "live"
+  // when the payload omitted the field (that made Demo→Live no-op via disabled btn).
+  const nextKind =
+    me?.account_kind ||
+    me?.user?.account_kind ||
+    currentUser?.account_kind ||
+    null;
+  if (nextKind) accountKind = String(nextKind);
+  demoMirrorAdmin = !!(me?.demo_mirror_admin || accountKind === "demo");
+  settingsReadonly = !!(me?.settings_readonly || demoMirrorAdmin);
+  canSwitchDemo = !!me?.can_switch_demo;
+  canSwitchLive = !!me?.can_switch_live;
+  linkedAccountUsername = me?.linked_username || null;
+  // null = unrestricted; [] = none. Only update when the field is present.
+  if (me && "allowed_blocks" in me) {
+    allowedBlocks = me.allowed_blocks;
+  } else if (me?.user && "allowed_blocks" in me.user) {
+    allowedBlocks = me.user.allowed_blocks;
+  }
+  if (me && "allowed_strategies" in me) {
+    allowedStrategies = me.allowed_strategies;
+  } else if (me?.user && "allowed_strategies" in me.user) {
+    allowedStrategies = me.user.allowed_strategies;
+  }
   if (me?.permission_catalog) permissionCatalog = me.permission_catalog;
   sharedStackMode = !!(me?.shared_stack?.mode === "shared" || me?.shared_stack?.signal_engine);
   sharedStackStatus = me?.shared_stack || sharedStackStatus;
@@ -562,7 +655,10 @@ function applyAuthMeState(me) {
   if (sessionToken && !botsEventsAbort) startBotsEventsStream();
 }
 
+const RETIRED_BLOCKS = new Set(["finder", "grid", "bybitgrid"]);
+
 function userMayUseBlock(blockId) {
+  if (RETIRED_BLOCKS.has(blockId)) return false;
   if (allowedBlocks == null) return true;
   return allowedBlocks.includes(blockId);
 }
@@ -573,6 +669,14 @@ function applyBlockVisibility() {
     if (!block) return;
     el.classList.toggle("hidden", !userMayUseBlock(block));
   });
+  const adminHome = isAdminUser();
+  const liveUser = accountKind === "live" && !adminHome;
+  const testPanel = $("panel-test-strategies");
+  const mainPanel = $("panel-strategy");
+  const htf = $("panel-htf1h");
+  if (testPanel && liveUser) testPanel.classList.add("hidden");
+  if (mainPanel && (adminHome || accountKind === "demo")) mainPanel.classList.add("hidden");
+  if (htf && userMayUseBlock("strategy")) htf.classList.remove("hidden");
 }
 
 function updateMultiUserUi(me) {
@@ -580,9 +684,28 @@ function updateMultiUserUi(me) {
   const secrets = me?.secrets;
   const banner = $("secrets-banner");
   if (banner) {
-    // Show for tenants (incl. while admin impersonates) when secrets missing
+    // Show for tenants (incl. while admin impersonates) when secrets missing.
+    // Treat profiles / key flags as present so a transient has_secrets=false
+    // (decrypt race, Bybit probe) does not flash the banner.
+    const uid = String(me?.user?.id || currentUser?.id || "");
+    const profiles = Array.isArray(secrets?.profiles) ? secrets.profiles : [];
+    const keysPresent =
+      !!secrets &&
+      (secrets.has_secrets === true ||
+        profiles.length > 0 ||
+        !!secrets.has_bybit_api_key ||
+        !!secrets.has_bybit_api_secret);
+    if (uid && keysPresent) {
+      window.__ctSecretsOk = window.__ctSecretsOk || new Set();
+      window.__ctSecretsOk.add(uid);
+    }
+    const stickyOk = !!(uid && window.__ctSecretsOk && window.__ctSecretsOk.has(uid));
     const showSecretsBanner =
-      (role !== "admin" || isImpersonating) && secrets && secrets.has_secrets === false;
+      (role !== "admin" || isImpersonating) &&
+      !!secrets &&
+      secrets.has_secrets === false &&
+      !keysPresent &&
+      !stickyOk;
     banner.classList.toggle("hidden", !showSecretsBanner);
   }
   const impBanner = $("impersonate-banner");
@@ -595,13 +718,43 @@ function updateMultiUserUi(me) {
       impText.textContent = `Сессия: ${uname} (вход от ${by})`;
     }
   }
+  const accBanner = $("account-switch-banner");
+  const accText = $("account-switch-banner-text");
+  const showAccSwitch = accountKind === "live" || accountKind === "demo";
+  if (accBanner) {
+    accBanner.classList.toggle("hidden", !showAccSwitch);
+    if (accText && showAccSwitch) {
+      const label = accountKind === "demo" ? "Demo" : "Live";
+      const link = linkedAccountUsername ? ` · пара: ${linkedAccountUsername}` : "";
+      const mirror =
+        accountKind === "demo" && demoMirrorAdmin
+          ? " · сделки демо-аккаунта администратора (просмотр)"
+          : "";
+      accText.textContent = `Аккаунт: ${label}${link}${mirror}`;
+    }
+    $("account-switch-live")?.classList.toggle("is-active", accountKind === "live");
+    $("account-switch-demo")?.classList.toggle("is-active", accountKind === "demo");
+    if ($("account-switch-live")) $("account-switch-live").disabled = accountKind === "live" || !canSwitchLive;
+    if ($("account-switch-demo")) $("account-switch-demo").disabled = accountKind === "demo" || !canSwitchDemo;
+  }
   document.querySelectorAll("[data-admin-only]").forEach((el) => {
     el.classList.toggle("hidden", !isAdminUser());
   });
-  // Secrets form is available for admin and tenants (Live / Demo keys).
-  document.querySelectorAll("[data-user-secrets]").forEach((el) => {
-    el.classList.remove("hidden");
+  paintTestStrategyScanActions();
+  // Placement: Live (+ admin). Demo is view-only (house trades).
+  document.querySelectorAll("[data-placement-manage]").forEach((el) => {
+    const show = isAdminUser() || accountKind === "live";
+    el.classList.toggle("hidden", !show);
   });
+  // Demo mirror: hide secrets / telegram / trading toggles (read-only view).
+  document.querySelectorAll("[data-user-secrets]").forEach((el) => {
+    el.classList.toggle("hidden", settingsReadonly);
+  });
+  const tgSection = $("telegram-settings-section");
+  if (tgSection) tgSection.classList.toggle("hidden", settingsReadonly);
+  const tradingSection = $("trading-toggle-section");
+  if (tradingSection) tradingSection.classList.toggle("hidden", settingsReadonly);
+  document.body.classList.toggle("demo-readonly", settingsReadonly);
   const statusEl = $("secrets-status");
   if (statusEl && secrets) {
     const profiles = Array.isArray(secrets.profiles) ? secrets.profiles : [];
@@ -612,6 +765,8 @@ function updateMultiUserUi(me) {
         ? `Торгуем на: ${active.name} (${active.mode_label || (active.demo_trading ? "Demo" : "Live")})`
         : `Сохранено профилей: ${profiles.length} — выберите аккаунт ниже`;
     }
+    if (accountKind === "demo") base = `${base} · режим Demo API`;
+    else if (accountKind === "live" && role !== "admin") base = `${base} · режим Live API`;
     if (secrets.can_trade === false && secrets.trade_block_reason) {
       statusEl.textContent = `${base}. ⚠ ${secrets.trade_block_reason}`;
       statusEl.classList.add("secrets-status-warn");
@@ -625,9 +780,23 @@ function updateMultiUserUi(me) {
   }
   const liveRadio = $("secrets-mode-live");
   const demoRadio = $("secrets-mode-demo");
-  if (liveRadio && demoRadio && secrets && typeof secrets.demo_trading === "boolean") {
-    liveRadio.checked = !secrets.demo_trading;
-    demoRadio.checked = !!secrets.demo_trading;
+  if (liveRadio && demoRadio) {
+    if (accountKind === "demo") {
+      liveRadio.checked = false;
+      demoRadio.checked = true;
+      liveRadio.disabled = true;
+      demoRadio.disabled = true;
+    } else if (accountKind === "live" && role !== "admin") {
+      liveRadio.checked = true;
+      demoRadio.checked = false;
+      liveRadio.disabled = true;
+      demoRadio.disabled = true;
+    } else if (secrets && typeof secrets.demo_trading === "boolean") {
+      liveRadio.disabled = false;
+      demoRadio.disabled = false;
+      liveRadio.checked = !secrets.demo_trading;
+      demoRadio.checked = !!secrets.demo_trading;
+    }
   }
   renderSecretsProfiles(secrets);
   applyBlockVisibility();
@@ -751,7 +920,14 @@ async function loginAll() {
 
   const username = creds.user || $("login-user")?.value.trim() || "";
   const password = creds.pass || $("login-pass")?.value || "";
-  if (!username || !password) throw new Error("auth");
+
+  // Explicit login/password wins; otherwise try Telegram Mini App silent auth
+  if (!username || !password) {
+    if (await tryTelegramWebAppLogin()) {
+      return;
+    }
+    throw new Error("auth");
+  }
 
   const res = await fetch("/api/pair-config/auth/login", {
     method: "POST",
@@ -775,6 +951,60 @@ async function loginAll() {
   } catch {
     updateMultiUserUi({ user: currentUser });
   }
+}
+
+async function tryTelegramWebAppLogin() {
+  const tg = window.Telegram?.WebApp;
+  const initData = tg?.initData;
+  if (!initData) return false;
+  try {
+    const res = await fetch("/api/pair-config/auth/telegram-webapp", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ init_data: initData }),
+    });
+    if (!res.ok) {
+      let msg = "Не удалось войти через Telegram";
+      try {
+        const err = await res.json();
+        if (err?.message) msg = String(err.message);
+        else if (err?.error === "telegram_not_linked") {
+          msg = "Сначала войдите логином и привяжите Telegram в Настройках";
+        }
+      } catch {
+        /* keep fallback */
+      }
+      const errEl = $("login-error");
+      if (errEl) {
+        errEl.textContent = msg;
+        errEl.classList.remove("hidden");
+      }
+      return false;
+    }
+    const data = await res.json();
+    if (!data.token) return false;
+    sessionToken = data.token || "";
+    currentUser = data.user || {};
+    creds.user = currentUser.username || "";
+    creds.pass = "";
+    tokens = { finder: "proxy", strategy: "proxy", grid: "proxy" };
+    saveSession();
+    try {
+      await refreshAuthMe();
+    } catch {
+      updateMultiUserUi({ user: currentUser });
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function showTelegramLoginHint() {
+  const hint = $("login-tg-hint");
+  if (!hint) return;
+  if (window.Telegram?.WebApp?.initData) hint.classList.remove("hidden");
+  else hint.classList.add("hidden");
 }
 
 function logout() {
@@ -830,9 +1060,39 @@ function fmtShare(amount, total) {
   return ` (${pct.toFixed(0)}%)`;
 }
 
+function isBookTrade(trade) {
+  const tag = String(trade?.enter_tag || "");
+  const strat = String(trade?.strategy || "");
+  return tag.startsWith("Deepseek50") || strat === "Deepseek50";
+}
+
+function isLlmStatsRow(row) {
+  return String(row?.key || "").startsWith("DeepseekLlmStrategy");
+}
+
+function isBookStatsRow(row) {
+  return String(row?.key || "").startsWith("Deepseek50");
+}
+
+function isCursorStatsRow(row) {
+  return String(row?.key || "").startsWith("CursorLlmStrategy");
+}
+
+function isCursorBookStatsRow(row) {
+  return String(row?.key || "").startsWith("Cursor50");
+}
+
+function isDeepseekStatsRow(row) {
+  return isLlmStatsRow(row) || isBookStatsRow(row) || isCursorStatsRow(row) || isCursorBookStatsRow(row);
+}
+
 function tradeSourceLabel(trade, bot) {
   if (bot === "finder") return FINDER_STATS_LABEL;
   if (bot === "grid") return GRID_STATS_LABEL;
+  if (isLlmTrade(trade)) return LLM_STATS_LABEL;
+  if (isBookTrade(trade)) return LLM50_STATS_LABEL;
+  if (isCursorTrade(trade)) return CURSOR_STATS_LABEL;
+  if (isCursorBookTrade(trade)) return CURSOR50_STATS_LABEL;
   if (trade.enter_tag) {
     const raw = String(trade.enter_tag);
     let tag = raw.replace(/:hedge$/i, "").replace(/:inv$/i, "");
@@ -873,6 +1133,9 @@ function fmtTradeDate(trade) {
   return fmtAppDateShort(d);
 }
 
+/** Bybit USDT-perp taker fee — одинакова в % на вход и выход (~0.1%). */
+const BYBIT_TAKER_FEE_RATE = 0.001;
+
 function closedTradePnl(trade) {
   const abs = Number(trade.close_profit_abs ?? trade.profit_abs ?? trade.realized_profit ?? 0);
   const pct = Number(
@@ -880,6 +1143,42 @@ function closedTradePnl(trade) {
   );
   const pctDisplay = Math.abs(pct) <= 1 && Math.abs(pct) > 0 ? pct * 100 : pct;
   return { abs, pct: pctDisplay };
+}
+
+function tradeRoundTripFees(trade) {
+  const fee = BYBIT_TAKER_FEE_RATE;
+  const amount = Number(trade?.amount || 0);
+  const open = Number(trade?.open_rate || 0);
+  const close = Number(trade?.close_rate || 0);
+  if (amount > 0 && open > 0) {
+    const closePx = close > 0 ? close : open;
+    return amount * open * fee + amount * closePx * fee;
+  }
+  const stake = Number(trade?.stake_amount || 0);
+  const lev = Number(trade?.leverage || 1) || 1;
+  if (stake > 0) return 2 * stake * lev * fee;
+  return 0;
+}
+
+/** PnL после round-trip комиссии (0.1% × 2). */
+function closedTradePnlNet(trade) {
+  const { abs, pct } = closedTradePnl(trade);
+  const fees = tradeRoundTripFees(trade);
+  const net = abs - fees;
+  const stake = Number(trade?.stake_amount || 0);
+  const netPct = stake > 0 ? (net / stake) * 100 : pct;
+  return { abs: net, pct: netPct, fees, gross: abs, grossPct: pct };
+}
+
+function historyEntryGrossPnl(entry) {
+  if (entry.kind === "bybit") return Number(entry.item.realised_pnl ?? entry.item.pnl ?? 0);
+  return closedTradePnl(entry.trade).abs;
+}
+
+function historyEntryNetPnl(entry) {
+  // Bybit Grid already reports realised PnL net of fees.
+  if (entry.kind === "bybit") return Number(entry.item.realised_pnl ?? entry.item.pnl ?? 0);
+  return closedTradePnlNet(entry.trade).abs;
 }
 
 function tradeMlMeta(trade) {
@@ -1023,7 +1322,11 @@ const STATS_SCOPE_META = {
   finder: { title: "Статистика — ML Finder", note: "Сделки TradeFinderStrategy (XGBoost scanner + pnl gate), даже если Finder сейчас выключен." },
   strategy: {
     title: "Статистика — стратегии + ML gate",
-    note: "Закрытые сделки основных стратегий по enter_tag (без тестового блока). Входы с ML gate.",
+    note: "Закрытые сделки основных стратегий по enter_tag (без тестового блока и без 1-часовых). Входы с ML gate.",
+  },
+  htf1h: {
+    title: "Статистика — 1-часовые",
+    note: "Только закрытые сделки 1-часовых стратегий. В основные и тестовые они не входят.",
   },
   test_strategy: {
     title: "Статистика — тестовые стратегии",
@@ -1034,6 +1337,22 @@ const STATS_SCOPE_META = {
     note: "Закрытые сделки Grid (VolatilityGridStrategy, ML gate live_grid), даже если бот остановлен.",
   },
   bybitgrid: { title: "Статистика — Bybit Grid", note: "Закрытые нативные grid-боты на бирже Bybit." },
+  llm: {
+    title: "Статистика — DeepSeek",
+    note: "Закрытые сделки бота DeepSeek. Стоп −2% от маржи, тейк с карточки. Результат за вычетом комиссии 0.1%×2.",
+  },
+  llm50: {
+    title: "Статистика — DeepSeek 50",
+    note: "Закрытые сделки DeepSeek 50 (бюджет 50 USDT). Результат за вычетом комиссии 0.1%×2.",
+  },
+  cursor: {
+    title: "Статистика — Cursor",
+    note: "Закрытые сделки бота Cursor. Стоп −2% от маржи, тейк с карточки. Результат за вычетом комиссии 0.1%×2.",
+  },
+  cursor50: {
+    title: "Статистика — Cursor 50",
+    note: "Закрытые сделки Cursor 50 (бюджет 50 USDT). Результат за вычетом комиссии 0.1%×2.",
+  },
 };
 
 let pairlistMode = "scanner";
@@ -1082,11 +1401,12 @@ function paintControlState(bot) {
   let hint = "";
   if (st === "STARTING" || st === "STOPPING") hint = "sync";
   else if (st === "ERROR") hint = "offline";
-  // Shared strategy still respects signal/executor health
+  // Shared strategy: only mark offline if BOTH signal-engine and executor are down.
+  // A brief executor restart must not flip the badge to STOPPED every few seconds.
   if (bot === "strategy" && sharedStackMode && st === "RUNNING") {
     const sig = sharedStackStatus.signal_engine || {};
     const exe = sharedStackStatus.trade_executor || {};
-    if (!sig.active || !exe.active) hint = "offline";
+    if (sig.active === false && exe.active === false) hint = "offline";
   }
   setState(bot, running && hint !== "offline", hint === "sync" ? "sync" : hint === "offline" ? "offline" : st);
   renderActions(bot, st === "RUNNING" || st === "STARTING");
@@ -1198,7 +1518,8 @@ function strategyRunningInSharedMode() {
 function sharedStrategyStateHint() {
   const sig = sharedStackStatus.signal_engine || {};
   const exe = sharedStackStatus.trade_executor || {};
-  if (!sig.active || !exe.active) return "offline";
+  // Only offline when both are known-down (avoid flap on one unit restart).
+  if (sig.active === false && exe.active === false) return "offline";
   return "";
 }
 
@@ -1249,7 +1570,9 @@ const HISTORY_PAGE_SIZE = 50;
 const CLOSED_TRADES_FETCH_LIMIT = 0;
 
 let pnlDashScope = "all";
+let pnlDashTf = "5m";
 let pnlDashPeriod = "all";
+let pnlDashSide = "all"; // all | long | short
 let pnlDashDataCache = null;
 
 const PNL_DASH_COLORS = [
@@ -1285,9 +1608,13 @@ const HISTORY_EXPORT_COLUMNS = [
   { id: "pair", label: "Пара", default: true },
   { id: "side", label: "Сторона", default: true },
   { id: "strategy", label: "Стратегия", default: true },
+  { id: "sl", label: "SL %", default: true },
+  { id: "tp", label: "TP %", default: true },
   { id: "ml", label: "ML %", default: true },
   { id: "pnl_usdt", label: "PnL USDT", default: true },
   { id: "pnl_pct", label: "PnL %", default: true },
+  { id: "pnl_net_usdt", label: "С комиссией USDT", default: true },
+  { id: "pnl_net_pct", label: "С комиссией %", default: false },
   { id: "stake", label: "Стейк USDT", default: false },
   { id: "leverage", label: "Плечо", default: false },
   { id: "trade_id", label: "№ сделки", default: false },
@@ -1402,6 +1729,26 @@ function filterBybitHistory(items, period, dateFrom = "", dateTo = "") {
   return list.filter((item) => isInPeriodMs(bybitCloseMs(item), period, dateFrom, dateTo));
 }
 
+function normalizeTradeSide(side) {
+  const raw = String(side || "all").toLowerCase();
+  if (raw === "long" || raw === "short") return raw;
+  return "all";
+}
+
+function tradeSideLabel(side) {
+  const want = normalizeTradeSide(side);
+  if (want === "long") return "Лонг";
+  if (want === "short") return "Шорт";
+  return "Все";
+}
+
+function filterTradesBySide(trades, side) {
+  const want = normalizeTradeSide(side);
+  if (want === "all") return trades || [];
+  const short = want === "short";
+  return (trades || []).filter((t) => Boolean(t.is_short) === short);
+}
+
 function addBybitGridToRow(row, item) {
   const p = Number(item.realised_pnl ?? item.pnl ?? 0);
   row.closed = (row.closed || 0) + 1;
@@ -1430,6 +1777,10 @@ function isTestCatalogEntry(s) {
   return !!(s.test_group || s.testGroup);
 }
 
+function isHtfStrategyId(id) {
+  return /1hStrategy(?::inv|:hedge)?$/i.test(String(id || ""));
+}
+
 function isTestStatsRow(row, catalog = strategyCatalog) {
   const list = catalog || strategyCatalog || [];
   const ids = new Set(list.filter(isTestCatalogEntry).map((s) => s.id));
@@ -1438,16 +1789,45 @@ function isTestStatsRow(row, catalog = strategyCatalog) {
   return !!(fromCatalog && isTestCatalogEntry(fromCatalog));
 }
 
+function isHtfStatsRow(row, catalog = strategyCatalog) {
+  if (isHtfStrategyId(row?.key)) return true;
+  const list = catalog || strategyCatalog || [];
+  if (list.some((s) => s.id === row?.key && (isHtfStrategy(s) || isHtfStrategyId(s.id)))) return true;
+  const fromCatalog = list.find((s) => strategyCatalogLabel(s) === row?.name);
+  return !!(fromCatalog && (isHtfStrategy(fromCatalog) || isHtfStrategyId(fromCatalog.id)));
+}
+
 function filterStatsRows(rows, scope, catalog = strategyCatalog) {
   if (scope === "all") return rows;
   if (scope === "finder") return rows.filter((r) => r.name === FINDER_STATS_LABEL);
   if (scope === "grid") return rows.filter((r) => r.name === GRID_STATS_LABEL);
   if (scope === "bybitgrid") return rows.filter((r) => r.name === BYBIT_GRID_STATS_LABEL);
   if (scope === "strategy") {
-    return rows.filter((r) => !isBotStatsLabel(r.name) && !isTestStatsRow(r, catalog));
+    return rows.filter(
+      (r) =>
+        !isBotStatsLabel(r.name) &&
+        !isTestStatsRow(r, catalog) &&
+        !isHtfStatsRow(r, catalog) &&
+        !isDeepseekStatsRow(r)
+    );
+  }
+  if (scope === "htf1h") {
+    return rows.filter((r) => isHtfStatsRow(r, catalog));
   }
   if (scope === "test_strategy") {
-    return rows.filter((r) => isTestStatsRow(r, catalog));
+    return rows.filter((r) => isTestStatsRow(r, catalog) && !isHtfStatsRow(r, catalog));
+  }
+  if (scope === "llm") {
+    return rows.filter((r) => isLlmStatsRow(r));
+  }
+  if (scope === "llm50") {
+    return rows.filter((r) => isBookStatsRow(r));
+  }
+  if (scope === "cursor") {
+    return rows.filter((r) => isCursorStatsRow(r));
+  }
+  if (scope === "cursor50") {
+    return rows.filter((r) => isCursorBookStatsRow(r));
   }
   return rows;
 }
@@ -1476,6 +1856,10 @@ function buildStatsRows(finderTrades, stratTrades, gridTrades, bybitHistory, cat
   ensure(FINDER_STATS_LABEL, FINDER_STATS_LABEL);
   ensure(GRID_STATS_LABEL, GRID_STATS_LABEL);
   ensure(BYBIT_GRID_STATS_LABEL, BYBIT_GRID_STATS_LABEL);
+  ensure("DeepseekLlmStrategy", LLM_STATS_LABEL);
+  ensure("Deepseek50", LLM50_STATS_LABEL);
+  ensure("CursorLlmStrategy", CURSOR_STATS_LABEL);
+  ensure("Cursor50", CURSOR50_STATS_LABEL);
   // Keep every catalog strategy row (incl. disabled) so add/remove toggles never drop history labels.
   for (const s of catalog) ensure(s.id, strategyCatalogLabel(s));
 
@@ -1493,6 +1877,10 @@ function buildStatsRows(finderTrades, stratTrades, gridTrades, bybitHistory, cat
     FINDER_STATS_LABEL,
     GRID_STATS_LABEL,
     BYBIT_GRID_STATS_LABEL,
+    "DeepseekLlmStrategy",
+    "Deepseek50",
+    "CursorLlmStrategy",
+    "Cursor50",
     ...catalog.map((s) => s.id),
   ];
   const result = [];
@@ -1518,10 +1906,11 @@ function buildHistoryEntries(
   pairFilter = ""
 ) {
   const entries = [];
+  const modelScopes = new Set(["llm", "llm50", "cursor", "cursor50"]);
   const ftBots =
     scope === "all"
       ? ["finder", "strategy", "grid"]
-      : scope === "bybitgrid" || scope === "test_strategy"
+      : scope === "bybitgrid" || scope === "test_strategy" || scope === "htf1h" || modelScopes.has(scope)
         ? []
         : [scope];
 
@@ -1530,7 +1919,7 @@ function buildHistoryEntries(
       entries.push({ kind: "trade", bot: "finder", trade: t });
     }
   }
-  if (ftBots.includes("strategy") || scope === "test_strategy") {
+  if (ftBots.includes("strategy") || scope === "test_strategy" || scope === "htf1h" || modelScopes.has(scope)) {
     for (const t of filterClosedTrades(stratTrades, period, dateFrom, dateTo)) {
       entries.push({ kind: "trade", bot: "strategy", trade: t });
     }
@@ -1547,15 +1936,28 @@ function buildHistoryEntries(
   }
 
   let filtered = entries;
-  if (scope === "test_strategy" || scope === "strategy") {
+  if (scope === "test_strategy" || scope === "strategy" || scope === "htf1h") {
     const testIds = new Set(
       (strategyCatalog || []).filter(isTestCatalogEntry).map((s) => s.id)
     );
     filtered = filtered.filter((entry) => {
       if (entry.kind !== "trade" || entry.bot !== "strategy") return false;
       const sid = tradeSourceId(entry.trade, entry.bot);
+      const htf = isHtfTrade(entry.trade) || isHtfStrategyId(sid);
+      if (scope === "htf1h") return htf;
+      if (htf) return false;
+      if (scope === "strategy" && (isBookTrade(entry.trade) || isLlmTrade(entry.trade) || isCursorTrade(entry.trade) || isCursorBookTrade(entry.trade))) return false;
       const isTest = testIds.has(sid);
       return scope === "test_strategy" ? isTest : !isTest;
+    });
+  }
+  if (modelScopes.has(scope)) {
+    filtered = filtered.filter((entry) => {
+      if (entry.kind !== "trade") return false;
+      if (scope === "llm") return isLlmTrade(entry.trade);
+      if (scope === "llm50") return isBookTrade(entry.trade);
+      if (scope === "cursor") return isCursorTrade(entry.trade);
+      return isCursorBookTrade(entry.trade);
     });
   }
   if (strategyFilter && strategyFilter !== "all") {
@@ -1600,7 +2002,17 @@ function historyBotLabel(entry) {
   if (entry.kind === "bybit") return BYBIT_GRID_STATS_LABEL;
   if (entry.bot === "finder") return FINDER_STATS_LABEL;
   if (entry.bot === "grid") return GRID_STATS_LABEL;
+  if (entry.bot === "strategy" && entry.trade && isHtfTrade(entry.trade)) return "1-часовые";
   return BOTS[entry.bot]?.label || entry.bot;
+}
+
+function historyBotClass(entry) {
+  if (entry.kind === "bybit") return "bot-bybitgrid";
+  if (entry.bot === "finder") return "bot-finder";
+  if (entry.bot === "grid") return "bot-grid";
+  if (entry.bot === "strategy" && entry.trade && isHtfTrade(entry.trade)) return "bot-htf";
+  if (entry.bot === "strategy" && isTestTrade(entry.trade, "strategy")) return "bot-test";
+  return "bot-strategy";
 }
 
 function historyEntryCloseDateRaw(entry) {
@@ -1621,6 +2033,45 @@ function fmtHistoryDateRaw(raw) {
   return fmtAppDateTime(d);
 }
 
+function historyRiskPctNumber(ratio) {
+  if (ratio == null || ratio === "") return null;
+  const n = Number(ratio);
+  if (!Number.isFinite(n) || n === 0) return null;
+  return Math.abs(n) * 100;
+}
+
+function fmtHistoryRiskPct(ratio) {
+  const pct = historyRiskPctNumber(ratio);
+  if (pct == null) return "—";
+  const rounded = Math.round(pct * 10) / 10;
+  const text = Math.abs(rounded - Math.round(rounded)) < 0.05 ? String(Math.round(rounded)) : rounded.toFixed(1);
+  return `${text}%`;
+}
+
+function tradeStopRatio(trade) {
+  if (!trade) return null;
+  if (trade.initial_stop_loss_pct != null && trade.initial_stop_loss_pct !== "") return trade.initial_stop_loss_pct;
+  if (trade.stop_loss_pct != null && trade.stop_loss_pct !== "") return trade.stop_loss_pct;
+  const meta = trade.ml_meta;
+  if (meta && meta.stop_loss_ratio != null) return meta.stop_loss_ratio;
+  return null;
+}
+
+function tradeTakeRatio(trade) {
+  if (!trade) return null;
+  if (trade.take_profit_ratio != null && trade.take_profit_ratio !== "") return trade.take_profit_ratio;
+  const meta = trade.ml_meta;
+  if (meta && meta.take_profit_ratio != null) return meta.take_profit_ratio;
+  return null;
+}
+
+function historySltpCell(trade) {
+  const sl = fmtHistoryRiskPct(tradeStopRatio(trade));
+  const tp = fmtHistoryRiskPct(tradeTakeRatio(trade));
+  if (sl === "—" && tp === "—") return "—";
+  return `−${sl} / +${tp}`;
+}
+
 function historyEntryExportRow(entry) {
   if (entry.kind === "bybit") {
     const item = entry.item;
@@ -1632,9 +2083,13 @@ function historyEntryExportRow(entry) {
       pair: item.pair || item.symbol || "",
       side: item.grid_mode_label || "grid",
       strategy: "Bybit Grid",
+      sl: "",
+      tp: "",
       ml: "",
       pnl_usdt: pnl.toFixed(4),
       pnl_pct: "",
+      pnl_net_usdt: pnl.toFixed(4),
+      pnl_net_pct: "",
       stake: item.total_investment != null ? String(item.total_investment) : "",
       leverage: item.leverage != null ? String(item.leverage) : "",
       trade_id: item.bot_id || "",
@@ -1643,6 +2098,7 @@ function historyEntryExportRow(entry) {
   }
   const t = entry.trade;
   const { abs, pct } = closedTradePnl(t);
+  const net = closedTradePnlNet(t);
   const conf = tradeMlConfidence(t);
   return {
     close_date: fmtHistoryDateRaw(t.close_date || t.close_fill_date),
@@ -1651,9 +2107,13 @@ function historyEntryExportRow(entry) {
     pair: t.pair || "",
     side: t.is_short ? "SHORT" : "LONG",
     strategy: tradeSourceLabel(t, entry.bot),
+    sl: historyRiskPctNumber(tradeStopRatio(t))?.toFixed(2) ?? "",
+    tp: historyRiskPctNumber(tradeTakeRatio(t))?.toFixed(2) ?? "",
     ml: conf != null ? (conf * 100).toFixed(1) : "",
     pnl_usdt: abs.toFixed(4),
     pnl_pct: pct.toFixed(2),
+    pnl_net_usdt: net.abs.toFixed(4),
+    pnl_net_pct: net.pct.toFixed(2),
     stake: t.stake_amount != null ? String(t.stake_amount) : "",
     leverage: t.leverage != null ? String(t.leverage) : "",
     trade_id: t.trade_id != null ? String(t.trade_id) : "",
@@ -1696,16 +2156,7 @@ function downloadHistoryCsv(entries) {
 }
 
 function historyCardHtml(entry) {
-  const botClass =
-    entry.kind === "bybit"
-      ? "bot-bybitgrid"
-      : entry.bot === "finder"
-        ? "bot-finder"
-        : entry.bot === "grid"
-          ? "bot-grid"
-          : entry.bot === "strategy" && isTestTrade(entry.trade, "strategy")
-            ? "bot-test"
-            : "bot-strategy";
+  const botClass = historyBotClass(entry);
   if (entry.kind === "bybit") {
     const item = entry.item;
     const pnl = Number(item.realised_pnl ?? item.pnl ?? 0);
@@ -1726,7 +2177,8 @@ function historyCardHtml(entry) {
     </article>`;
   }
   const t = entry.trade;
-  const { abs, pct } = closedTradePnl(t);
+  const { abs } = closedTradePnl(t);
+  const net = closedTradePnlNet(t);
   const side = t.is_short ? "SHORT" : "LONG";
   const source = tradeSourceLabel(t, entry.bot);
   const mlConf = fmtMlConfidence(t);
@@ -1734,21 +2186,23 @@ function historyCardHtml(entry) {
     mlConf && mlConf !== "—"
       ? `<span class="history-chip history-chip-ml" title="${escapeHtml(fmtMlConfidenceDetail(t))}">ML ${escapeHtml(mlConf)}</span>`
       : `<span class="history-chip history-chip-ml is-missing" title="Фактическая уверенность ML недоступна">ML —</span>`;
-  return `<article class="history-card ${pnlClass(abs)} ${botClass}">
+  return `<article class="history-card ${pnlClass(net.abs)} ${botClass}">
     <div class="history-card-top">
       <div class="history-card-main">
         <strong class="history-card-pair">${escapeHtml(t.pair || "—")}</strong>
         <span class="history-card-meta">${fmtTradeDate(t)} · ${historyBotLabel(entry)}</span>
       </div>
-      <div class="history-card-pnl ${pnlClass(abs)}">
-        <span>${fmtUsdSigned(abs, 2)}</span>
-        <span class="history-card-pct muted">${fmtPct(pct)}</span>
+      <div class="history-card-pnl ${pnlClass(net.abs)}">
+        <span>${fmtUsdSigned(net.abs, 2)}</span>
+        <span class="history-card-pct muted">${fmtPct(net.pct)}</span>
+        <span class="history-card-pct muted" title="Без комиссии">без ком. ${fmtUsdSigned(abs, 2)}</span>
       </div>
     </div>
     <div class="history-card-tags">
       <span class="history-chip side-${t.is_short ? "short" : "long"}">${side}</span>
       <span class="history-chip">${escapeHtml(source)}</span>
       ${mlChip}
+      <span class="history-chip" title="Стоп и тейк, записанные на сделке">${escapeHtml(historySltpCell(t))}</span>
       <span class="history-chip muted-chip">${escapeHtml(exitReasonLabel(t.exit_reason))}</span>
     </div>
   </article>`;
@@ -1797,7 +2251,7 @@ function renderHistoryTable(entries) {
   if (bodyEl) {
     if (!entries.length) {
       bodyEl.innerHTML =
-        '<tr class="stats-history-empty"><td colspan="8">Нет закрытых сделок по выбранным фильтрам</td></tr>';
+        '<tr class="stats-history-empty"><td colspan="10">Нет закрытых сделок по выбранным фильтрам</td></tr>';
     } else {
       bodyEl.innerHTML = pageEntries
         .map((entry) => {
@@ -1812,34 +2266,36 @@ function renderHistoryTable(entries) {
           <td>${escapeHtml(item.grid_mode_label || "grid")}</td>
           <td>Bybit</td>
           <td>—</td>
+          <td>—</td>
+          <td class="history-pnl-cell ${pnlClassName}">${fmtUsdSigned(pnl, 2)}</td>
           <td class="history-pnl-cell ${pnlClassName}">${fmtUsdSigned(pnl, 2)}</td>
           <td>${escapeHtml(bybitExitLabel(item))}</td>
         </tr>`;
           }
           const t = entry.trade;
           const { abs, pct } = closedTradePnl(t);
+          const net = closedTradePnlNet(t);
           const botLabel = historyBotLabel(entry);
           const side = t.is_short ? "SHORT" : "LONG";
           const source = tradeSourceLabel(t, entry.bot);
           const pnlClassName = pnlClass(abs);
+          const netClassName = pnlClass(net.abs);
           const mlConf = fmtMlConfidence(t);
           const mlTitle = escapeHtml(fmtMlConfidenceDetail(t));
-          const botClass =
-            entry.bot === "finder"
-              ? "bot-finder"
-              : entry.bot === "grid"
-                ? "bot-grid"
-                : entry.bot === "strategy" && isTestTrade(t, "strategy")
-                  ? "bot-test"
-                  : "bot-strategy";
+          const feeTitle = escapeHtml(
+            `Комиссия ${(BYBIT_TAKER_FEE_RATE * 100).toFixed(2)}% × 2 ≈ ${fmtUsd(net.fees, 4)}`
+          );
+          const botClass = historyBotClass(entry);
           return `<tr class="history-row ${botClass}">
         <td>${fmtTradeDate(t)}</td>
         <td><span class="history-bot-badge">${botLabel}</span></td>
         <td class="history-pair-cell">${escapeHtml(t.pair || "—")}</td>
         <td><span class="history-side-badge side-${t.is_short ? "short" : "long"}">${side}</span></td>
         <td>${escapeHtml(source)}</td>
+        <td class="history-sltp-cell" title="Стоп и тейк на момент входа">${escapeHtml(historySltpCell(t))}</td>
         <td title="${mlTitle}">${escapeHtml(mlConf)}</td>
         <td class="history-pnl-cell ${pnlClassName}">${fmtUsdSigned(abs, 2)}<br><span class="muted history-pnl-pct">${fmtPct(pct)}</span></td>
+        <td class="history-pnl-cell ${netClassName}" title="${feeTitle}">${fmtUsdSigned(net.abs, 2)}<br><span class="muted history-pnl-pct">${fmtPct(net.pct)}</span></td>
         <td>${escapeHtml(exitReasonLabel(t.exit_reason))}</td>
       </tr>`;
         })
@@ -1871,13 +2327,26 @@ function collectUniquePairs(data) {
   return [...pairs].sort();
 }
 
+function catalogForHistoryScope(catalog, scope) {
+  const list = catalog || strategyCatalog || [];
+  if (scope === "htf1h") return list.filter((s) => isHtfStrategy(s) || isHtfStrategyId(s.id));
+  if (scope === "test_strategy") {
+    return list.filter((s) => isTestCatalogEntry(s) && !isHtfStrategy(s) && !isHtfStrategyId(s.id));
+  }
+  if (scope === "strategy") {
+    return list.filter((s) => !isTestCatalogEntry(s) && !isHtfStrategy(s) && !isHtfStrategyId(s.id));
+  }
+  return list;
+}
+
 function updateHistoryStrategyFilterOptions(catalog) {
   const sel = $("history-strategy-filter");
   if (!sel) return;
   const prev = historyStrategyFilter;
+  const list = catalogForHistoryScope(catalog || strategyCatalog, historyScope);
   sel.innerHTML =
     '<option value="all">Все стратегии</option>' +
-    (catalog || strategyCatalog)
+    list
       .map(
         (s) =>
           `<option value="${escapeHtml(s.id)}">${escapeHtml(strategyCatalogLabel(s))}</option>`
@@ -1937,7 +2406,10 @@ function updateHistoryFilterUi() {
   if (stratWrap) {
     stratWrap.classList.toggle(
       "hidden",
-      historyScope !== "all" && historyScope !== "strategy" && historyScope !== "test_strategy"
+      historyScope !== "all" &&
+        historyScope !== "strategy" &&
+        historyScope !== "test_strategy" &&
+        historyScope !== "htf1h"
     );
   }
   if ($("history-date-from")) $("history-date-from").value = historyDateFrom;
@@ -1978,7 +2450,17 @@ function renderHistoryView() {
     const pages = Math.max(1, Math.ceil(entries.length / HISTORY_PAGE_SIZE) || 1);
     const pageNote =
       entries.length > HISTORY_PAGE_SIZE ? ` · стр. ${historyPage}/${pages}` : "";
-    statusEl.textContent = `Всего ${entries.length} сделок${pageNote}${warn}`;
+    let grossSum = 0;
+    let netSum = 0;
+    for (const e of entries) {
+      grossSum += historyEntryGrossPnl(e);
+      netSum += historyEntryNetPnl(e);
+    }
+    const pnlNote =
+      entries.length > 0
+        ? ` · PnL ${fmtUsdSigned(grossSum, 2)} · с комиссией ${fmtUsdSigned(netSum, 2)}`
+        : "";
+    statusEl.textContent = `Всего ${entries.length} сделок${pnlNote}${pageNote}${warn}`;
   }
 }
 
@@ -2035,9 +2517,15 @@ function closeHistory() {
 
 function setHistoryScope(scope) {
   historyScope = STATS_SCOPE_META[scope] ? scope : "all";
-  if (historyScope !== "all" && historyScope !== "strategy" && historyScope !== "test_strategy") {
+  if (
+    historyScope !== "all" &&
+    historyScope !== "strategy" &&
+    historyScope !== "test_strategy" &&
+    historyScope !== "htf1h"
+  ) {
     historyStrategyFilter = "all";
   }
+  if (historyDataCache) updateHistoryStrategyFilterOptions(historyDataCache.catalog);
   historyPage = 1;
   renderHistoryView();
 }
@@ -2286,8 +2774,15 @@ function updatePnlDashFilterUi() {
   document.querySelectorAll(".pnl-dash-scope").forEach((btn) => {
     btn.classList.toggle("is-active", (btn.dataset.pnlDashScope || "all") === pnlDashScope);
   });
+  document.querySelectorAll(".pnl-dash-tf").forEach((btn) => {
+    btn.classList.toggle("is-active", (btn.dataset.pnlDashTf || "5m") === pnlDashTf);
+  });
+  document.querySelector(".pnl-dash-bot-group")?.classList.toggle("hidden", pnlDashTf === "1h");
   document.querySelectorAll(".pnl-dash-period").forEach((btn) => {
     btn.classList.toggle("is-active", (btn.dataset.pnlDashPeriod || "all") === pnlDashPeriod);
+  });
+  document.querySelectorAll(".pnl-dash-side").forEach((btn) => {
+    btn.classList.toggle("is-active", (btn.dataset.pnlDashSide || "all") === pnlDashSide);
   });
 }
 
@@ -2296,15 +2791,17 @@ function renderPnlDashboard(data) {
   updatePnlDashFilterUi();
 
   const catalog = data.catalog || strategyCatalog;
-  const finderFiltered = filterClosedTrades(data.finderTrades, pnlDashPeriod);
-  const stratFiltered = filterClosedTrades(data.stratTrades, pnlDashPeriod);
-  const gridFiltered = filterClosedTrades(data.gridTrades, pnlDashPeriod);
-  const bybitFiltered = filterBybitHistory(data.bybitHistory, pnlDashPeriod);
-  const rows = filterStatsRows(
-    buildStatsRows(finderFiltered, stratFiltered, gridFiltered, bybitFiltered, catalog),
-    pnlDashScope,
-    catalog
-  );
+  const finderFiltered = filterTradesBySide(filterClosedTrades(data.finderTrades, pnlDashPeriod), pnlDashSide);
+  const stratFiltered = filterTradesBySide(filterClosedTrades(data.stratTrades, pnlDashPeriod), pnlDashSide);
+  const gridFiltered = filterTradesBySide(filterClosedTrades(data.gridTrades, pnlDashPeriod), pnlDashSide);
+  const bybitFiltered = pnlDashSide === "all" ? filterBybitHistory(data.bybitHistory, pnlDashPeriod) : [];
+  const built = buildStatsRows(finderFiltered, stratFiltered, gridFiltered, bybitFiltered, catalog);
+  let rows;
+  if (pnlDashTf === "1h") {
+    rows = filterStatsRows(built, "htf1h", catalog);
+  } else {
+    rows = filterStatsRows(built, pnlDashScope, catalog).filter((r) => !isHtfStatsRow(r, catalog));
+  }
 
   let totalProfit = 0;
   let totalLoss = 0;
@@ -2374,10 +2871,11 @@ function renderPnlDashboard(data) {
   const statusEl = $("pnl-dashboard-status");
   if (statusEl) {
     const periodLabel = STATS_PERIOD_LABELS[pnlDashPeriod] || STATS_PERIOD_LABELS.all;
+    const sideLabel = tradeSideLabel(pnlDashSide);
     statusEl.textContent =
       totalClosed > 0
-        ? `Закрытых операций: ${totalClosed} · период: ${periodLabel}`
-        : `Нет закрытых операций · период: ${periodLabel}`;
+        ? `Закрытых операций: ${totalClosed} · ${sideLabel} · период: ${periodLabel}`
+        : `Нет закрытых операций · ${sideLabel} · период: ${periodLabel}`;
   }
 }
 
@@ -2420,8 +2918,22 @@ function setPnlDashScope(scope) {
   else loadPnlDashboard(false);
 }
 
+function setPnlDashTf(tf) {
+  pnlDashTf = tf === "1h" ? "1h" : "5m";
+  updatePnlDashFilterUi();
+  if (pnlDashDataCache) renderPnlDashboard(pnlDashDataCache);
+  else loadPnlDashboard(false);
+}
+
 function setPnlDashPeriod(period) {
   pnlDashPeriod = normalizeStatsPeriod(period);
+  if (pnlDashDataCache) renderPnlDashboard(pnlDashDataCache);
+  else loadPnlDashboard(false);
+}
+
+function setPnlDashSide(side) {
+  pnlDashSide = normalizeTradeSide(side);
+  updatePnlDashFilterUi();
   if (pnlDashDataCache) renderPnlDashboard(pnlDashDataCache);
   else loadPnlDashboard(false);
 }
@@ -2432,25 +2944,66 @@ function bindPnlDashboardControls() {
     btn.dataset.bound = "1";
     btn.addEventListener("click", () => setPnlDashScope(btn.dataset.pnlDashScope || "all"));
   });
+  document.querySelectorAll(".pnl-dash-tf").forEach((btn) => {
+    if (btn.dataset.bound) return;
+    btn.dataset.bound = "1";
+    btn.addEventListener("click", () => setPnlDashTf(btn.dataset.pnlDashTf || "5m"));
+  });
   document.querySelectorAll(".pnl-dash-period").forEach((btn) => {
     if (btn.dataset.bound) return;
     btn.dataset.bound = "1";
     btn.addEventListener("click", () => setPnlDashPeriod(btn.dataset.pnlDashPeriod || "all"));
+  });
+  document.querySelectorAll(".pnl-dash-side").forEach((btn) => {
+    if (btn.dataset.bound) return;
+    btn.dataset.bound = "1";
+    btn.addEventListener("click", () => setPnlDashSide(btn.dataset.pnlDashSide || "all"));
   });
   $("pnl-dashboard-back-btn")?.addEventListener("click", closePnlDashboard);
   $("pnl-dashboard-refresh-btn")?.addEventListener("click", () => loadPnlDashboard(true));
 }
 
 let ratingPeriod = "all";
-let ratingScope = "strategies"; // strategies | pairs
+let ratingTf = "5m";
+let ratingScope = "strategies"; // strategies | pairs | days | matrix
+let ratingBot = "all"; // all | llm | llm50
+let ratingSide = "all"; // all | long | short
 let ratingUserFilter = ""; // "" = all accounts (admin only)
-let ratingDataCache = {}; // key: `${scope}:${user||"all"}`
+let ratingDataCache = {}; // key: `${scope}:${user||"all"}:${tf}:${bot}:${side}`
 let ratingSortKey = "pnl";
 let ratingSortDesc = true;
-const ratingExpandedPairs = new Set();
+const ratingExpandedPairs = new Set(); // also used for expanded weekdays in «По дням недели»
+const RATING_WEEKDAY_KEYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+const RATING_WEEKDAY_SHORT = {
+  mon: "Пн",
+  tue: "Вт",
+  wed: "Ср",
+  thu: "Чт",
+  fri: "Пт",
+  sat: "Сб",
+  sun: "Вс",
+};
+const RATING_DEFAULT_THEAD = `<tr>
+  <th class="rating-sort" data-rating-sort="rank" data-label-base="#" title="Сортировать">#</th>
+  <th class="rating-sort" data-rating-sort="label" id="rating-col-label" data-label-base="Стратегия" title="Сортировать">Стратегия</th>
+  <th class="rating-sort num" data-rating-sort="trades" data-label-base="Сделок" title="Сортировать">Сделок</th>
+  <th class="rating-sort num" data-rating-sort="winrate" data-label-base="WR%" title="Сортировать">WR%</th>
+  <th class="rating-sort num" data-rating-sort="conf_avg" data-label-base="Увер. мин/ср/макс" title="Мин / сред / макс уверенность модели">Увер. мин/ср/макс</th>
+  <th class="rating-sort num" data-rating-sort="income" data-label-base="PnL" title="Сортировать">PnL</th>
+  <th class="rating-sort num" data-rating-sort="loss_abs" data-label-base="Убытки" title="Сортировать">Убытки</th>
+  <th class="rating-sort num is-active" data-rating-sort="pnl" data-label-base="Чистый PnL" title="Сортировать">Чистый PnL</th>
+</tr>`;
 
 function ratingCacheKey(scope = ratingScope, user = ratingUserFilter) {
-  return `${scope}:${user || "all"}`;
+  return `${scope}:${user || "all"}:${ratingTf}:${ratingBot}:${ratingSide}`;
+}
+
+function ratingBotLabel() {
+  if (ratingBot === "llm") return "DeepSeek";
+  if (ratingBot === "llm50") return "DeepSeek 50";
+  if (ratingBot === "cursor") return "Cursor";
+  if (ratingBot === "cursor50") return "Cursor 50";
+  return "";
 }
 
 function ratingAccountLabel() {
@@ -2545,10 +3098,60 @@ function setRatingPeriod(period) {
   loadRating(true);
 }
 
+function setRatingTf(tf) {
+  const next = tf === "1h" ? "1h" : "5m";
+  if (ratingTf === next) return;
+  ratingTf = next;
+  ratingExpandedPairs.clear();
+  updateRatingFilterUi();
+  loadRating(false);
+}
+
 function setRatingScope(scope) {
-  const next = scope === "pairs" ? "pairs" : "strategies";
+  const next =
+    scope === "pairs"
+      ? "pairs"
+      : scope === "stratpairs"
+        ? "stratpairs"
+        : scope === "days"
+          ? "days"
+          : scope === "matrix"
+            ? "matrix"
+            : "strategies";
   if (ratingScope === next) return;
   ratingScope = next;
+  ratingExpandedPairs.clear();
+  if (next === "days") {
+    ratingSortKey = "weekday_order";
+    ratingSortDesc = false; // Mon → Sun
+  } else if (next === "matrix") {
+    ratingSortKey = "pnl";
+    ratingSortDesc = true;
+  } else if (
+    ratingSortKey === "day" ||
+    ratingSortKey === "weekday_order" ||
+    String(ratingSortKey).startsWith("pnl_")
+  ) {
+    ratingSortKey = "pnl";
+    ratingSortDesc = true;
+  }
+  updateRatingFilterUi();
+  loadRating(false);
+}
+
+function setRatingBot(bot) {
+  const next = bot === "llm" || bot === "llm50" || bot === "cursor" || bot === "cursor50" ? bot : "all";
+  if (ratingBot === next) return;
+  ratingBot = next;
+  ratingExpandedPairs.clear();
+  updateRatingFilterUi();
+  loadRating(false);
+}
+
+function setRatingSide(side) {
+  const next = normalizeTradeSide(side);
+  if (ratingSide === next) return;
+  ratingSide = next;
   ratingExpandedPairs.clear();
   updateRatingFilterUi();
   loadRating(false);
@@ -2571,9 +3174,41 @@ function toggleRatingPairExpand(pairId) {
   if (cached) renderRating(cached);
 }
 
+function ensureRatingTableHead() {
+  const table = $("rating-table");
+  const thead = table?.querySelector("thead");
+  if (!thead) return;
+  const isMatrix = ratingScope === "matrix";
+  if (isMatrix) {
+    const dayHeads = RATING_WEEKDAY_KEYS.map(
+      (k) =>
+        `<th class="rating-sort num rating-matrix-day" data-rating-sort="pnl_${k}" data-label-base="${RATING_WEEKDAY_SHORT[k]}" title="Сортировать по ${RATING_WEEKDAY_SHORT[k]}">${RATING_WEEKDAY_SHORT[k]}</th>`
+    ).join("");
+    thead.innerHTML = `<tr>
+      <th class="rating-sort" data-rating-sort="rank" data-label-base="#" title="Сортировать">#</th>
+      <th class="rating-sort rating-matrix-strategy" data-rating-sort="label" id="rating-col-label" data-label-base="Стратегия" title="Сортировать">Стратегия</th>
+      ${dayHeads}
+      <th class="rating-sort num is-active" data-rating-sort="pnl" data-label-base="Итого" title="Сортировать">Итого</th>
+    </tr>`;
+  } else if (thead.dataset.mode === "matrix" || !thead.querySelector("#rating-col-label")) {
+    thead.innerHTML = RATING_DEFAULT_THEAD;
+  }
+  thead.dataset.mode = isMatrix ? "matrix" : "default";
+  // Re-bind sort headers after thead rebuild
+  thead.querySelectorAll(".rating-sort").forEach((th) => {
+    if (th.dataset.bound) return;
+    th.dataset.bound = "1";
+    th.addEventListener("click", () => setRatingSort(th.dataset.ratingSort || "pnl"));
+  });
+}
+
 function updateRatingFilterUi() {
   const isPairs = ratingScope === "pairs";
+  const isStratPairs = ratingScope === "stratpairs";
+  const isDays = ratingScope === "days";
+  const isMatrix = ratingScope === "matrix";
   syncRatingUserFilterVisibility();
+  ensureRatingTableHead();
   document.querySelectorAll(".rating-scope").forEach((btn) => {
     const active = btn.dataset.ratingScope === ratingScope;
     btn.classList.toggle("is-active", active);
@@ -2582,23 +3217,56 @@ function updateRatingFilterUi() {
   document.querySelectorAll(".rating-period").forEach((btn) => {
     btn.classList.toggle("is-active", btn.dataset.ratingPeriod === ratingPeriod);
   });
+  document.querySelectorAll(".rating-tf").forEach((btn) => {
+    btn.classList.toggle("is-active", (btn.dataset.ratingTf || "5m") === ratingTf);
+  });
+  document.querySelectorAll(".rating-bot").forEach((btn) => {
+    btn.classList.toggle("is-active", (btn.dataset.ratingBot || "all") === ratingBot);
+  });
+  document.querySelectorAll(".rating-side").forEach((btn) => {
+    btn.classList.toggle("is-active", (btn.dataset.ratingSide || "all") === ratingSide);
+  });
   const sel = $("rating-user-filter");
   if (sel && sel.value !== ratingUserFilter) sel.value = ratingUserFilter;
 
   const title = $("rating-title");
   const subtitle = $("rating-subtitle");
   const account = ratingAccountLabel();
-  if (title) title.textContent = isPairs ? "Рейтинг пар" : "Рейтинг стратегий";
+  if (title) {
+    title.textContent = isMatrix
+      ? "Стратегии × дни недели"
+      : isDays
+        ? "Рейтинг по дням недели"
+        : isStratPairs
+          ? "Стратегии / пары"
+          : isPairs
+            ? "Рейтинг пар"
+            : "Рейтинг стратегий";
+  }
   if (subtitle) {
-    subtitle.textContent = isPairs
-      ? `${account} · strategy / finder / grid · клик по паре — детализация`
-      : `${account} · закрытые сделки strategy-бота`;
+    subtitle.textContent = isMatrix
+      ? `${account} · строки — стратегии, колонки — Пн–Вс · PnL с комиссией`
+      : isDays
+        ? `${account} · Пн–Вс · клик по дню — стратегии · PnL с комиссией`
+        : isStratPairs
+          ? `${account} · клик по стратегии — топ пар · PnL с комиссией`
+          : isPairs
+            ? `${account} · strategy / finder / grid · клик по паре — детализация`
+            : `${account} · закрытые сделки strategy-бота`;
+    subtitle.textContent += ratingTf === "1h" ? " · 1 ч" : " · 5 мин";
+    const botLabel = ratingBotLabel();
+    if (botLabel) subtitle.textContent += ` · ${botLabel}`;
+    if (ratingSide !== "all") subtitle.textContent += ` · ${tradeSideLabel(ratingSide)}`;
   }
 
   const labelTh = $("rating-col-label");
-  if (labelTh) {
-    labelTh.dataset.labelBase = isPairs ? "Пара" : "Стратегия";
+  if (labelTh && !isMatrix) {
+    labelTh.dataset.labelBase = isDays ? "День недели" : isPairs ? "Пара" : "Стратегия";
+    labelTh.dataset.ratingSort = isDays ? "weekday_order" : "label";
   }
+
+  const table = $("rating-table");
+  table?.classList.toggle("rating-matrix-table", isMatrix);
 
   document.querySelectorAll("#rating-table .rating-sort").forEach((th) => {
     const key = th.dataset.ratingSort;
@@ -2613,8 +3281,29 @@ function updateRatingFilterUi() {
 }
 
 function ratingSortValue(row, key) {
-  if (key === "label") return String(row.label || row.pair || row.strategy_id || "").toLowerCase();
+  if (key === "weekday_order" || key === "day") {
+    const order = Number(row.weekday_order);
+    if (Number.isFinite(order)) return order;
+    const map = { mon: 0, tue: 1, wed: 2, thu: 3, fri: 4, sat: 5, sun: 6 };
+    return map[String(row.day || row.weekday || "")] ?? 99;
+  }
+  if (typeof key === "string" && key.startsWith("pnl_")) {
+    const day = key.slice(4);
+    const cell = row.by_weekday?.[day];
+    if (cell && cell.pnl != null) return Number(cell.pnl);
+    return Number(row[key] ?? 0);
+  }
+  if (key === "label") {
+    if (ratingScope !== "matrix" && (row.weekday_order != null || row.day)) {
+      return ratingSortValue(row, "weekday_order");
+    }
+    return String(row.label || row.pair || row.strategy_id || "").toLowerCase();
+  }
   if (key === "rank") return Number(row.rank || 0);
+  if (key === "conf_avg" || key === "conf_min" || key === "conf_max") {
+    const v = row[key];
+    return v == null || Number.isNaN(Number(v)) ? (ratingSortDesc ? -1 : 1e9) : Number(v);
+  }
   return Number(row[key] ?? 0);
 }
 
@@ -2644,12 +3333,18 @@ function setRatingSort(key) {
   if (ratingSortKey === key) ratingSortDesc = !ratingSortDesc;
   else {
     ratingSortKey = key;
-    // strings asc first; numbers (pnl/trades/...) desc first
-    ratingSortDesc = key !== "label";
+    // weekday Mon→Sun asc; label asc; numbers (pnl/trades/...) desc first
+    if (key === "day" || key === "weekday_order") ratingSortDesc = false;
+    else ratingSortDesc = key !== "label";
   }
   const cached = ratingDataCache[ratingCacheKey()];
   if (cached) renderRating(cached);
   else loadRating(false);
+}
+
+function fmtConfPct(v) {
+  if (v == null || Number.isNaN(Number(v))) return "—";
+  return `${Number(v).toFixed(1)}%`;
 }
 
 function ratingMetricCells(r) {
@@ -2667,6 +3362,13 @@ function ratingMetricCells(r) {
           <span class="rating-wr-val">${wr.toFixed(1)}</span>
           <span class="rating-wr-track" aria-hidden="true"><span class="rating-wr-fill" style="width:${Math.max(0, Math.min(100, wr))}%"></span></span>
         </span>`;
+  const confCell = `<span class="rating-conf" title="Мин / сред / макс уверенность модели">
+      <span class="rating-conf-min">${fmtConfPct(r.conf_min)}</span>
+      <span class="rating-conf-sep">/</span>
+      <span class="rating-conf-avg">${fmtConfPct(r.conf_avg)}</span>
+      <span class="rating-conf-sep">/</span>
+      <span class="rating-conf-max">${fmtConfPct(r.conf_max)}</span>
+    </span>`;
   return {
     income,
     lossAbs,
@@ -2678,34 +3380,151 @@ function ratingMetricCells(r) {
     cells: `
       <td class="num">${r.trades ?? 0}</td>
       <td class="num rating-wr-cell">${wrBar}</td>
+      <td class="num rating-conf-cell">${confCell}</td>
       <td class="num ${incomeCls}">${fmtUsd(income)}</td>
       <td class="num ${lossCls}">${lossAbs > 0 ? fmtUsd(-lossAbs) : fmtUsd(0)}</td>
       <td class="num rating-net ${pnlCls}"><strong>${fmtUsd(pnl)}</strong></td>`,
   };
 }
 
-function renderRatingDetailRows(pairId, details) {
+/** Plain display name for rating rows (no «инв» suffix). */
+function ratingCopyName(row, { preferBase = false } = {}) {
+  const inverted = !!row?.inverted;
+  let text = preferBase
+    ? String(row?.pair_base || row?.strategy_base || row?.label || row?.strategy_id || row?.pair || "")
+    : String(row?.label || row?.strategy_label || row?.strategy_id || row?.pair || "");
+  if (inverted) {
+    text = text.replace(/\s*·\s*инв\s*$/i, "").trim() || text;
+  }
+  return text.trim();
+}
+
+/** Display name + optional «инв» badge for rating rows. */
+function ratingInvLabelHtml(row, { preferBase = false } = {}) {
+  const inverted = !!row?.inverted;
+  const text = ratingCopyName(row, { preferBase }) || "—";
+  const badge = inverted ? ' <span class="strategy-inv-badge">инв</span>' : "";
+  return `${escapeHtml(text)}${badge}`;
+}
+
+const RATING_COPY_ICON = `<svg class="rating-copy-icon" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false"><path fill="currentColor" d="M5.5 2A1.5 1.5 0 0 0 4 3.5V11h1.5V3.5h7V2h-7Zm2 2.5A1.5 1.5 0 0 0 6 6v7.5A1.5 1.5 0 0 0 7.5 15h6A1.5 1.5 0 0 0 15 13.5V6A1.5 1.5 0 0 0 13.5 4.5h-6ZM7.5 6h6v7.5h-6V6Z"/></svg>`;
+
+function ratingCopyBtnHtml(name) {
+  const text = String(name || "").trim();
+  if (!text || text === "—") return "";
+  return `<button type="button" class="rating-copy-btn" data-copy="${escapeHtml(text)}" title="Копировать название" aria-label="Копировать ${escapeHtml(text)}">${RATING_COPY_ICON}</button>`;
+}
+
+function ratingNameCellHtml(row, { preferBase = false } = {}) {
+  const name = ratingCopyName(row, { preferBase });
+  return `<span class="rating-name-wrap"><span class="rating-name-text">${ratingInvLabelHtml(row, { preferBase })}</span>${ratingCopyBtnHtml(name)}</span>`;
+}
+
+async function copyRatingName(text, btn) {
+  const value = String(text || "").trim();
+  if (!value) return;
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value);
+    } else {
+      const ta = document.createElement("textarea");
+      ta.value = value;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.left = "-9999px";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      ta.remove();
+    }
+    if (btn) {
+      btn.classList.add("is-copied");
+      const prev = btn.getAttribute("title") || "Копировать название";
+      btn.setAttribute("title", "Скопировано");
+      clearTimeout(btn._copyTimer);
+      btn._copyTimer = setTimeout(() => {
+        btn.classList.remove("is-copied");
+        btn.setAttribute("title", prev);
+      }, 1200);
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+function bindRatingCopyButtons(root) {
+  root?.querySelectorAll(".rating-copy-btn").forEach((btn) => {
+    btn.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      copyRatingName(btn.dataset.copy || "", btn);
+    });
+  });
+}
+
+function renderRatingDetailRows(groupId, details) {
   if (!Array.isArray(details) || !details.length) {
-    return `<tr class="rating-detail-row" data-pair="${escapeHtml(pairId)}">
+    return `<tr class="rating-detail-row" data-pair="${escapeHtml(groupId)}">
       <td></td>
-      <td colspan="6" class="muted rating-detail-empty">Нет детализации</td>
+      <td colspan="7" class="muted rating-detail-empty">Нет детализации</td>
     </tr>`;
   }
   return details
     .map((d) => {
       const m = ratingMetricCells(d);
-      const strat = escapeHtml(d.strategy_label || d.label || d.strategy_id || "—");
       const bot = escapeHtml(d.bot_label || d.bot || "");
-      return `<tr class="rating-detail-row" data-pair="${escapeHtml(pairId)}">
+      return `<tr class="rating-detail-row ${d.inverted ? "is-inverted" : ""}" data-pair="${escapeHtml(groupId)}">
         <td class="rating-detail-pad"></td>
         <td class="rating-detail-label">
-          <span class="rating-detail-strategy">${strat}</span>
+          <span class="rating-detail-strategy">${ratingNameCellHtml(d)}</span>
           ${bot ? `<span class="rating-detail-bot">${bot}</span>` : ""}
         </td>
         ${m.cells}
       </tr>`;
     })
     .join("");
+}
+
+function ratingMatrixDayCell(cell) {
+  const pnl = Number(cell?.pnl ?? 0);
+  const trades = Number(cell?.trades ?? 0);
+  if (!trades && !pnl) {
+    return `<td class="num rating-matrix-cell muted">—</td>`;
+  }
+  const cls = pnl > 0 ? "pos" : pnl < 0 ? "neg" : "";
+  const title = escapeHtml(`${trades} сд. · WR ${cell?.winrate != null ? Number(cell.winrate).toFixed(0) + "%" : "—"}`);
+  return `<td class="num rating-matrix-cell ${cls}" title="${title}">
+    <span class="rating-matrix-pnl">${fmtUsdSigned(pnl, 2)}</span>
+    <span class="rating-matrix-trades muted">${trades}</span>
+  </td>`;
+}
+
+function renderRatingMatrix(data, rows) {
+  const body = $("rating-table-body");
+  if (!body) return;
+  if (!rows.length) {
+    body.innerHTML = `<tr><td colspan="10" class="stats-history-empty">Нет закрытых сделок за период</td></tr>`;
+    return;
+  }
+  body.innerHTML = rows
+    .map((r, idx) => {
+      const place = idx + 1;
+      const placeCls =
+        place === 1 ? "is-gold" : place === 2 ? "is-silver" : place === 3 ? "is-bronze" : "";
+      const total = Number(r.pnl ?? 0);
+      const totalCls = total > 0 ? "pos" : total < 0 ? "neg" : "";
+      const dayCells = RATING_WEEKDAY_KEYS.map((k) =>
+        ratingMatrixDayCell(r.by_weekday?.[k] || { pnl: r[`pnl_${k}`], trades: r[`trades_${k}`] })
+      ).join("");
+      return `<tr class="rating-row rating-matrix-row ${placeCls} ${r.inverted ? "is-inverted" : ""}">
+        <td class="rating-place"><span class="rating-place-badge">${place}</span></td>
+        <td class="rating-strategy rating-matrix-strategy">${ratingNameCellHtml(r, { preferBase: true })}</td>
+        ${dayCells}
+        <td class="num rating-net ${totalCls}"><strong>${fmtUsdSigned(total, 2)}</strong></td>
+      </tr>`;
+    })
+    .join("");
+  bindRatingCopyButtons(body);
 }
 
 function renderRating(data) {
@@ -2716,23 +3535,30 @@ function renderRating(data) {
   const summary = $("rating-summary");
   if (!body) return;
   const isPairs = ratingScope === "pairs";
+  const isStratPairs = ratingScope === "stratpairs";
+  const isDays = ratingScope === "days";
+  const isMatrix = ratingScope === "matrix";
+  const expandable = isPairs || isDays || isStratPairs;
 
-  if (!rows.length) {
-    body.innerHTML = `<tr><td colspan="7" class="stats-history-empty">Нет закрытых сделок за период</td></tr>`;
-  } else if (!isPairs) {
+  if (isMatrix) {
+    renderRatingMatrix(data, rows);
+  } else if (!rows.length) {
+    body.innerHTML = `<tr><td colspan="8" class="stats-history-empty">Нет закрытых сделок за период</td></tr>`;
+  } else if (!expandable) {
     body.innerHTML = rows
       .map((r, idx) => {
         const m = ratingMetricCells(r);
         const place = idx + 1;
         const placeCls =
           place === 1 ? "is-gold" : place === 2 ? "is-silver" : place === 3 ? "is-bronze" : "";
-        return `<tr class="rating-row ${placeCls}">
+        return `<tr class="rating-row ${placeCls} ${r.inverted ? "is-inverted" : ""}">
           <td class="rating-place"><span class="rating-place-badge">${place}</span></td>
-          <td class="rating-strategy">${escapeHtml(r.label || r.strategy_id || "—")}</td>
+          <td class="rating-strategy">${ratingNameCellHtml(r, { preferBase: true })}</td>
           ${m.cells}
         </tr>`;
       })
       .join("");
+    bindRatingCopyButtons(body);
   } else {
     body.innerHTML = rows
       .map((r, idx) => {
@@ -2740,20 +3566,38 @@ function renderRating(data) {
         const place = idx + 1;
         const placeCls =
           place === 1 ? "is-gold" : place === 2 ? "is-silver" : place === 3 ? "is-bronze" : "";
-        const pairId = String(r.pair || r.label || "");
-        const expanded = ratingExpandedPairs.has(pairId);
+        const groupId = isDays
+          ? String(r.day || r.label || "")
+          : isStratPairs
+            ? String(r.strategy_id || r.label || "")
+            : String(r.pair || r.label || "");
+        const copyName = isDays
+          ? ""
+          : ratingCopyName(r, { preferBase: true });
+        const groupLabelHtml = isDays
+          ? escapeHtml(String(r.label || r.day || "—"))
+          : ratingInvLabelHtml(r, { preferBase: true });
+        const expanded = ratingExpandedPairs.has(groupId);
         const details = Array.isArray(r.details) ? r.details : [];
         const chevron = expanded ? "▾" : "▸";
-        const main = `<tr class="rating-row rating-pair-row ${placeCls} ${expanded ? "is-expanded" : ""}" data-pair="${escapeHtml(pairId)}" tabindex="0" role="button" aria-expanded="${expanded ? "true" : "false"}">
+        const pairsTotal = Number(r.pairs_total || details.length);
+        const meta = isDays
+          ? `${details.length} стр.`
+          : isStratPairs
+            ? pairsTotal > details.length
+              ? `топ ${details.length} из ${pairsTotal}`
+              : `${details.length} пар`
+            : `${details.length} ист.`;
+        const main = `<tr class="rating-row rating-pair-row ${placeCls} ${expanded ? "is-expanded" : ""} ${!isDays && r.inverted ? "is-inverted" : ""}" data-pair="${escapeHtml(groupId)}" tabindex="0" role="button" aria-expanded="${expanded ? "true" : "false"}">
           <td class="rating-place"><span class="rating-place-badge">${place}</span></td>
           <td class="rating-strategy rating-pair-label">
             <span class="rating-expand-icon" aria-hidden="true">${chevron}</span>
-            <span>${escapeHtml(pairId || "—")}</span>
-            <span class="rating-pair-meta muted">${details.length} ист.</span>
+            <span class="rating-name-wrap"><span class="rating-name-text">${groupLabelHtml}</span>${ratingCopyBtnHtml(copyName)}</span>
+            <span class="rating-pair-meta muted">${meta}</span>
           </td>
           ${m.cells}
         </tr>`;
-        return expanded ? main + renderRatingDetailRows(pairId, details) : main;
+        return expanded ? main + renderRatingDetailRows(groupId, details) : main;
       })
       .join("");
 
@@ -2768,15 +3612,18 @@ function renderRating(data) {
         }
       });
     });
+    bindRatingCopyButtons(body);
   }
 
   const periodLabel = STATS_PERIOD_LABELS[ratingPeriod] || STATS_PERIOD_LABELS.all;
   const users = data?.users ?? 0;
   const trades = data?.trades_total ?? 0;
-  const entityLabel = isPairs ? "Пар" : "Стратегий";
-  const entityCount = isPairs
-    ? data?.pairs_total ?? rows.length
-    : data?.strategies_total ?? rows.length;
+  const entityLabel = isDays ? "Дней недели" : isPairs ? "Пар" : "Стратегий";
+  const entityCount = isDays
+    ? data?.days_total ?? rows.length
+    : isPairs
+      ? data?.pairs_total ?? rows.length
+      : data?.strategies_total ?? rows.length;
   if (summary) {
     const accountChip = data?.user_label
       ? `<div class="rating-chip"><span>Аккаунт</span><strong>${escapeHtml(data.user_label)}</strong></div>`
@@ -2786,12 +3633,19 @@ function renderRating(data) {
       <div class="rating-chip"><span>${entityLabel}</span><strong>${entityCount}</strong></div>
       <div class="rating-chip"><span>Сделок</span><strong>${trades}</strong></div>
       ${accountChip}
+      <div class="rating-chip"><span>Сторона</span><strong>${escapeHtml(tradeSideLabel(ratingSide))}</strong></div>
     `;
   }
   if (status) {
-    status.textContent = isPairs
-      ? "Клик по паре — стратегии и боты · PnL = сумма плюсов · Убытки = сумма минусов · Чистый PnL = итог"
-      : "Клик по заголовку — сортировка · PnL = сумма плюсов · Убытки = сумма минусов · Чистый PnL = итог";
+    status.textContent = isMatrix
+      ? "Стратегии слева · дни недели сверху · клик по Пн–Вс или «Итого» — сортировка · комиссия 0.1%×2"
+      : isDays
+        ? "Клик по дню недели — стратегии · сортировка Пн→Вс или по PnL · комиссия 0.1%×2"
+        : isStratPairs
+          ? "Клик по стратегии — топ пар по чистому PnL · комиссия 0.1%×2"
+          : isPairs
+            ? "Клик по паре — стратегии и боты · PnL с комиссией 0.1%×2 · Убытки = сумма минусов · Чистый PnL = итог"
+            : "Клик по заголовку — сортировка · PnL с комиссией 0.1%×2 · Убытки = сумма минусов · Чистый PnL = итог";
   }
 }
 
@@ -2801,23 +3655,42 @@ async function loadRating(force) {
   updateRatingFilterUi();
   const scope = ratingScope;
   const user = isAdminUser() ? ratingUserFilter : "";
+  const tf = ratingTf;
   const cacheKey = ratingCacheKey(scope, user);
   try {
     const cached = ratingDataCache[cacheKey];
-    if (!force && cached && cached.period === ratingPeriod && (cached.user_filter || "") === (user || "")) {
+    if (
+      !force &&
+      cached &&
+      cached.period === ratingPeriod &&
+      (cached.tf || "5m") === tf &&
+      (cached.user_filter || "") === (user || "") &&
+      normalizeTradeSide(cached.side || "all") === ratingSide
+    ) {
       renderRating(cached);
       return;
     }
     const params = new URLSearchParams({
       period: ratingPeriod,
-      limit: "100",
+      tf,
+      limit: scope === "days" ? "7" : "100",
     });
     if (user) params.set("user", user);
+    if (ratingBot && ratingBot !== "all") params.set("bot", ratingBot);
+    if (ratingSide && ratingSide !== "all") params.set("side", ratingSide);
     const endpoint =
-      scope === "pairs" ? `/pair-rating?${params}` : `/strategy-rating?${params}`;
+      scope === "pairs"
+        ? `/pair-rating?${params}`
+        : scope === "stratpairs"
+          ? `/strategy-pair-rating?${params}`
+          : scope === "days"
+            ? `/strategy-rating-daily?${params}`
+            : scope === "matrix"
+              ? `/strategy-rating-weekday-matrix?${params}`
+              : `/strategy-rating?${params}`;
     const data = await pairConfigApi(endpoint);
     ratingDataCache[cacheKey] = data;
-    if (ratingScope === scope && (isAdminUser() ? ratingUserFilter : "") === user) {
+    if (ratingScope === scope && ratingTf === tf && (isAdminUser() ? ratingUserFilter : "") === user) {
       renderRating(data);
     }
   } catch (e) {
@@ -2831,6 +3704,21 @@ function bindRatingControls() {
     if (btn.dataset.bound) return;
     btn.dataset.bound = "1";
     btn.addEventListener("click", () => setRatingPeriod(btn.dataset.ratingPeriod || "all"));
+  });
+  document.querySelectorAll(".rating-tf").forEach((btn) => {
+    if (btn.dataset.bound) return;
+    btn.dataset.bound = "1";
+    btn.addEventListener("click", () => setRatingTf(btn.dataset.ratingTf || "5m"));
+  });
+  document.querySelectorAll(".rating-bot").forEach((btn) => {
+    if (btn.dataset.bound) return;
+    btn.dataset.bound = "1";
+    btn.addEventListener("click", () => setRatingBot(btn.dataset.ratingBot || "all"));
+  });
+  document.querySelectorAll(".rating-side").forEach((btn) => {
+    if (btn.dataset.bound) return;
+    btn.dataset.bound = "1";
+    btn.addEventListener("click", () => setRatingSide(btn.dataset.ratingSide || "all"));
   });
   document.querySelectorAll(".rating-scope").forEach((btn) => {
     if (btn.dataset.bound) return;
@@ -2852,7 +3740,8 @@ function bindRatingControls() {
 }
 
 function addClosedTradeToRow(row, trade) {
-  const p = Number(trade.close_profit_abs ?? trade.profit_abs ?? 0);
+  // Stats / PnL-dashboard: net of fixed Bybit fee (0.1% × 2). Rating uses same on API.
+  const p = closedTradePnlNet(trade).abs;
   row.closed = (row.closed || 0) + 1;
   if (p > 0) {
     row.wins += 1;
@@ -3045,12 +3934,48 @@ let statsPrefetchInFlight = null;
 let lastStatsPrefetchAt = 0;
 const STATS_PREFETCH_MS = 25000;
 let openSummaryCache = null;
+/** Last non-empty summary — avoids UI flashing 0 when live/status briefly empty. */
+let openSummarySticky = null;
+const OPEN_SUMMARY_STICKY_MS = 45000;
+
+function adoptOpenSummary(summary) {
+  if (!summary || typeof summary !== "object") return openSummaryCache;
+  const next = { ...summary };
+  const count = Number(next.count) || 0;
+  const maxTotal = Number(next.max_total) || 0;
+  const now = Date.now();
+
+  if (count > 0) {
+    openSummarySticky = { ...next, _ts: now };
+    openSummaryCache = next;
+    return openSummaryCache;
+  }
+
+  // count == 0: keep sticky if recent and previously had opens
+  const sticky = openSummarySticky;
+  if (
+    sticky
+    && Number(sticky.count) > 0
+    && now - Number(sticky._ts || 0) < OPEN_SUMMARY_STICKY_MS
+  ) {
+    openSummaryCache = {
+      ...sticky,
+      max_total: maxTotal > 0 ? maxTotal : Number(sticky.max_total) || 0,
+      // keep margin/pnl from sticky until confirmed empty after sticky window
+    };
+    return openSummaryCache;
+  }
+
+  openSummarySticky = null;
+  openSummaryCache = next;
+  return openSummaryCache;
+}
 
 async function prefetchStatsBundle({ force = false } = {}) {
   const now = Date.now();
   if (!force && statsDataCache && now - lastStatsPrefetchAt < STATS_PREFETCH_MS) {
     if (statsDataCache.openSummary) {
-      openSummaryCache = statsDataCache.openSummary;
+      adoptOpenSummary(statsDataCache.openSummary);
       renderTradesSummaryFromOpen(openSummaryCache);
     }
     return statsDataCache;
@@ -3064,7 +3989,7 @@ async function prefetchStatsBundle({ force = false } = {}) {
       if (!pnlDashDataCache) pnlDashDataCache = data;
       lastStatsPrefetchAt = Date.now();
       if (data.openSummary) {
-        openSummaryCache = data.openSummary;
+        adoptOpenSummary(data.openSummary);
         renderTradesSummaryFromOpen(openSummaryCache);
       }
       return data;
@@ -3186,20 +4111,40 @@ function syncEnabledFromPayload(data) {
   invertedStrategies = {};
   trainedRiskStrategies = {};
   mlConfidenceStrategies = {};
+  entrySideStrategies = {};
+  strategyPairsMap = {};
   trainedRiskAvailable = data.trained_risk_available || {};
   trainedRiskSpecs = data.trained_risk_specs || {};
   mlConfidenceDefaults = data.ml_confidence_defaults || {};
   if (Array.isArray(data.ml_confidence_choices) && data.ml_confidence_choices.length) {
     mlConfidenceChoices = data.ml_confidence_choices.map(Number);
   }
+  htfSltp = data.sltp && typeof data.sltp === "object" ? data.sltp : {};
+  htfSltpDefaults = data.sltp_defaults && typeof data.sltp_defaults === "object" ? data.sltp_defaults : {};
+  if (Array.isArray(data.sl_choices) && data.sl_choices.length) {
+    sltpSlChoices = data.sl_choices.map(Number);
+  } else if (Array.isArray(data.sltp_choices) && data.sltp_choices.length) {
+    sltpSlChoices = data.sltp_choices.map(Number);
+  }
+  if (Array.isArray(data.tp_choices) && data.tp_choices.length) {
+    sltpTpChoices = data.tp_choices.map(Number);
+  } else if (Array.isArray(data.sltp_choices) && data.sltp_choices.length) {
+    sltpTpChoices = data.sltp_choices.map(Number);
+  }
+  htfSltpChoices = sltpSlChoices;
+  if (data.htf_stake_amount != null && Number.isFinite(Number(data.htf_stake_amount))) {
+    htfStakeAmount = Number(data.htf_stake_amount);
+  }
   const enabled = data.enabled || {};
   const inverted = data.inverted || {};
   const trained = data.trained_risk || {};
   const mlConf = data.ml_confidence || {};
+  const pairs = data.pairs || {};
+  strategyPairsCascade = !!data._pairs_cascade || Object.keys(pairs).length > 0;
   for (const s of strategyCatalog) {
     enabledStrategies[s.id] = !!enabled[s.id];
     invertedStrategies[s.id] = !!inverted[s.id];
-    trainedRiskStrategies[s.id] = trained[s.id] != null ? !!trained[s.id] : !!trainedRiskAvailable[s.id];
+    trainedRiskStrategies[s.id] = !!trained[s.id];
     if (trainedRiskAvailable[s.id] == null) {
       trainedRiskAvailable[s.id] = !!trainedRiskSpecs[s.id];
     }
@@ -3210,6 +4155,10 @@ function syncEnabledFromPayload(data) {
           ? Number(mlConf[s.id])
           : 0.55;
     mlConfidenceStrategies[s.id] = mlConf[s.id] != null ? Number(mlConf[s.id]) : def;
+    strategyPairsMap[s.id] = Array.isArray(pairs[s.id]) ? pairs[s.id].slice() : [];
+    const sideRaw = data.entry_sides && data.entry_sides[s.id];
+    entrySideStrategies[s.id] =
+      sideRaw === "long" || sideRaw === "short" || sideRaw === "both" ? sideRaw : "both";
   }
   syncStrategyRiskFromPayload(data);
   syncTestSettingsFromPayload(data);
@@ -3218,7 +4167,7 @@ function syncEnabledFromPayload(data) {
     applyPinnedMaxPerStrategy(data.max_open_trades_per_strategy);
     updateMaxTradesHint();
   }
-  if (isSettingsOpen() && isAdminUser()) {
+  if (isSettingsOpen()) {
     renderPlacementAdmin(data);
   }
   repaintStrategyTradesFromCache();
@@ -3232,62 +4181,134 @@ function showPlacementMsg(text, isError = false) {
   el.classList.toggle("error", !!isError);
 }
 
+function bindPlacementTagsOnce() {
+  if (document.documentElement.dataset.placementTagsBound) return;
+  document.documentElement.dataset.placementTagsBound = "1";
+  const toggle = (open) => {
+    const wrap = $("placement-tags");
+    const panel = $("placement-tags-panel");
+    const btn = $("placement-tags-btn");
+    if (!wrap || !panel || !btn) return;
+    panel.hidden = !open;
+    btn.setAttribute("aria-expanded", open ? "true" : "false");
+    wrap.classList.toggle("is-open", open);
+    if (open) positionStrategyTickersPanel(wrap, panel);
+    else resetStrategyTickersPanelPosition(panel);
+  };
+  document.addEventListener("click", (ev) => {
+    const t = ev.target;
+    if (!(t instanceof Element)) return;
+    const btn = t.closest("[data-placement-tags-btn]");
+    if (btn) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const panel = $("placement-tags-panel");
+      toggle(!!panel?.hidden);
+      return;
+    }
+    if (t.closest("[data-placement-tags-wrap]")) return;
+    toggle(false);
+  });
+}
+
 function renderPlacementAdmin(data) {
-  if (!isAdminUser()) return;
   const testList = $("placement-test-list");
+  const htfList = $("placement-htf-list");
   const mainList = $("placement-main-list");
   if (!testList || !mainList) return;
   const catalog = data?.strategies || strategyCatalog;
-  const testRows = (catalog || []).filter((s) => strategyUiPanel(s) === "test");
-  const mainRows = (catalog || []).filter((s) => strategyUiPanel(s) === "main");
+  const promoteCandidates = Array.isArray(data?.promote_candidates)
+    ? data.promote_candidates
+    : [];
+  const managementCatalog = Array.isArray(data?.management_catalog)
+    ? data.management_catalog
+    : [];
+  const byId = new Map();
+  (managementCatalog.length ? managementCatalog : catalog || []).forEach((s) => {
+    if (s?.id) byId.set(String(s.id), s);
+  });
+  (catalog || []).forEach((s) => {
+    if (s?.id && !byId.has(String(s.id))) byId.set(String(s.id), s);
+  });
+  promoteCandidates.forEach((s) => {
+    if (s?.id && !byId.has(String(s.id))) byId.set(String(s.id), s);
+  });
 
-  const rowHtml = (s, action, label) => `
-    <li class="placement-list-item">
-      <span class="placement-list-name">${escapeHtml(strategyCatalogLabel(s))}</span>
-      <button type="button" class="btn btn-sm primary" data-placement-action="${action}" data-strategy="${escapeHtml(s.id)}">${label}</button>
-    </li>`;
-
-  testList.innerHTML = testRows.length
-    ? testRows.map((s) => rowHtml(s, "promote", "В основной")).join("")
-    : `<li class="placement-list-empty muted">Пусто</li>`;
-  mainList.innerHTML = mainRows.length
-    ? mainRows.map((s) => rowHtml(s, "demote", "В тестовые")).join("")
-    : `<li class="placement-list-empty muted">Пусто — перенесите из тестовых</li>`;
-
-  const bind = (root) => {
-    root.querySelectorAll("[data-placement-action]").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        const id = btn.getAttribute("data-strategy");
-        const action = btn.getAttribute("data-placement-action");
-        if (!id || !action) return;
-        btn.disabled = true;
-        try {
-          const apiAction =
-            action === "promote" ? "promote_strategy_to_main" : "demote_strategy_to_test";
-          const res = await pairConfigApi("/pairs", "POST", {
-            action: apiAction,
-            strategy: id,
-          });
-          syncEnabledFromPayload(res);
-          renderStrategyToggles();
-          updateStrategyDisplay();
-          renderPlacementAdmin(res);
-          const name = strategyLabel(id);
-          showPlacementMsg(
-            action === "promote"
-              ? `${name} → основной блок (выкл)`
-              : `${name} → тестовые (выкл)`
-          );
-        } catch (e) {
-          showPlacementMsg(e.message || String(e), true);
-        } finally {
-          btn.disabled = false;
-        }
+  const sourceRows = promoteCandidates.length
+    ? promoteCandidates
+    : (catalog || []).filter((s) => {
+        const panel = strategyUiPanel(s);
+        return panel === "test" || panel === "htf1h";
       });
-    });
+  const testRows = sourceRows.filter((s) => strategyUiPanel(s) === "test");
+  const htfRows = sourceRows.filter((s) => strategyUiPanel(s) === "htf1h");
+  const mainFromPlacement = (data?.ui_placement?.main || []).map(String);
+  const mainRows = (catalog || []).filter((s) => strategyUiPanel(s) === "main");
+  const displayMainRows = (data?.ui_placement
+    ? mainFromPlacement
+    : mainRows.map((s) => s.id)
+  ).map((id) => {
+    const known = byId.get(id);
+    if (known) return known;
+    const htf = String(id).endsWith("1hStrategy");
+    return { id, name: id, ui_panel: htf ? "htf1h" : "main", htf_group: htf, in_main: true };
+  });
+
+  const tagHtml = (s, action) => {
+    const backHtf = !!(s.htf_group || s.htfGroup) || String(s.id || "").endsWith("1hStrategy");
+    const title =
+      action === "promote" ? "В основные" : backHtf ? "Вернуть в 1-часовые" : "Вернуть в тестовые";
+    return `<button type="button" class="placement-tag${action === "demote" ? " is-main" : ""}" data-placement-action="${action}" data-strategy="${escapeHtml(s.id)}" data-htf-back="${backHtf ? "1" : "0"}" title="${title}">${escapeHtml(strategyCatalogLabel(s))}${action === "demote" ? " ×" : ""}</button>`;
   };
-  bind(testList);
-  bind(mainList);
+  const empty = (text) => `<span class="placement-tag-empty muted">${text}</span>`;
+  testList.innerHTML = testRows.length ? testRows.map((s) => tagHtml(s, "promote")).join("") : empty("пусто");
+  if (htfList) {
+    htfList.innerHTML = htfRows.length ? htfRows.map((s) => tagHtml(s, "promote")).join("") : empty("пусто");
+  }
+  mainList.innerHTML = displayMainRows.length
+    ? displayMainRows.map((s) => tagHtml(s, "demote")).join("")
+    : empty("пусто");
+  const countEl = $("placement-tags-count");
+  if (countEl) countEl.textContent = String(testRows.length + htfRows.length + displayMainRows.length);
+  const leftHead = $("placement-test-head");
+  if (leftHead) leftHead.textContent = accountKind === "live" && !isAdminUser() ? "В основные" : "Тестовые";
+
+  const root = $("placement-tags") || testList;
+  root.querySelectorAll("[data-placement-action]").forEach((btn) => {
+    btn.addEventListener("click", async (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const id = btn.getAttribute("data-strategy");
+      const action = btn.getAttribute("data-placement-action");
+      if (!id || !action) return;
+      btn.disabled = true;
+      try {
+        const apiAction =
+          action === "promote" ? "promote_strategy_to_main" : "demote_strategy_to_test";
+        const res = await pairConfigApi("/pairs", "POST", {
+          action: apiAction,
+          strategy: id,
+        });
+        syncEnabledFromPayload(res);
+        renderStrategyToggles();
+        updateStrategyDisplay();
+        renderPlacementAdmin(res);
+        const name = strategyLabel(id);
+        const backHtf = btn.getAttribute("data-htf-back") === "1";
+        showPlacementMsg(
+          action === "promote"
+            ? `${name} → Основные (выкл). Включите в панели «Стратегии».`
+            : backHtf
+              ? `${name} → 1-часовые (выкл)`
+              : `${name} → тестовые (выкл)`
+        );
+      } catch (e) {
+        showPlacementMsg(formatApiError(e.message) || String(e), true);
+        btn.disabled = false;
+      }
+    });
+  });
+  bindPlacementTagsOnce();
 }
 
 function syncStrategyRiskFromPayload(data) {
@@ -3320,11 +4341,7 @@ function syncTestSettingsFromPayload(data) {
   if (ts.stoploss_pct != null) testSettings.stoploss_pct = Number(ts.stoploss_pct);
   if (ts.take_profit_pct != null) testSettings.take_profit_pct = Number(ts.take_profit_pct);
   applyPinnedTestSettings();
-  // Test-block max is part of strategy-bot capacity — reflect it on the Strategy card/chip.
-  const tMax = Number(testSettings.max_open_trades) || 0;
-  if (tMax > Number(BOTS.strategy.maxTrades || 0)) {
-    BOTS.strategy.maxTrades = tMax;
-  }
+  // Main and test pools are separate — never overwrite «Открыто (основные)» with test max.
   updateMaxTradesHint();
 }
 
@@ -3341,9 +4358,25 @@ function setSettingsSummary(id, text) {
   if (el) el.textContent = text || "развернуть";
 }
 
+function closedCoin(profit, panel) {
+  if (!profit) return null;
+  if (panel === "test" && profit.profit_closed_test_coin != null) return profit.profit_closed_test_coin;
+  if (panel === "main" && profit.profit_closed_main_coin != null) return profit.profit_closed_main_coin;
+  if (panel === "htf1h" && profit.profit_closed_htf_coin != null) return profit.profit_closed_htf_coin;
+  return profit.profit_closed_coin ?? null;
+}
+
+function fmtClosedProfit(profit, panel) {
+  const coin = closedCoin(profit, panel);
+  if (coin != null && Number.isFinite(Number(coin))) return fmtUsd(coin);
+  const fallback = profit?.profit_closed_percent;
+  if (fallback == null || Number.isNaN(Number(fallback))) return "—";
+  return fmtPct(fallback);
+}
+
 function closedPnlSummaryText(bot) {
   const profit = botLiveCache[bot]?.profit || botLiveCache[bot]?.closedProfitDb;
-  const coin = profit?.profit_closed_coin;
+  const coin = closedCoin(profit, bot === "strategy" ? "main" : null);
   if (coin == null || !Number.isFinite(Number(coin))) return "";
   return ` · PnL ${fmtUsdSigned(coin)}`;
 }
@@ -3455,17 +4488,26 @@ function isTestStrategy(s) {
   return !!(s.test_group || s.testGroup);
 }
 
+function isHtfStrategy(s) {
+  if (!s) return false;
+  if (s.ui_panel) return s.ui_panel === "htf1h";
+  return !!(s.htf_group || s.htfGroup);
+}
+
 function strategyUiPanel(s) {
   if (!s) return "hidden";
   if (s.ui_panel) return s.ui_panel;
+  if (s.htf_group || s.htfGroup) return "htf1h";
   return isTestStrategy(s) ? "test" : "main";
 }
 
-function catalogByGroup(testGroup = false) {
+function catalogByGroup(group = false) {
+  const want =
+    group === true || group === "test" ? "test" : group === "htf1h" ? "htf1h" : "main";
   return strategyCatalog.filter((s) => {
     const panel = strategyUiPanel(s);
     if (panel === "hidden") return false;
-    return testGroup ? panel === "test" : panel === "main";
+    return panel === want;
   });
 }
 
@@ -3514,6 +4556,7 @@ function updateStrategyDisplay() {
   }
 
   updateTestStrategyDisplay();
+  updateHtfStrategyDisplay();
   renderStrategyRiskControls();
   renderTestStrategyRiskControls();
   renderDualHedgeControl();
@@ -3555,6 +4598,28 @@ function updateTestStrategyDisplay() {
       panelSummary.textContent = `${active.length} из ${catalog.length} включено · изменить`;
     }
   }
+}
+
+function updateHtfStrategyDisplay() {
+  const el = $("htf1h-active-name");
+  const panelSummary = $("htf1h-panel-summary");
+  const catalog = catalogByGroup("htf1h");
+  const active = catalog.filter((s) => enabledStrategies[s.id]);
+  if (el) {
+    if (!catalog.length) {
+      el.textContent = isAdminUser()
+        ? "Нет тестовых 1-часовых"
+        : "Нет в основных — добавьте в Настройках, меню «Перенос»";
+    } else if (!active.length) el.textContent = "Все 1-часовые выключены";
+    else if (active.length === 1) el.textContent = strategyCatalogLabel(active[0]);
+    else el.textContent = `${active.length} из ${catalog.length} активны`;
+  }
+  if (panelSummary) {
+    if (!active.length) panelSummary.textContent = "все выкл · развернуть";
+    else if (active.length === 1) panelSummary.textContent = `${strategyCatalogLabel(active[0])} · изменить`;
+    else panelSummary.textContent = `${active.length} из ${catalog.length} включено · изменить`;
+  }
+  renderHtfStakeControls();
 }
 
 const COLLAPSIBLE_STORAGE_KEY = "ct_ui_collapsible_v1";
@@ -3811,6 +4876,10 @@ function renderWhitelist(bot, whitelist) {
     if (testEl) testEl.textContent = pairs.join(", ") || "—";
     const testSummary = $("test-strategy-pairs-summary");
     if (testSummary) testSummary.textContent = whitelistSummaryText(pairs);
+    const htfEl = $("htf1h-pairs");
+    if (htfEl) htfEl.textContent = pairs.join(", ") || "—";
+    const htfSummary = $("htf1h-pairs-summary");
+    if (htfSummary) htfSummary.textContent = whitelistSummaryText(pairs);
   }
 }
 
@@ -3871,7 +4940,7 @@ async function setAllStrategiesEnabled(enabled, { group = "main" } = {}) {
 }
 
 function renderBulkEnableControlsFor(ids, { group = "main", label = "Стратегии", hint = "" } = {}) {
-  const catalog = catalogByGroup(group === "test");
+  const catalog = catalogByGroup(group);
   const activeCount = catalog.filter((s) => enabledStrategies[s.id]).length;
   const total = catalog.length;
   const html = `
@@ -3897,14 +4966,22 @@ function renderBulkEnableControlsFor(ids, { group = "main", label = "Страт�
       onBtn.dataset.bound = "1";
       onBtn.addEventListener("click", async () => {
         const confirmMsg =
-          group === "test" ? "Включить все тестовые стратегии?" : "Включить все стратегии?";
+          group === "test"
+            ? "Включить все тестовые стратегии?"
+            : group === "htf1h"
+              ? "Включить все 1-часовые стратегии?"
+              : "Включить все стратегии?";
         if (!confirm(confirmMsg)) return;
         onBtn.disabled = true;
         if (offBtn) offBtn.disabled = true;
         try {
           await setAllStrategiesEnabled(true, { group });
           const msg =
-            group === "test" ? "Все тестовые стратегии включены" : "Все стратегии включены";
+            group === "test"
+              ? "Все тестовые стратегии включены"
+              : group === "htf1h"
+                ? "Все 1-часовые стратегии включены"
+                : "Все стратегии включены";
           if (isSettingsOpen()) showPairMsg(msg);
         } catch (e) {
           if (e.message === "auth") logout();
@@ -3921,14 +4998,20 @@ function renderBulkEnableControlsFor(ids, { group = "main", label = "Страт�
         const confirmMsg =
           group === "test"
             ? "Выключить все тестовые стратегии?"
-            : "Выключить все стратегии? Новые входы по основным остановятся.";
+            : group === "htf1h"
+              ? "Выключить все 1-часовые стратегии?"
+              : "Выключить все стратегии? Новые входы по основным остановятся.";
         if (!confirm(confirmMsg)) return;
         onBtn.disabled = true;
         offBtn.disabled = true;
         try {
           await setAllStrategiesEnabled(false, { group });
           const msg =
-            group === "test" ? "Все тестовые стратегии выключены" : "Все стратегии выключены";
+            group === "test"
+              ? "Все тестовые стратегии выключены"
+              : group === "htf1h"
+                ? "Все 1-часовые стратегии выключены"
+                : "Все стратегии выключены";
           if (isSettingsOpen()) showPairMsg(msg);
         } catch (e) {
           if (e.message === "auth") logout();
@@ -3954,11 +5037,16 @@ function renderBulkEnableControls() {
     label: "Тестовые",
     hint: "Только тестовый блок · общий strategy-бот · без рестарта",
   });
+  renderBulkEnableControlsFor(["htf1h-enable-bulk"], {
+    group: "htf1h",
+    label: "1-часовые",
+    hint: "Только часовой блок · общий strategy-бот · без рестарта",
+  });
 }
 
 function renderBulkMlConfidenceControlsFor(ids, { group = "main" } = {}) {
   bindMlConfidenceMenusOnce();
-  const catalog = catalogByGroup(group === "test");
+  const catalog = catalogByGroup(group);
   const choices = bulkMlConfidenceChoices();
   const common = (() => {
     const vals = catalog.map((s) => Number(mlConfidenceStrategies[s.id])).filter(Number.isFinite);
@@ -4082,6 +5170,39 @@ function renderBulkMlConfidenceControls() {
   });
 }
 
+function entrySideLabel(side) {
+  if (side === "long") return "Лонг";
+  if (side === "short") return "Шорт";
+  return "Оба";
+}
+
+function renderEntrySideControl(id) {
+  const current = entrySideStrategies[id] === "long" || entrySideStrategies[id] === "short"
+    ? entrySideStrategies[id]
+    : "both";
+  const options = [
+    ["both", "Оба"],
+    ["long", "Лонг"],
+    ["short", "Шорт"],
+  ]
+    .map(([value, label]) => {
+      const isCur = value === current;
+      return `<button type="button" class="strategy-ml-conf-option${isCur ? " is-selected" : ""}" data-strategy-entry-side-option="${id}" data-value="${value}" role="option" aria-selected="${isCur ? "true" : "false"}">${label}</button>`;
+    })
+    .join("");
+  return `
+    <div class="strategy-ml-conf strategy-entry-side" data-strategy-entry-side-wrap="${id}">
+      <button type="button" class="strategy-ml-conf-btn" data-strategy-entry-side-btn="${id}" aria-haspopup="listbox" aria-expanded="false" title="Какие сделки открывать: лонг, шорт или оба направления. Считается уже после инверсии.">
+        <span class="strategy-ml-conf-label">Направление</span>
+        <span class="strategy-ml-conf-value" data-side="${current}">${entrySideLabel(current)}</span>
+        <span class="strategy-ml-conf-caret" aria-hidden="true">▾</span>
+      </button>
+      <div class="strategy-ml-conf-menu" data-strategy-entry-side-menu="${id}" hidden role="listbox" aria-label="Направление">
+        ${options}
+      </div>
+    </div>`;
+}
+
 function renderMlConfidenceControl(id) {
   const pct = mlConfidencePct(id);
   const defPct = Math.round((Number(mlConfidenceDefaults[id]) || 0.55) * 100);
@@ -4107,6 +5228,149 @@ function renderMlConfidenceControl(id) {
     </div>`;
 }
 
+function strategyPairsFor(id) {
+  const list = strategyPairsMap[id];
+  return Array.isArray(list) ? list : [];
+}
+
+function pairBaseLabel(pair) {
+  const raw = String(pair || "");
+  const base = raw.split("/")[0] || raw;
+  return base.replace(/:USDT$/i, "");
+}
+
+function renderTestStrategyAllPairs() {
+  return `
+    <div class="strategy-tickers strategy-tickers-all">
+      <div class="strategy-tickers-btn is-static" title="Тестовый блок смотрит все пары общего списка. Выбранные тикеры действуют только в «Основных».">
+        <span class="strategy-tickers-label">Тикеры</span>
+        <span class="strategy-tickers-value">все пары</span>
+      </div>
+    </div>`;
+}
+
+function renderStrategyTickersControl(id, { emptyMeansAll = false } = {}) {
+  const pairs = strategyPairsFor(id);
+  const n = pairs.length;
+  const showAll = emptyMeansAll && n === 0;
+  const chips = pairs.length
+    ? pairs
+        .map(
+          (p) => `
+      <li class="strategy-tickers-item">
+        <span class="strategy-tickers-pair" title="${escapeHtml(p)}">${escapeHtml(pairBaseLabel(p))}</span>
+        <button type="button" class="strategy-tickers-remove" data-strategy-ticker-remove="${id}" data-pair="${escapeHtml(p)}" title="Убрать ${escapeHtml(pairBaseLabel(p))}" ${settingsReadonly || demoMirrorAdmin ? "disabled" : ""}>×</button>
+      </li>`
+        )
+        .join("")
+    : showAll
+      ? `<li class="strategy-tickers-empty muted">Пока пусто — торгуются все пары общего списка. Добавьте тикер, чтобы оставить только выбранные.</li>`
+      : `<li class="strategy-tickers-empty muted">Нет тикеров — стратегия не торгует</li>`;
+  const valueLabel = showAll ? "все" : String(n);
+  const title = showAll
+    ? "Тикеры этой стратегии. Пустой список — все пары общего белого списка."
+    : "Тикеры этой стратегии. Пустой список — стратегия не открывает сделки.";
+  return `
+    <div class="strategy-tickers" data-strategy-tickers-wrap="${id}">
+      <button type="button" class="strategy-tickers-btn" data-strategy-tickers-btn="${id}" aria-haspopup="dialog" aria-expanded="false" title="${title}">
+        <span class="strategy-tickers-label">Тикеры</span>
+        <span class="strategy-tickers-value">${valueLabel}</span>
+        <span class="strategy-tickers-caret" aria-hidden="true">▾</span>
+      </button>
+      <div class="strategy-tickers-panel" data-strategy-tickers-panel="${id}" hidden>
+        <div class="strategy-tickers-head">Тикеры · ${escapeHtml(strategyLabel(id))}</div>
+        <ul class="strategy-tickers-list">${chips}</ul>
+        <form class="strategy-tickers-add" data-strategy-ticker-add-form="${id}">
+          <input type="text" class="strategy-tickers-input" data-strategy-ticker-input="${id}" placeholder="BTC или BTC/USDT:USDT" ${settingsReadonly || demoMirrorAdmin ? "disabled" : ""} autocomplete="off" />
+          <button type="submit" class="btn btn-sm" ${settingsReadonly || demoMirrorAdmin ? "disabled" : ""}>Добавить</button>
+        </form>
+      </div>
+    </div>`;
+}
+
+function resetStrategyTickersPanelPosition(panel) {
+  if (!panel) return;
+  panel.classList.remove("opens-up");
+  panel.style.position = "";
+  panel.style.left = "";
+  panel.style.right = "";
+  panel.style.top = "";
+  panel.style.bottom = "";
+  panel.style.width = "";
+  panel.style.maxWidth = "";
+  panel.style.maxHeight = "";
+  panel.style.zIndex = "";
+}
+
+function positionStrategyTickersPanel(wrap, panel) {
+  if (!wrap || !panel || panel.hidden) return;
+  const btn = wrap.querySelector("[data-strategy-tickers-btn], .strategy-tickers-btn");
+  const anchor = btn || wrap;
+  // Leave the document flow before measuring. Otherwise the open list
+  // inflates the wrap and the popup is pinned over the next panel.
+  panel.style.position = "fixed";
+  const rect = anchor.getBoundingClientRect();
+  const pad = 8;
+  const viewW = window.innerWidth || document.documentElement.clientWidth;
+  const viewH = window.innerHeight || document.documentElement.clientHeight;
+  const width = Math.min(Math.max(rect.width, 240), viewW - pad * 2);
+  const maxH = Math.min(18 * 16, viewH * 0.5, 320);
+
+  panel.style.right = "auto";
+  panel.style.bottom = "auto";
+  panel.style.zIndex = "230";
+  panel.style.width = `${Math.round(width)}px`;
+  panel.style.maxWidth = `${Math.round(viewW - pad * 2)}px`;
+  panel.style.maxHeight = `${Math.round(maxH)}px`;
+  panel.style.left = `${Math.round(Math.max(pad, Math.min(rect.left, viewW - pad - width)))}px`;
+  panel.style.top = "0px";
+
+  const panelH = Math.min(panel.scrollHeight || maxH, maxH);
+  const spaceBelow = viewH - pad - rect.bottom;
+  const spaceAbove = rect.top - pad;
+  let top = rect.bottom + 4;
+  panel.classList.remove("opens-up");
+  if (panelH > spaceBelow && spaceAbove > spaceBelow) {
+    top = rect.top - 4 - panelH;
+    panel.classList.add("opens-up");
+  }
+  if (top < pad) top = pad;
+  if (top + panelH > viewH - pad) {
+    panel.style.maxHeight = `${Math.round(Math.max(140, viewH - pad - top))}px`;
+  }
+  panel.style.top = `${Math.round(top)}px`;
+}
+
+function closeAllStrategyTickersPanels(exceptId = null) {
+  document.querySelectorAll("[data-strategy-tickers-wrap]").forEach((wrap) => {
+    const id = wrap.getAttribute("data-strategy-tickers-wrap");
+    if (exceptId && id === exceptId) return;
+    const panel = wrap.querySelector("[data-strategy-tickers-panel]");
+    const btn = wrap.querySelector("[data-strategy-tickers-btn]");
+    if (panel) {
+      panel.hidden = true;
+      resetStrategyTickersPanelPosition(panel);
+    }
+    if (btn) btn.setAttribute("aria-expanded", "false");
+    wrap.classList.remove("is-open");
+    wrap.closest(".strategy-toggle-item")?.classList.remove("is-tickers-open");
+  });
+}
+
+function parkPickerMenu(menu) {
+  if (!menu || menu.dataset.pickerParked) return;
+  menu._pickerHome = menu.parentElement;
+  menu.dataset.pickerParked = "1";
+  document.body.appendChild(menu);
+}
+
+function restorePickerMenu(menu) {
+  if (!menu?.dataset.pickerParked) return;
+  if (menu._pickerHome) menu._pickerHome.appendChild(menu);
+  delete menu.dataset.pickerParked;
+  menu._pickerHome = null;
+}
+
 function resetMlConfidenceMenuPosition(menu) {
   if (!menu) return;
   menu.classList.remove("opens-up");
@@ -4119,52 +5383,71 @@ function resetMlConfidenceMenuPosition(menu) {
   menu.style.maxWidth = "";
   menu.style.maxHeight = "";
   menu.style.zIndex = "";
+  restorePickerMenu(menu);
+  menu.closest(".strategy-toggle-item")?.classList.remove("is-ml-conf-open");
 }
 
 function positionMlConfidenceMenu(wrap, menu) {
   if (!wrap || !menu || menu.hidden) return;
   const btn = wrap.querySelector(
-    "[data-strategy-ml-confidence-btn], [data-ml-conf-bulk-btn]"
+    "[data-strategy-ml-confidence-btn], [data-ml-conf-bulk-btn], [data-strategy-sltp-btn], [data-strategy-entry-side-btn]"
   );
   const anchor = btn || wrap;
   const rect = anchor.getBoundingClientRect();
   const pad = 8;
   const viewW = window.innerWidth || document.documentElement.clientWidth;
   const viewH = window.innerHeight || document.documentElement.clientHeight;
-  const width = Math.min(rect.width, viewW - pad * 2);
-  const maxH = Math.min(14 * 16, viewH * 0.45, 224);
+  const width = Math.max(112, Math.min(Math.max(rect.width, 112), viewW - pad * 2));
 
   menu.style.position = "fixed";
   menu.style.right = "auto";
   menu.style.bottom = "auto";
-  menu.style.zIndex = "220";
+  menu.style.zIndex = "400";
   menu.style.width = `${Math.round(width)}px`;
   menu.style.maxWidth = `${Math.round(viewW - pad * 2)}px`;
-  menu.style.maxHeight = `${Math.round(maxH)}px`;
+  menu.style.maxHeight = "none";
   menu.style.left = `${Math.round(Math.max(pad, Math.min(rect.left, viewW - pad - width)))}px`;
   menu.style.top = "0px";
 
-  const menuH = Math.min(menu.scrollHeight || maxH, maxH);
-  const spaceBelow = viewH - pad - rect.bottom;
-  const spaceAbove = rect.top - pad;
-  let top = rect.bottom + 4;
-  menu.classList.remove("opens-up");
-  if (menuH > spaceBelow && spaceAbove > spaceBelow) {
-    top = rect.top - 4 - menuH;
-    menu.classList.add("opens-up");
-  }
+  parkPickerMenu(menu);
+  const contentH = menu.scrollHeight || 0;
+  const spaceBelow = Math.max(0, viewH - rect.bottom - pad - 4);
+  const spaceAbove = Math.max(0, rect.top - pad - 4);
+  const want = Math.min(contentH || 320, 360);
+  const openUp = spaceBelow < want && spaceAbove >= spaceBelow;
+  const room = openUp ? spaceAbove : spaceBelow;
+  const maxH = Math.min(want, Math.max(room, 96));
+  menu.classList.toggle("opens-up", openUp);
+  menu.style.maxHeight = `${Math.round(maxH)}px`;
+  const shown = Math.min(contentH || maxH, maxH);
+  let top = openUp ? rect.top - 4 - shown : rect.bottom + 4;
   if (top < pad) top = pad;
-  if (top + menuH > viewH - pad) {
-    menu.style.maxHeight = `${Math.round(Math.max(120, viewH - pad - top))}px`;
-  }
+  if (top + shown > viewH - pad) top = Math.max(pad, viewH - pad - shown);
   menu.style.top = `${Math.round(top)}px`;
+  const selected = menu.querySelector(".is-selected");
+  if (selected) {
+    const topEdge = selected.offsetTop;
+    const bottomEdge = topEdge + selected.offsetHeight;
+    if (topEdge < menu.scrollTop) menu.scrollTop = topEdge;
+    else if (bottomEdge > menu.scrollTop + menu.clientHeight) {
+      menu.scrollTop = bottomEdge - menu.clientHeight;
+    }
+  }
+}
+
+function pickerMenu(wrap, wrapAttr, menuAttr) {
+  const id = wrap.getAttribute(wrapAttr);
+  const local = wrap.querySelector(`[${menuAttr}]`);
+  if (local) return local;
+  if (!id || typeof CSS === "undefined" || !CSS.escape) return null;
+  return document.querySelector(`[${menuAttr}="${CSS.escape(id)}"]`);
 }
 
 function closeAllMlConfidenceMenus(exceptId) {
   document.querySelectorAll("[data-strategy-ml-confidence-wrap]").forEach((wrap) => {
     const id = wrap.getAttribute("data-strategy-ml-confidence-wrap");
     if (exceptId && id === exceptId) return;
-    const menu = wrap.querySelector("[data-strategy-ml-confidence-menu]");
+    const menu = pickerMenu(wrap, "data-strategy-ml-confidence-wrap", "data-strategy-ml-confidence-menu");
     const btn = wrap.querySelector("[data-strategy-ml-confidence-btn]");
     if (menu) {
       menu.hidden = true;
@@ -4179,8 +5462,32 @@ function closeAllMlConfidenceMenus(exceptId) {
       ? String(exceptId).slice("__bulk_".length)
       : null;
     if (exceptKey && key === exceptKey) return;
-    const menu = wrap.querySelector("[data-ml-conf-bulk-menu]");
+    const menu = pickerMenu(wrap, "data-ml-conf-bulk-wrap", "data-ml-conf-bulk-menu");
     const btn = wrap.querySelector("[data-ml-conf-bulk-btn]");
+    if (menu) {
+      menu.hidden = true;
+      resetMlConfidenceMenuPosition(menu);
+    }
+    if (btn) btn.setAttribute("aria-expanded", "false");
+    wrap.classList.remove("is-open");
+  });
+  document.querySelectorAll("[data-strategy-entry-side-wrap]").forEach((wrap) => {
+    const id = wrap.getAttribute("data-strategy-entry-side-wrap");
+    if (exceptId && exceptId === `entry:${id}`) return;
+    const menu = pickerMenu(wrap, "data-strategy-entry-side-wrap", "data-strategy-entry-side-menu");
+    const btn = wrap.querySelector("[data-strategy-entry-side-btn]");
+    if (menu) {
+      menu.hidden = true;
+      resetMlConfidenceMenuPosition(menu);
+    }
+    if (btn) btn.setAttribute("aria-expanded", "false");
+    wrap.classList.remove("is-open");
+  });
+  document.querySelectorAll("[data-strategy-sltp-wrap]").forEach((wrap) => {
+    const id = wrap.getAttribute("data-strategy-sltp-wrap");
+    if (exceptId && id === exceptId) return;
+    const menu = pickerMenu(wrap, "data-strategy-sltp-wrap", "data-strategy-sltp-menu");
+    const btn = wrap.querySelector("[data-strategy-sltp-btn]");
     if (menu) {
       menu.hidden = true;
       resetMlConfidenceMenuPosition(menu);
@@ -4196,46 +5503,112 @@ function bindMlConfidenceMenusOnce() {
   document.addEventListener("click", (ev) => {
     const t = ev.target;
     if (!(t instanceof Element)) return;
-    if (t.closest("[data-strategy-ml-confidence-wrap], [data-ml-conf-bulk-wrap]")) return;
+    if (t.closest("[data-strategy-ml-confidence-wrap], [data-ml-conf-bulk-wrap], [data-strategy-sltp-wrap], [data-strategy-entry-side-wrap], .strategy-ml-conf-menu")) return;
     closeAllMlConfidenceMenus();
+    if (t.closest("[data-strategy-tickers-wrap], [data-llm-tickers-wrap]")) return;
+    closeAllStrategyTickersPanels();
+    closeLlmTickersPanel();
   });
   document.addEventListener("keydown", (ev) => {
-    if (ev.key === "Escape") closeAllMlConfidenceMenus();
+    if (ev.key === "Escape") {
+      closeAllMlConfidenceMenus();
+      closeAllStrategyTickersPanels();
+      closeLlmTickersPanel();
+    }
   });
 }
 
-function renderStrategyTogglesInto(container, { testGroup = false } = {}) {
+function fmtSltpPct(n) {
+  const v = Math.round(Number(n) * 10) / 10;
+  if (!Number.isFinite(v)) return "—";
+  return Number.isInteger(v) ? String(v) : v.toFixed(1);
+}
+
+function strategySltpEffective(id, key) {
+  const stored = htfSltp[id];
+  if (stored && stored[key] != null && Number.isFinite(Number(stored[key]))) {
+    return { value: Number(stored[key]), source: "custom" };
+  }
+  const def = htfSltpDefaults[id] && htfSltpDefaults[id][key];
+  const n = Number(def);
+  return {
+    value: Number.isFinite(n) ? n : key === "sl" ? 5 : 10,
+    source: isHtfStrategyId(id) ? "htf" : "block",
+  };
+}
+
+function htfSltpValue(id, key) {
+  return strategySltpEffective(id, key).value;
+}
+
+function renderStrategySltpControl(id) {
+  const picker = (key, label) => {
+    const shown = strategySltpEffective(id, key);
+    const cur = shown.value;
+    const def = Number(htfSltpDefaults[id] && htfSltpDefaults[id][key]);
+    const base = key === "tp" ? sltpTpChoices : sltpSlChoices;
+    const values = [...new Set(base.map(Number).concat(Number.isFinite(cur) ? [cur] : []))].sort(
+      (a, b) => a - b
+    );
+    const options = values
+      .map((v) => {
+        const n = Number(v);
+        const isCur = Math.abs(n - cur) < 0.05;
+        const isDef = Number.isFinite(def) && Math.abs(n - def) < 0.05;
+        const mark = isCur && shown.source === "trained" ? " (обучение)" : isDef ? " (стандарт)" : "";
+        return `<button type="button" class="strategy-ml-conf-option${isCur ? " is-selected" : ""}" data-strategy-sltp-option="${id}" data-sltp-key="${key}" data-value="${n}" role="option" aria-selected="${isCur ? "true" : "false"}">${fmtSltpPct(n)}%${mark}</button>`;
+      })
+      .join("");
+    return `
+      <div class="strategy-ml-conf" data-strategy-sltp-wrap="${id}-${key}">
+        <button type="button" class="strategy-ml-conf-btn" data-strategy-sltp-btn="${id}-${key}" aria-haspopup="listbox" aria-expanded="false" title="${label} этой стратегии. Свой выбор важнее общих SL/TP и обучения.">
+          <span class="strategy-ml-conf-label">${label}</span>
+          <span class="strategy-ml-conf-value">${fmtSltpPct(cur)}%</span>
+          <span class="strategy-ml-conf-caret" aria-hidden="true">▾</span>
+        </button>
+        <div class="strategy-ml-conf-menu" data-strategy-sltp-menu="${id}-${key}" hidden role="listbox" aria-label="${label}">
+          ${options}
+        </div>
+      </div>`;
+  };
+  return `<div class="strategy-htf-sltp">${picker("sl", "Стоп")}${picker("tp", "Тейк")}</div>`;
+}
+
+function renderStrategyTogglesInto(container, { testGroup = false, group = "" } = {}) {
   if (!container) return;
   bindMlConfidenceMenusOnce();
-  const catalog = catalogByGroup(testGroup);
+  const panelGroup = group || (testGroup ? "test" : "main");
+  const catalog = catalogByGroup(panelGroup);
   if (!catalog.length) {
-    container.innerHTML = testGroup
-      ? `<li class="strategy-toggle-item strategy-panel-empty"><span class="muted">Нет стратегий в тестовом блоке</span></li>`
-      : `<li class="strategy-toggle-item strategy-panel-empty"><span class="muted">Нет стратегий в основном блоке — админ может перенести из «Тестовые» в Настройках</span></li>`;
+    const empty =
+      panelGroup === "htf1h"
+        ? isAdminUser()
+          ? "Нет тестовых 1-часовых"
+          : "Нет 1-часовых в основных — добавьте в Настройках, меню «Перенос»"
+        : panelGroup === "test"
+          ? "Нет стратегий в тестовом блоке — перенесите из Основных в Настройках («Перенос»)"
+          : "Нет стратегий в Основных — добавьте в Настройках («Перенос»). На Live список не синхронизируется с Demo";
+    container.innerHTML = `<li class="strategy-toggle-item strategy-panel-empty"><span class="muted">${empty}</span></li>`;
     return;
   }
   container.innerHTML = catalog
     .map((s) => {
-      const hasTrain = !!trainedRiskAvailable[s.id] || !!trainedRiskSpecs[s.id];
       const trainOn = !!trainedRiskStrategies[s.id];
-      const trainHint = trainedRiskHint(s.id);
-      const trainRow = hasTrain
-        ? `
-      <label class="strategy-invert-switch strategy-trained-risk-switch${trainOn ? " is-on" : ""}" title="SL/TP из обучения (player_scenarios). Выкл = глобальные SL/TP.">
-        <span class="strategy-invert-text">SL/TP из обучения${trainHint ? ` <span class="muted">(${trainHint})</span>` : ""}</span>
+      const trainRow = `
+      <label class="strategy-invert-switch strategy-trained-risk-switch${trainOn ? " is-on" : ""}" title="Включено — стоп и тейк, выбранные на этой строке. Выключено — общий SL/TP.">
+        <span class="strategy-invert-text">Свой SL/TP</span>
         <input type="checkbox" data-strategy-trained-risk="${s.id}" ${trainOn ? "checked" : ""} />
         <span class="strategy-invert-slider" aria-hidden="true"></span>
-      </label>`
-        : "";
+      </label>`;
       const descHint = s.desc ? uiHintHtml(escapeHtml(s.desc)) : "";
       return `
     <li class="strategy-toggle-item${invertedStrategies[s.id] ? " is-inverted" : ""}${trainOn ? " is-trained-risk" : ""}">
       <div class="strategy-toggle-main">
         <label class="strategy-toggle-label">
-          <input type="checkbox" data-strategy="${s.id}" ${enabledStrategies[s.id] ? "checked" : ""} />
+          <input type="checkbox" data-strategy="${s.id}" ${enabledStrategies[s.id] ? "checked" : ""} ${settingsReadonly || demoMirrorAdmin ? "disabled" : ""} />
           <span class="strategy-toggle-text">
             <span class="strategy-toggle-title-row">
-              <strong>${strategyCatalogLabel(s)}${invertedStrategies[s.id] ? ' <span class="strategy-inv-badge">инв</span>' : ""}${trainOn ? ' <span class="strategy-train-badge">train SL/TP</span>' : ""} <span class="strategy-ml-badge">ML ${mlConfidencePct(s.id)}%</span></strong>
+              <strong>${strategyCatalogLabel(s)}${invertedStrategies[s.id] ? ' <span class="strategy-inv-badge">инв</span>' : ""}${entrySideStrategies[s.id] === "long" ? ' <span class="strategy-side-badge is-long">лонг</span>' : entrySideStrategies[s.id] === "short" ? ' <span class="strategy-side-badge is-short">шорт</span>' : ""} <span class="strategy-ml-badge">ML ${mlConfidencePct(s.id)}%</span></strong>
               ${descHint}
             </span>
           </span>
@@ -4247,6 +5620,13 @@ function renderStrategyTogglesInto(container, { testGroup = false } = {}) {
         <span class="strategy-invert-slider" aria-hidden="true"></span>
       </label>
       ${trainRow}
+      ${group === "htf1h"
+        ? renderStrategyTickersControl(s.id, { emptyMeansAll: !isAdminUser() || !s.in_main })
+        : testGroup
+          ? renderTestStrategyAllPairs()
+          : renderStrategyTickersControl(s.id, { emptyMeansAll: !isAdminUser() })}
+      ${renderStrategySltpControl(s.id)}
+      ${renderEntrySideControl(s.id)}
       ${renderMlConfidenceControl(s.id)}
     </li>`;
     })
@@ -4258,16 +5638,101 @@ function renderStrategyTogglesInto(container, { testGroup = false } = {}) {
     hint.addEventListener("mousedown", (ev) => ev.preventDefault());
   });
 
+  container.querySelectorAll("[data-strategy-tickers-btn]").forEach((btn) => {
+    btn.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const id = btn.getAttribute("data-strategy-tickers-btn");
+      const wrap = btn.closest("[data-strategy-tickers-wrap]");
+      const panel = wrap?.querySelector("[data-strategy-tickers-panel]");
+      const card = wrap?.closest(".strategy-toggle-item");
+      if (!panel) return;
+      const willOpen = panel.hidden;
+      closeAllStrategyTickersPanels(willOpen ? id : null);
+      closeLlmTickersPanel();
+      closeAllMlConfidenceMenus();
+      panel.hidden = !willOpen;
+      btn.setAttribute("aria-expanded", willOpen ? "true" : "false");
+      wrap?.classList.toggle("is-open", willOpen);
+      card?.classList.toggle("is-tickers-open", willOpen);
+      if (willOpen) {
+        requestAnimationFrame(() => {
+          positionStrategyTickersPanel(wrap, panel);
+          const input = wrap.querySelector("[data-strategy-ticker-input]");
+          if (input && !input.disabled) input.focus();
+        });
+      } else {
+        resetStrategyTickersPanelPosition(panel);
+      }
+    });
+  });
+
+  container.querySelectorAll("[data-strategy-ticker-remove]").forEach((btn) => {
+    btn.addEventListener("click", async (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (settingsReadonly || demoMirrorAdmin) return;
+      const id = btn.getAttribute("data-strategy-ticker-remove");
+      const pair = btn.getAttribute("data-pair");
+      if (!id || !pair) return;
+      btn.disabled = true;
+      try {
+        const data = await pairConfigApi("/pairs", "POST", {
+          action: "remove_strategy_pair",
+          strategy: id,
+          pair,
+        });
+        syncEnabledFromPayload(data);
+        updateStrategyDisplay();
+        renderStrategyToggles();
+        const msg = `${strategyLabel(id)}: убран ${pairBaseLabel(pair)}`;
+        if (isSettingsOpen()) showPairMsg(msg);
+      } catch (e) {
+        if (e.message === "auth") logout();
+        else alert(formatApiError(e.message));
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  });
+
+  container.querySelectorAll("[data-strategy-ticker-add-form]").forEach((form) => {
+    form.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (settingsReadonly || demoMirrorAdmin) return;
+      const id = form.getAttribute("data-strategy-ticker-add-form");
+      const input = form.querySelector("[data-strategy-ticker-input]");
+      const raw = String(input?.value || "").trim();
+      if (!id || !raw) return;
+      const submitBtn = form.querySelector("button[type=submit]");
+      if (submitBtn) submitBtn.disabled = true;
+      if (input) input.disabled = true;
+      try {
+        const data = await pairConfigApi("/pairs", "POST", {
+          action: "add_strategy_pair",
+          strategy: id,
+          pair: raw,
+        });
+        syncEnabledFromPayload(data);
+        updateStrategyDisplay();
+        renderStrategyToggles();
+        const msg = `${strategyLabel(id)}: добавлен ${pairBaseLabel(raw)}`;
+        if (isSettingsOpen()) showPairMsg(msg);
+      } catch (e) {
+        if (e.message === "auth") logout();
+        else alert(formatApiError(e.message));
+      } finally {
+        if (submitBtn) submitBtn.disabled = false;
+        if (input) input.disabled = false;
+      }
+    });
+  });
+
   container.querySelectorAll('input[data-strategy]').forEach((cb) => {
     cb.addEventListener("change", async () => {
       const id = cb.dataset.strategy;
       const next = cb.checked;
-      const activeCount = Object.values(enabledStrategies).filter(Boolean).length;
-      if (!next && activeCount <= 1 && enabledStrategies[id]) {
-        cb.checked = true;
-        alert("Должна остаться включённой хотя бы одна стратегия");
-        return;
-      }
       document.querySelectorAll(`input[data-strategy="${id}"]`).forEach((el) => {
         el.disabled = true;
       });
@@ -4345,7 +5810,7 @@ function renderStrategyTogglesInto(container, { testGroup = false } = {}) {
         syncEnabledFromPayload(data);
         updateStrategyDisplay();
         renderStrategyToggles();
-        const msg = `${strategyLabel(id)}: SL/TP из обучения ${next ? "вкл" : "выкл (глобальные)"}`;
+        const msg = `${strategyLabel(id)}: свой SL/TP ${next ? "вкл" : "выкл, берётся общий"}`;
         if (isSettingsOpen()) showPairMsg(msg);
       } catch (e) {
         document.querySelectorAll(`input[data-strategy-trained-risk="${id}"]`).forEach((el) => {
@@ -4355,6 +5820,65 @@ function renderStrategyTogglesInto(container, { testGroup = false } = {}) {
         else alert(formatApiError(e.message));
       } finally {
         document.querySelectorAll(`input[data-strategy-trained-risk="${id}"]`).forEach((el) => {
+          el.disabled = false;
+        });
+      }
+    });
+  });
+
+  container.querySelectorAll("[data-strategy-entry-side-btn]").forEach((btn) => {
+    btn.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const id = btn.getAttribute("data-strategy-entry-side-btn");
+      const wrap = btn.closest("[data-strategy-entry-side-wrap]");
+      const menu = wrap?.querySelector("[data-strategy-entry-side-menu]");
+      if (!menu) return;
+      const willOpen = menu.hidden;
+      closeAllMlConfidenceMenus(willOpen ? `entry:${id}` : null);
+      closeAllStrategyTickersPanels();
+      menu.hidden = !willOpen;
+      btn.setAttribute("aria-expanded", willOpen ? "true" : "false");
+      wrap?.classList.toggle("is-open", willOpen);
+      if (willOpen) {
+        wrap?.closest(".strategy-toggle-item")?.classList.add("is-ml-conf-open");
+        requestAnimationFrame(() => positionMlConfidenceMenu(wrap, menu));
+      } else {
+        resetMlConfidenceMenuPosition(menu);
+      }
+    });
+  });
+
+  container.querySelectorAll("[data-strategy-entry-side-option]").forEach((opt) => {
+    opt.addEventListener("click", async (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const id = opt.getAttribute("data-strategy-entry-side-option");
+      const value = opt.getAttribute("data-value");
+      if (!id || (value !== "both" && value !== "long" && value !== "short")) return;
+      const prev = entrySideStrategies[id] || "both";
+      entrySideStrategies[id] = value;
+      closeAllMlConfidenceMenus();
+      document.querySelectorAll(`[data-strategy-entry-side-btn="${id}"]`).forEach((el) => {
+        el.disabled = true;
+      });
+      try {
+        const data = await pairConfigApi("/pairs", "POST", {
+          action: "set_strategy_entry_side",
+          strategy: id,
+          entry_side: value,
+        });
+        syncEnabledFromPayload(data);
+        updateStrategyDisplay();
+        renderStrategyToggles();
+        const msg = `${strategyLabel(id)}: направление ${entrySideLabel(value).toLowerCase()}`;
+        if (isSettingsOpen()) showPairMsg(msg);
+      } catch (e) {
+        entrySideStrategies[id] = prev;
+        if (e.message === "auth") logout();
+        else alert(formatApiError(e.message));
+      } finally {
+        document.querySelectorAll(`[data-strategy-entry-side-btn="${id}"]`).forEach((el) => {
           el.disabled = false;
         });
       }
@@ -4371,10 +5895,12 @@ function renderStrategyTogglesInto(container, { testGroup = false } = {}) {
       if (!menu) return;
       const willOpen = menu.hidden;
       closeAllMlConfidenceMenus(willOpen ? id : null);
+      closeAllStrategyTickersPanels();
       menu.hidden = !willOpen;
       btn.setAttribute("aria-expanded", willOpen ? "true" : "false");
       wrap?.classList.toggle("is-open", willOpen);
       if (willOpen) {
+        wrap?.closest(".strategy-toggle-item")?.classList.add("is-ml-conf-open");
         // Next frame so layout is applied before measuring.
         requestAnimationFrame(() => positionMlConfidenceMenu(wrap, menu));
       } else {
@@ -4410,10 +5936,64 @@ function renderStrategyTogglesInto(container, { testGroup = false } = {}) {
         mlConfidenceStrategies[id] = prev;
         if (e.message === "auth") logout();
         else alert(formatApiError(e.message));
-      } finally {
+      }       finally {
         document.querySelectorAll(`[data-strategy-ml-confidence-btn="${id}"]`).forEach((el) => {
           el.disabled = false;
         });
+      }
+    });
+  });
+
+  container.querySelectorAll("[data-strategy-sltp-btn]").forEach((btn) => {
+    btn.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const key = btn.getAttribute("data-strategy-sltp-btn");
+      const wrap = btn.closest("[data-strategy-sltp-wrap]");
+      const menu = wrap?.querySelector("[data-strategy-sltp-menu]");
+      if (!menu) return;
+      const willOpen = menu.hidden;
+      closeAllMlConfidenceMenus(willOpen ? key : null);
+      closeAllStrategyTickersPanels();
+      menu.hidden = !willOpen;
+      btn.setAttribute("aria-expanded", willOpen ? "true" : "false");
+      wrap?.classList.toggle("is-open", willOpen);
+      if (willOpen) requestAnimationFrame(() => positionMlConfidenceMenu(wrap, menu));
+      else resetMlConfidenceMenuPosition(menu);
+    });
+  });
+
+  container.querySelectorAll("[data-strategy-sltp-option]").forEach((opt) => {
+    opt.addEventListener("click", async (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const id = opt.getAttribute("data-strategy-sltp-option");
+      const key = opt.getAttribute("data-sltp-key");
+      const value = Number(opt.getAttribute("data-value"));
+      if (!id || (key !== "sl" && key !== "tp") || !Number.isFinite(value)) return;
+      const prev = htfSltp[id] ? { ...htfSltp[id] } : null;
+      const next = {
+        sl: key === "sl" ? value : htfSltpValue(id, "sl"),
+        tp: key === "tp" ? value : htfSltpValue(id, "tp"),
+      };
+      htfSltp[id] = next;
+      closeAllMlConfidenceMenus();
+      try {
+        const data = await pairConfigApi("/pairs", "POST", {
+          action: "set_strategy_sltp",
+          strategy: id,
+          sl: next.sl,
+          tp: next.tp,
+        });
+        syncEnabledFromPayload(data);
+        updateStrategyDisplay();
+        renderStrategyToggles();
+        if (isSettingsOpen()) showPairMsg(`${strategyLabel(id)}: стоп −${next.sl}% · тейк +${next.tp}%`);
+      } catch (e) {
+        if (prev) htfSltp[id] = prev;
+        else delete htfSltp[id];
+        if (e.message === "auth") logout();
+        else alert(formatApiError(e.message));
       }
     });
   });
@@ -4424,6 +6004,7 @@ function renderStrategyToggles() {
   renderBulkMlConfidenceControls();
   renderStrategyTogglesInto($("strategy-panel-toggles"), { testGroup: false });
   renderStrategyTogglesInto($("test-strategy-panel-toggles"), { testGroup: true });
+  renderStrategyTogglesInto($("htf1h-panel-toggles"), { group: "htf1h" });
 }
 
 async function refreshStrategyEnabled() {
@@ -4454,7 +6035,7 @@ function renderStrategyRiskInputHtml() {
   const sl = Number(strategyRisk.stoploss_pct);
   const tp = Number(strategyRisk.take_profit_pct);
   const hint = uiHintHtml(
-    `Глобальные SL/TP (если у стратегии выкл. «SL/TP из обучения»). Диапазон: SL ${STRATEGY_SL_MIN}–${STRATEGY_SL_MAX}% · TP ${STRATEGY_TP_MIN}–${STRATEGY_TP_MAX}%.`
+    `Общий SL/TP. Используется, когда у стратегии выключен «Свой SL/TP». Диапазон: SL ${STRATEGY_SL_MIN}–${STRATEGY_SL_MAX}% · TP ${STRATEGY_TP_MIN}–${STRATEGY_TP_MAX}%.`
   );
   return `
     <div class="strategy-risk-bar-inner">
@@ -4491,7 +6072,7 @@ function renderTestStrategyRiskInputHtml() {
   const sl = Number(testSettings.stoploss_pct);
   const tp = Number(testSettings.take_profit_pct);
   const hint = uiHintHtml(
-    "Только тестовый блок. Если у стратегии выкл. «SL/TP из обучения» — эти значения; иначе TAG_RISK из обучения."
+    "Общий SL/TP тестового блока. Используется, когда у стратегии выключен «Свой SL/TP»."
   );
   return `
     <div class="strategy-risk-bar-inner">
@@ -4529,6 +6110,7 @@ async function setTestStrategySettings(patch) {
   syncEnabledFromPayload(data);
   syncTestSettingsFromPayload(data);
   updateStrategyDisplay();
+  renderStrategyToggles();
   renderTestStrategyRiskControls();
   return data;
 }
@@ -4625,14 +6207,14 @@ function updateMaxTradesHint() {
   const el = $("max-trades-hint");
   if (!el) return;
   const testMax = Number(testSettings.max_open_trades) || 0;
-  const stratSlots = Math.max(Number(BOTS.strategy.maxTrades) || 0, testMax);
-  const activeMax = stratSlots + BOTS.grid.maxTrades + bybitGridMaxBots;
+  const mainSlots = Number(BOTS.strategy.maxTrades) || 0;
+  const stratSlots = mainSlots + testMax;
   const per =
     Number(BOTS.strategy.maxPerStrategy) > 0
       ? ` · ≤${BOTS.strategy.maxPerStrategy}/стратегия`
       : "";
   const testBit = testMax > 0 ? ` · тест ≤${testMax}` : "";
-  el.textContent = `До ${activeMax} позиций: Finder — ${BOTS.finder.maxTrades}, стратегии — ${stratSlots}${per}${testBit}, Grid — ${BOTS.grid.maxTrades}, Bybit Grid — ${bybitGridMaxBots} · ML gate`;
+  el.textContent = `Стратегии — ${mainSlots}+${testMax}${per}${testBit} · DeepSeek`;
 }
 
 async function setMaxTrades(bot, value) {
@@ -4644,6 +6226,7 @@ async function setMaxTrades(bot, value) {
     max_open_trades: next,
   });
   pinMaxTrades(bot, data?.max_open_trades ?? next);
+  if (data?.limits) syncLimitsFromPairPayload(data);
   updateMaxTradesHint();
   updateBotSettingsSummaries();
   // Refresh card immediately so the input shows the saved value even if
@@ -4747,11 +6330,9 @@ function bindNumericSetting(container, { validate, onSave }) {
     try {
       await onSave(next);
       input.value = String(Number.isInteger(next) ? next : next);
-      // Soft refresh — don't block UI on full stack poll
+      // Soft refresh for trades/profit — limits already pinned; avoid immediate
+      // loadPairSettings rebuild that races and resets the input.
       refreshAll().catch(() => {});
-      if (isSettingsOpen()) {
-        loadPairSettings().catch(() => {});
-      }
     } catch (e) {
       if (e.message === "auth") logout();
       else alert(formatApiError(e.message));
@@ -4886,14 +6467,30 @@ function renderStrategySharedLimitsInto(el, { compact = false } = {}) {
 
 function renderTestStrategyStats(el, profit, balance, openCount) {
   if (!el) return;
+  const active = document.activeElement;
+  if (active && el.contains(active) && active.matches("input, button")) return;
   const maxOpen = Number(testSettings.max_open_trades) || 0;
   const per = Number(testSettings.max_open_trades_per_strategy) || 0;
   const stake = Number(testSettings.stake_amount) || 5;
-  const profitClosed = profit?.profit_closed_coin ?? profit?.profit_closed_percent;
   const usdt = getUsdtWallet(balance);
   const botAvail = usdt?.bot_owned;
   const walletFree = usdt?.free;
   const inMargin = usdt?.used;
+  const sig = [
+    openCount,
+    maxOpen,
+    per,
+    stake,
+    fmtClosedProfit(profit, "test"),
+    botAvail ?? "",
+    walletFree ?? "",
+    inMargin ?? "",
+  ].join("|");
+  const dirtyInput = [...el.querySelectorAll("input")].some(
+    (input) => input !== document.activeElement && input.value !== input.defaultValue
+  );
+  if (!dirtyInput && el.dataset.statSig === sig) return;
+  el.dataset.statSig = sig;
   el.innerHTML = `
     <div class="stat stat-trades-limit">
       <span class="stat-inline-label">Открыто (тестовые)</span>
@@ -4912,7 +6509,7 @@ function renderTestStrategyStats(el, profit, balance, openCount) {
       </div>
       <span class="muted stat-hint">0 = без лимита по enter_tag</span>
     </div>
-    <div class="stat">Прибыль (закрытые)<strong>${profit?.profit_closed_coin != null ? fmtUsd(profit.profit_closed_coin) : fmtPctRatio(profitClosed)}</strong></div>
+    <div class="stat">Прибыль (закрытые)<strong>${fmtClosedProfit(profit, "test")}</strong></div>
     <div class="stat stat-stake-limit">
       <span class="stat-inline-label">Stake (тест)</span>
       <div class="numeric-setting numeric-setting-stake" data-test-stake-input>
@@ -4954,6 +6551,58 @@ function renderTestStrategyStats(el, profit, balance, openCount) {
   updateBotSettingsSummaries();
 }
 
+function renderHtfStakeControls() {
+  const el = $("htf1h-stake");
+  if (!el) return;
+  const active = document.activeElement;
+  if (active && el.contains(active) && active.matches("input")) return;
+  const stake = Number(htfStakeAmount);
+  const shown = Number.isFinite(stake) ? stake : 5;
+  if (el.dataset.stake === String(shown) && el.querySelector("[data-htf-stake-input]")) return;
+  el.dataset.stake = String(shown);
+  const locked = settingsReadonly || demoMirrorAdmin;
+  el.innerHTML = `
+    <span class="max-trades-label">Стейк 1ч</span>
+    <div class="numeric-setting numeric-setting-stake" data-htf-stake-input>
+      <input type="number" class="numeric-setting-input" min="${STAKE_MIN}" max="${STAKE_MAX}" step="1" value="${shown}" inputmode="decimal" aria-label="Стейк 1-часовых USDT" ${locked ? "disabled" : ""} />
+      <span class="numeric-setting-suffix">USDT</span>
+      <button type="button" class="btn btn-sm primary numeric-setting-save" ${locked ? "disabled" : ""}>Сохранить</button>
+    </div>
+    <span class="muted max-trades-hint">только этот аккаунт · основные стратегии не меняет</span>
+  `;
+  bindNumericSetting(el.querySelector("[data-htf-stake-input]"), {
+    validate: (value) =>
+      value >= STAKE_MIN && value <= STAKE_MAX ? true : `От ${STAKE_MIN} до ${STAKE_MAX} USDT`,
+    onSave: async (value) => {
+      const data = await pairConfigApi("/pairs", "POST", {
+        action: "set_htf_stake",
+        stake_amount: value,
+      });
+      htfStakeAmount = Number(data?.htf_stake_amount ?? value);
+      if (data?.limits) syncLimitsFromPairPayload(data);
+      syncEnabledFromPayload(data);
+      el.dataset.stake = "";
+      renderHtfStakeControls();
+    },
+  });
+}
+
+function renderHtfStrategyStats(el, profit, openCount) {
+  if (!el) return;
+  const closed = fmtClosedProfit(profit, "htf1h");
+  const n = profit?.trade_count_htf;
+  const closedNote = n != null ? `${n} сделок` : "";
+  const sig = [openCount, closed, closedNote].join("|");
+  if (el.dataset.statSig === sig) return;
+  el.dataset.statSig = sig;
+  el.innerHTML = `
+    <div class="stat">Открыто (1-часовые)<strong>${openCount}</strong></div>
+    <div class="stat">Прибыль (закрытые)<strong>${closed}</strong>
+      ${closedNote ? `<span class="stat-hint">${closedNote}</span>` : ""}
+    </div>
+  `;
+}
+
 function renderTestStrategyLimits() {
   /* limits rendered in #test-strategy-stats */
 }
@@ -4986,24 +6635,62 @@ function repaintStrategyTradesFromCache() {
   });
 }
 
+function isLlmTrade(trade) {
+  const tag = String(trade?.enter_tag || "");
+  const strat = String(trade?.strategy || "");
+  return tag.startsWith("DeepseekLlmStrategy") || strat === "DeepseekLlmStrategy";
+}
+
+function isCursorTrade(trade) {
+  const tag = String(trade?.enter_tag || "");
+  const strat = String(trade?.strategy || "");
+  return tag.startsWith("CursorLlmStrategy") || strat === "CursorLlmStrategy";
+}
+
+function isCursorBookTrade(trade) {
+  const tag = String(trade?.enter_tag || "");
+  const strat = String(trade?.strategy || "");
+  return tag.startsWith("Cursor50") || strat === "Cursor50";
+}
+
+function isHtfTrade(trade) {
+  const id = tradeSourceId(trade, "strategy");
+  const fromCatalog = (strategyCatalog || []).find((s) => s.id === id);
+  if (fromCatalog) return isHtfStrategy(fromCatalog);
+  return /1hStrategy$/i.test(String(id || ""));
+}
+
 function splitStrategyTrades(trades) {
   const list = trades || [];
   const main = [];
   const test = [];
+  const htf = [];
   for (const t of list) {
-    if (isTestTrade(t, "strategy")) test.push(t);
+    if (isLlmTrade(t) || isBookTrade(t) || isCursorTrade(t) || isCursorBookTrade(t)) continue;
+    if (isHtfTrade(t)) htf.push(t);
+    else if (isTestTrade(t, "strategy")) test.push(t);
     else main.push(t);
   }
-  return { main, test };
+  return { main, test, htf };
 }
 
 function renderStatsInto(el, bot, profit, balance, openCount, stakeAmount, { openLabel = null } = {}) {
   if (!el) return;
+  // Poll rebuild must not wipe an in-progress edit of max trades / stake.
+  const active = document.activeElement;
+  if (
+    active &&
+    el.contains(active) &&
+    active.matches("input.numeric-setting-input, button.numeric-setting-save")
+  ) {
+    const strong = el.querySelector(".stat-trades-limit > strong");
+    if (strong) strong.textContent = `${openCount} / ${BOTS[bot].maxTrades}`;
+    return;
+  }
   const cfg = BOTS[bot];
   if (STAKE_EDITABLE_BOTS.has(bot) && stakeAmount != null) {
     BOTS[bot].stakeAmount = Number(stakeAmount);
   }
-  const profitClosed = profit?.profit_closed_coin ?? profit?.profit_closed_percent;
   const usdt = getUsdtWallet(balance);
   const botAvail = usdt?.bot_owned;
   const walletFree = usdt?.free;
@@ -5020,13 +6707,31 @@ function renderStatsInto(el, bot, profit, balance, openCount, stakeAmount, { ope
         </div>`
       : "";
   const tradesTitle = openLabel || "Открыто сделок";
+  const statSig = [
+    bot,
+    openCount,
+    cfg.maxTrades,
+    BOTS[bot]?.stakeAmount ?? stakeAmount ?? "",
+    bot === "strategy" ? BOTS.strategy.maxPerStrategy : "",
+    fmtClosedProfit(profit, bot === "strategy" ? "main" : null),
+    botAvail ?? "",
+    walletFree ?? "",
+    inMargin ?? "",
+    settingsReadonly ? 1 : 0,
+    tradesTitle,
+  ].join("|");
+  const dirtyInput = [...el.querySelectorAll("input")].some(
+    (input) => input !== document.activeElement && input.value !== input.defaultValue
+  );
+  if (!dirtyInput && el.dataset.statSig === statSig) return;
+  el.dataset.statSig = statSig;
   el.innerHTML = `
     <div class="stat stat-trades-limit">
       ${tradesTitle}<strong>${openCount} / ${cfg.maxTrades}</strong>
       ${renderMaxTradesInput(bot)}
       ${perStrategyBlock}
     </div>
-    <div class="stat">Прибыль (закрытые)<strong>${profit?.profit_closed_coin != null ? fmtUsd(profit.profit_closed_coin) : fmtPctRatio(profitClosed)}</strong></div>
+    <div class="stat">Прибыль (закрытые)<strong>${fmtClosedProfit(profit, bot === "strategy" ? "main" : null)}</strong></div>
     ${stakeCell}
     <div class="stat" title="Сколько USDT этот бот может использовать для новой сделки (учитываются только его сделки в БД)">
       Доступно боту<strong>${botAvail != null ? fmtUsd(botAvail) : "—"}</strong>
@@ -5080,6 +6785,51 @@ function tradeDetailRows(t) {
   ];
 }
 
+function tradeListSignature(bot, trades) {
+  const readonly = settingsReadonly || demoMirrorAdmin ? "1" : "0";
+  if (!trades.length) return `empty|${readonly}`;
+  return (
+    readonly +
+    "\n" +
+    trades
+      .map((t) => {
+        const orders = (t.orders || [])
+          .filter((o) => o.is_open)
+          .map((o) => `${o.ft_order_side}:${o.order_type}`)
+          .join(",");
+        return [
+          t.trade_id,
+          t.pair,
+          t.is_short ? 1 : 0,
+          t.leverage || 1,
+          t.strategy || "",
+          t.enter_tag || "",
+          fmtMlConfidenceDetail(t),
+          t.open_rate,
+          t.current_rate,
+          t.amount,
+          t.stake_amount,
+          t.max_stake_amount,
+          t.profit_pct,
+          t.profit_abs,
+          t.total_profit_ratio,
+          t.total_profit_abs,
+          t.funding_fees,
+          t.stop_loss_abs,
+          t.stop_loss_ratio,
+          t.stoploss_current_dist,
+          t.stoploss_current_dist_ratio,
+          t.liquidation_price,
+          t.min_rate,
+          t.max_rate,
+          orders,
+          isTradeExpanded(bot, t.trade_id) ? 1 : 0,
+        ].join("|");
+      })
+      .join("\n")
+  );
+}
+
 function tradesSummaryText(trades, emptyLabel = "нет сделок") {
   const open = trades || [];
   if (!open.length) return `${emptyLabel} · развернуть`;
@@ -5103,14 +6853,22 @@ function renderTradesInto(el, bot, trades) {
   const summaryId =
     el.id === "test-strategy-trades"
       ? "test-strategy-trades-summary"
+      : el.id === "htf1h-trades"
+        ? "htf1h-trades-summary"
       : el.id === "strategy-trades"
         ? "strategy-trades-summary"
         : el.id === "grid-trades"
           ? "grid-trades-summary"
           : el.id === "finder-trades"
             ? "finder-trades-summary"
-            : null;
+            : el.id === "llm-trades"
+              ? "llm-trades-summary"
+              : null;
   if (summaryId) updateTradesSectionSummary(summaryId, open);
+
+  const tradeSig = tradeListSignature(bot, open);
+  if (el.dataset.tradeSig === tradeSig) return;
+  el.dataset.tradeSig = tradeSig;
 
   if (!open.length) {
     el.innerHTML = '<p class="empty">Нет открытых сделок</p>';
@@ -5153,7 +6911,11 @@ function renderTradesInto(el, bot, trades) {
             </div>
             <span class="trade-chevron" aria-hidden="true">▸</span>
           </button>
-          <button type="button" class="btn danger btn-sm" data-bot="${bot}" data-id="${t.trade_id}" data-act="forceexit">Закрыть</button>
+          ${
+            settingsReadonly || demoMirrorAdmin
+              ? ""
+              : `<button type="button" class="btn danger btn-sm" data-bot="${bot}" data-id="${t.trade_id}" data-act="forceexit">Закрыть</button>`
+          }
         </div>
         <div class="trade-details">
           <div class="trade-grid">${rows}</div>
@@ -5221,6 +6983,11 @@ function bindTradeLists() {
     bindTradeListEl($(BOTS[bot].tradesEl));
   }
   bindTradeListEl($("test-strategy-trades"));
+  bindTradeListEl($("htf1h-trades"));
+  bindTradeListEl($("llm-trades"));
+  bindTradeListEl($("llm50-trades"));
+  bindTradeListEl($("cursor-trades"));
+  bindTradeListEl($("cursor50-trades"));
 }
 
 function strategyActionTargets() {
@@ -5250,7 +7017,17 @@ function renderActions(bot, running) {
       : tradingFlags.strategy
         ? "Signal Engine или Executor недоступен — проверьте статус в Настройках."
         : "Автоторговля выключена. Включите в Настройках → «Strategy trading». Открытые сделки всё ещё мониторятся.";
-    fillAll(`<p class="muted finder-disabled-note">${note}</p>`);
+    const adminScan = isAdminUser() && !isImpersonating
+      ? `<button class="btn primary" data-bot="strategy" data-act="scan-strategy" title="Скан пар (отчёт) — whitelist в DB не затирается">Запустить скан</button>`
+      : "";
+    fillAll(`<p class="muted finder-disabled-note">${note}</p>${adminScan}`);
+    if (adminScan) {
+      bindAll(async (ev) => {
+        const btn = ev.currentTarget;
+        if (btn.dataset.act !== "scan-strategy") return;
+        await runStrategyScanAction(btn);
+      });
+    }
     return;
   }
   const slotsDisabled = Number(cfg.maxTrades) <= 0;
@@ -5281,8 +7058,12 @@ function renderActions(bot, running) {
     bot === "grid"
       ? `<button class="btn" data-bot="grid" data-act="scan-ranging" title="Поиск боковика среди 150 ликвидных пар">Скан боковика</button>`
       : bot === "strategy"
-        ? `<button class="btn" data-bot="strategy" data-act="scan-strategy" title="Подбор пар под каждую включённую стратегию (150 ликвидных)">Скан пар</button>`
+        ? `<button class="btn" data-bot="strategy" data-act="scan-strategy" title="Подбор пар под каждую включённую стратегию → Signal Engine">Запустить скан</button>`
         : "";
+  if (settingsReadonly || demoMirrorAdmin) {
+    fillAll(`<span class="muted">Demo: просмотр сделок администратора</span>`);
+    return;
+  }
   fillAll(`
     <button class="btn primary" data-bot="${bot}" data-act="start" ${running ? "disabled" : ""}>Старт</button>
     <button class="btn" data-bot="${bot}" data-act="stop" ${!running ? "disabled" : ""}>Стоп</button>
@@ -5322,20 +7103,8 @@ function renderActions(bot, running) {
           btn.textContent = label;
         }
       } else if (act === "scan-strategy") {
-        if (!confirm("Запустить скан пар по каждой включённой стратегии (150 ликвидных)? Займёт ~2–3 мин.")) return;
-        btn.disabled = true;
-        btn.textContent = "Скан…";
-        for (const id of ["strategy-scan-info"]) {
-          const info = $(id);
-          if (info) info.textContent = "Скан выполняется…";
-        }
-        try {
-          await pairConfigApi("/strategy-scan", "POST", {});
-          await refreshBot("strategy");
-        } finally {
-          btn.disabled = false;
-          btn.textContent = label;
-        }
+        await runStrategyScanAction(btn);
+        return;
       } else {
         refreshAll();
         return;
@@ -5396,6 +7165,106 @@ const STRATEGY_SCAN_SHORT = {
   LiteIntradayStrategy: "Intraday",
   LiteRangeStrategy: "Range",
 };
+
+async function runStrategyScanAction(btn) {
+  if (!isAdminUser() || isImpersonating) {
+    alert("Скан стратегий доступен только админу.");
+    return;
+  }
+  if (
+    !confirm(
+      "Запустить скан пар по включённым стратегиям?\n" +
+        "Только отчёт — текущий большой whitelist НЕ затирается.\n" +
+        "~2–3 мин."
+    )
+  ) {
+    return;
+  }
+  const label = "Запустить скан";
+  const allBtns = Array.from(document.querySelectorAll(".js-strategy-run-scan"));
+  for (const b of allBtns) {
+    b.disabled = true;
+    b.textContent = "Скан…";
+  }
+  for (const id of ["strategy-scan-info"]) {
+    const info = $(id);
+    if (info) info.textContent = "Скан выполняется…";
+  }
+  try {
+    if (!tradingFlags.strategy) {
+      try {
+        await pairConfigApi("/trading-enabled", "POST", { strategy: true });
+        tradingFlags.strategy = true;
+      } catch {
+        /* non-fatal */
+      }
+    }
+    // apply:false — whitelist живёт в DB; скан не должен его схлопывать.
+    const res = await pairConfigApi("/strategy-scan", "POST", { apply: false });
+    const n = res?.selected_count ?? res?.summary?.found ?? "?";
+    const apply = res?.apply || {};
+    const applyBit = apply.applied
+      ? `whitelist→SE ${apply.pairs || n}`
+      : apply.reason || "whitelist сохранён (DB)";
+    for (const id of ["strategy-scan-info"]) {
+      const info = $(id);
+      if (info) {
+        info.textContent = `Скан готов: ${n} пар · ${applyBit}`;
+      }
+    }
+    await refreshBot("strategy");
+    await loadStrategyScanInfo();
+    await refreshAll();
+  } catch (e) {
+    if (e.message === "auth") logout();
+    else alert(formatApiError(e.message));
+    await loadStrategyScanInfo();
+  } finally {
+    for (const b of allBtns) {
+      b.disabled = false;
+      b.textContent = label;
+    }
+  }
+}
+
+function bindStrategyRunScanButton() {
+  document.querySelectorAll(".js-strategy-run-scan").forEach((btn) => {
+    if (btn.dataset.bound === "1") return;
+    btn.dataset.bound = "1";
+    btn.addEventListener("click", () => runStrategyScanAction(btn));
+  });
+}
+
+/** Admin-only scan CTA inside Тестовые (settings body + panel head). */
+function paintTestStrategyScanActions() {
+  const el = $("test-strategy-scan-actions");
+  const headBtn = $("test-strategy-run-scan");
+  const show = isAdminUser() && !isImpersonating;
+  if (headBtn) headBtn.classList.toggle("hidden", !show);
+  if (!el) {
+    bindStrategyRunScanButton();
+    return;
+  }
+  if (!show) {
+    el.innerHTML = "";
+    bindStrategyRunScanButton();
+    return;
+  }
+  el.innerHTML = `
+    <button
+      type="button"
+      class="btn primary js-strategy-run-scan"
+      title="Скан пар по включённым стратегиям → whitelist Signal Engine → reload"
+    >Запустить скан</button>
+    <span class="muted" style="align-self:center">Подбор пар → Signal Engine → открытие сделок через executor/ML gate</span>
+  `;
+  // Re-bind: innerHTML wiped previous listeners
+  el.querySelectorAll(".js-strategy-run-scan").forEach((btn) => {
+    btn.dataset.bound = "1";
+    btn.addEventListener("click", () => runStrategyScanAction(btn));
+  });
+  bindStrategyRunScanButton();
+}
 
 async function loadStrategyScanInfo() {
   const els = ["strategy-scan-info"]
@@ -5462,6 +7331,11 @@ function setState(bot, running, hint = "") {
   }
   // Control-plane derived statuses (RU titles, EN badge codes)
   const ctrl = typeof hint === "string" ? hint.toUpperCase() : "";
+  // Live ctbot state during whitelist/scan reload — not a cold start.
+  if (ctrl === "RELOAD_CONFIG" || ctrl === "RELOADING") {
+    apply("SYNC…", "badge running", "Обновление конфига (скан/whitelist) — подождите несколько секунд");
+    return;
+  }
   if (ctrl === "STARTING") {
     apply("STARTING…", "badge running", "Запуск торговли…");
     return;
@@ -5508,21 +7382,25 @@ function rememberBotLive(bot, patch) {
   botLiveCache[bot] = { ...(botLiveCache[bot] || {}), ...patch, ts: Date.now() };
 }
 
-/** Prefer live /profit; fall back to sqlite closed_profit from open-trades bundle. */
+/** Sqlite net closed PnL wins. Signal-engine /profit has no fills on the shared stack. */
 function mergeClosedProfit(liveProfit, dbProfit) {
-  const liveCount = Number(liveProfit?.trade_count ?? liveProfit?.closed_trade_count ?? 0);
-  const liveCoin = liveProfit?.profit_closed_coin;
-  const hasLive =
-    liveProfit != null &&
-    ((liveCoin != null && Number.isFinite(Number(liveCoin)) && (liveCount > 0 || Number(liveCoin) !== 0)) ||
-      liveCount > 0);
-  if (hasLive) return liveProfit;
-  if (dbProfit && (dbProfit.trade_count > 0 || dbProfit.profit_closed_coin != null)) {
+  const dbCount = Number(dbProfit?.trade_count ?? 0);
+  const dbCoin = dbProfit?.profit_closed_coin;
+  const hasDb =
+    dbProfit != null &&
+    (dbCount > 0 || (dbCoin != null && Number.isFinite(Number(dbCoin)) && Number(dbCoin) !== 0));
+  if (hasDb) {
     return {
       ...(liveProfit || {}),
       profit_closed_coin: dbProfit.profit_closed_coin,
       profit_closed_fiat: dbProfit.profit_closed_fiat ?? dbProfit.profit_closed_coin,
+      profit_closed_main_coin: dbProfit.profit_closed_main_coin,
+      profit_closed_test_coin: dbProfit.profit_closed_test_coin,
+      profit_closed_htf_coin: dbProfit.profit_closed_htf_coin,
       trade_count: dbProfit.trade_count,
+      trade_count_main: dbProfit.trade_count_main,
+      trade_count_test: dbProfit.trade_count_test,
+      trade_count_htf: dbProfit.trade_count_htf,
       closed_profit_source: "db",
     };
   }
@@ -5543,14 +7421,25 @@ function paintBotLive(bot, { config, profit, balance, trades, running, stateHint
   else setState(bot, isRunning);
 
   if (bot === "strategy") {
-    const { main, test } = splitStrategyTrades(openTrades);
+    const { main, test, htf } = splitStrategyTrades(openTrades);
     renderStatsInto($(BOTS.strategy.statsEl), bot, profit, balance, main.length, config?.stake_amount, {
       openLabel: "Открыто (основные)",
     });
     renderTestStrategyStats($("test-strategy-stats"), profit, balance, test.length);
+    renderHtfStrategyStats($("htf1h-stats"), profit, (htf || []).length);
     renderActions(bot, isRunning);
     renderTradesInto($(BOTS.strategy.tradesEl), bot, main);
     renderTradesInto($("test-strategy-trades"), bot, test);
+    renderTradesInto($("htf1h-trades"), bot, htf || []);
+    const htfBadge = $("htf1h-state");
+    const stratBadge = $("strategy-state");
+    if (htfBadge && stratBadge) {
+      htfBadge.className = stratBadge.className;
+      htfBadge.textContent = stratBadge.textContent;
+      htfBadge.title = stratBadge.title || "";
+    }
+    const htfSummary = $("htf1h-trades-summary");
+    if (htfSummary) htfSummary.textContent = (htf || []).length ? `${htf.length} открыто` : "нет";
   } else {
     renderStats(bot, profit, balance, openTrades.length, config?.stake_amount);
     renderActions(bot, isRunning);
@@ -5596,14 +7485,21 @@ async function refreshBot(bot) {
     const entry = bundle?.bots?.[bot];
     if (entry && Array.isArray(entry.trades)) {
       openTrades = withPreservedMlMeta(bot, entry.trades);
+      if (entry.closed_profit) {
+        rememberBotLive(bot, { closedProfitDb: entry.closed_profit });
+      }
+      const profit = mergeClosedProfit(
+        prev.profit,
+        entry.closed_profit || botLiveCache[bot]?.closedProfitDb
+      );
       paintBotLive(bot, {
         config: prev.config,
-        profit: prev.profit,
+        profit,
         balance: prev.balance,
         trades: openTrades,
         running: prev.running,
       });
-      rememberBotLive(bot, { trades: openTrades });
+      rememberBotLive(bot, { trades: openTrades, profit });
     }
   } catch {
     /* keep prev */
@@ -5614,7 +7510,7 @@ async function refreshBot(bot) {
     const hint = sharedStrategyStateHint();
     paintBotLive(bot, {
       config: prev.config,
-      profit: prev.profit,
+      profit: botLiveCache[bot]?.profit ?? prev.profit,
       balance: prev.balance,
       trades: openTrades,
       running,
@@ -5703,10 +7599,8 @@ async function refreshBot(bot) {
         if (!controlStatusOf(bot) && !(bot === "strategy" && sharedStackMode)) {
           setState(bot, String(cfg?.state || "").toLowerCase() === "running");
         }
-        // Shared signal-engine reports max_open_trades=1; keep pair-config / bot_limits value.
-        if (!(bot === "strategy" && sharedStackMode)) {
-          applyPinnedMaxTrades(bot, cfg?.max_open_trades);
-        }
+        // Never take max_open_trades from live show_config — SE/Finder often lag or
+        // stay at 1. Source of truth is pair-config bot_limits (/pairs).
       }
       if (Array.isArray(status)) trades = withPreservedMlMeta(bot, status);
     } catch {
@@ -5800,8 +7694,9 @@ function totalMaxOpenSlots() {
 function renderTradesSummaryFromOpen(summary) {
   const el = $("trades-summary");
   if (!el || !summary) return;
-  const count = Number(summary.count) || 0;
-  const maxTotal = Number(summary.max_total);
+  const adopted = adoptOpenSummary(summary);
+  const count = Number(adopted.count) || 0;
+  const maxTotal = Number(adopted.max_total);
   const maxLabel = Number.isFinite(maxTotal) && maxTotal > 0 ? maxTotal : totalMaxOpenSlots();
   if (!count) {
     el.classList.add("is-empty");
@@ -5809,8 +7704,8 @@ function renderTradesSummaryFromOpen(summary) {
     return;
   }
   el.classList.remove("is-empty");
-  const margin = Number(summary.margin) || 0;
-  const pnl = Number(summary.pnl) || 0;
+  const margin = Number(adopted.margin) || 0;
+  const pnl = Number(adopted.pnl) || 0;
   const pnlClassName = pnlClass(pnl);
   el.innerHTML = `
     <span class="ts-label">Всего по сделкам</span>
@@ -5834,8 +7729,17 @@ function renderTradesSummary(allTrades) {
   const count = allTrades.length;
 
   if (!count) {
+    // Do not flash empty over a recent sticky summary.
+    if (openSummarySticky && Number(openSummarySticky.count) > 0) {
+      const age = Date.now() - Number(openSummarySticky._ts || 0);
+      if (age < OPEN_SUMMARY_STICKY_MS) {
+        renderTradesSummaryFromOpen(openSummarySticky);
+        return;
+      }
+    }
     el.classList.add("is-empty");
     el.innerHTML = `<span class="ts-label">Открытые сделки</span><strong>нет · 0 / ${maxTotal}</strong>`;
+    adoptOpenSummary({ count: 0, max_total: maxTotal, margin: 0, pnl: 0 });
     return;
   }
 
@@ -5847,12 +7751,12 @@ function renderTradesSummary(allTrades) {
   );
   const pnlClassName = pnlClass(pnl);
 
-  openSummaryCache = {
+  adoptOpenSummary({
     count,
     max_total: Number(openSummaryCache?.max_total) > 0 ? Number(openSummaryCache.max_total) : maxTotal,
     margin,
     pnl,
-  };
+  });
 
   el.innerHTML = `
     <span class="ts-label">Всего по сделкам</span>
@@ -5890,12 +7794,26 @@ function renderServerStatus(stats, adaptive = null) {
   const adaptiveLines = [];
   if (adaptive?.slots) {
     const s = adaptive.slots;
-    adaptiveLines.push(
-      `Слоты: ${s.open_total}/${s.max_total} открыто`,
-      s.full
-        ? "Адаптивный скан: слоты заполнены (Finder ~30 мин)"
-        : `Адаптивный скан: каждые ${adaptive.current_interval_min} мин (шаг ${adaptive.step + 1}/4)`,
-    );
+    const mode = adaptive.mode || adaptive.settings?.mode || "adaptive";
+    const stepCount = (adaptive.intervals_min || []).length || 4;
+    const bots = s.bots || {};
+    const slotBit = (key, label) => {
+      const b = bots[key];
+      if (!b) return null;
+      return `${label} ${Number(b.open) || 0}/${Number(b.max) || 0}`;
+    };
+    // signal-engine max_open_trades is forced to 1 and holds no user trades.
+    const slotParts = [];
+    if (slotParts.length) adaptiveLines.push(`Слоты: ${slotParts.join(" · ")}`);
+    if (s.full) {
+      adaptiveLines.push("Скан пар: слоты заполнены (Finder ~30 мин)");
+    } else if (mode === "fixed") {
+      adaptiveLines.push(`Скан пар: каждые ${adaptive.current_interval_min} мин (фикс.)`);
+    } else {
+      adaptiveLines.push(
+        `Скан пар: каждые ${adaptive.current_interval_min} мин (шаг ${(adaptive.step || 0) + 1}/${stepCount})`,
+      );
+    }
     if (adaptive.seconds_until_next != null) {
       adaptiveLines.push(`До следующего скана: ~${Math.ceil(adaptive.seconds_until_next / 60)} мин`);
     }
@@ -6506,7 +8424,692 @@ function paintOpenTradesFromServerBundle(bundle) {
   return all;
 }
 
-async function refreshAll() {
+function llmBase(pair) {
+  const text = String(pair || "");
+  return text.includes("/") ? text.split("/")[0] : text;
+}
+
+function llmCycleError(reason) {
+  const text = String(reason || "");
+  if (/authorization failed|invalid token/i.test(text)) return "Ошибка цикла: сессия DeepSeek истекла";
+  if (/insufficient_user_quota|额度已用尽/i.test(text)) return "Ошибка цикла: бесплатная квота модели закончилась";
+  const http = text.match(/LLM HTTP (\d+)/);
+  if (http) return `Ошибка цикла: шлюз ответил ${http[1]}`;
+  return text ? `Ошибка цикла: ${text.slice(0, 140)}` : "Ошибка цикла";
+}
+
+function llmDecisionText(view) {
+  if (!view) return "—";
+  if (!view.openseek_up) return "DeepSeek не отвечает";
+  const st = view.status || {};
+  const rows = Array.isArray(st.decisions) ? st.decisions : [];
+  const hits = rows.filter((row) => row.side === "long" || row.side === "short");
+  if (st.state === "idle") return "Остановлен — модель не вызывается";
+  if (st.state === "wait") return "Ждёт ответ DeepSeek";
+  if (st.state === "error") return llmCycleError(st.reason);
+  if (hits.length) {
+    return hits
+      .map((row) => {
+        const conf = Number(row.confidence);
+        const pct = Number.isFinite(conf) ? ` ${(conf * 100).toFixed(0)}%` : "";
+        const side = row.side === "short" ? "SHORT" : "LONG";
+        return `${llmBase(row.pair)} ${side}${pct}`;
+      })
+      .join(" · ");
+  }
+  if (st.state === "flat" || st.state === "signal") {
+    if (st.reason) return String(st.reason);
+    const n = rows.length || (Array.isArray(view.pairs) ? view.pairs.length : 0);
+    return n ? `HOLD по ${n} парам` : "HOLD";
+  }
+  if (!view.enabled) return "Нажмите Старт, чтобы бот начал запрашивать DeepSeek";
+  return "Ожидание первого цикла";
+}
+
+let llmPairs = [];
+
+function closeLlmTickersPanel() {
+  const wrap = $("llm-tickers");
+  const panel = $("llm-tickers-panel");
+  const btn = $("llm-tickers-btn");
+  if (panel) {
+    panel.hidden = true;
+    resetStrategyTickersPanelPosition(panel);
+  }
+  if (btn) btn.setAttribute("aria-expanded", "false");
+  wrap?.classList.remove("is-open");
+  const cursorPanel = $("cursor-tickers-panel");
+  const cursorBtn = $("cursor-tickers-btn");
+  const cursorWrap = $("cursor-tickers");
+  if (cursorPanel) {
+    cursorPanel.hidden = true;
+    resetStrategyTickersPanelPosition(cursorPanel);
+  }
+  if (cursorBtn) cursorBtn.setAttribute("aria-expanded", "false");
+  cursorWrap?.classList.remove("is-open");
+}
+
+function renderLlmPairs(pairs) {
+  const el = $("llm-pairs");
+  if (!el) return;
+  llmPairs = Array.isArray(pairs) ? pairs.slice() : [];
+  const count = $("llm-tickers-count");
+  if (count) count.textContent = String(llmPairs.length);
+  const key = llmPairs.join("|");
+  if (el.dataset.pairsKey === key) return;
+  el.dataset.pairsKey = key;
+  el.innerHTML = llmPairs.length
+    ? llmPairs
+        .map(
+          (pair) => `
+      <li class="strategy-tickers-item">
+        <span class="strategy-tickers-pair" title="${escapeHtml(pair)}">${escapeHtml(pairBaseLabel(pair))}</span>
+        <button type="button" class="strategy-tickers-remove" data-pair="${escapeHtml(pair)}" title="Убрать ${escapeHtml(pairBaseLabel(pair))}" ${settingsReadonly ? "disabled" : ""}>×</button>
+      </li>`
+        )
+        .join("")
+    : `<li class="strategy-tickers-empty muted">Нет тикеров — бот не торгует</li>`;
+  const panel = $("llm-tickers-panel");
+  const wrap = $("llm-tickers");
+  if (panel && wrap && !panel.hidden) positionStrategyTickersPanel(wrap, panel);
+}
+
+function paintLlmBot(view) {
+  const badge = $("llm-state");
+  if (badge) {
+    const on = !!view?.enabled;
+    badge.textContent = on ? "RUNNING" : "STOPPED";
+    badge.className = on ? "badge running" : "badge stopped";
+  }
+  const tp = $("llm-tp");
+  const stake = $("llm-stake");
+  const max = $("llm-max");
+  const conf = $("llm-conf");
+  const active = document.activeElement;
+  const settings = view?.settings || {};
+  if (tp && active !== tp) tp.value = String(settings.take_profit_pct ?? 3);
+  if (stake && active !== stake) stake.value = String(settings.stake_amount ?? 5);
+  if (max && active !== max) max.value = String(settings.max_open_trades ?? 1);
+  if (conf && active !== conf) conf.value = String(settings.min_confidence_pct ?? 65);
+  const locked = !!settingsReadonly;
+  for (const el of [tp, stake, max, conf, $("llm-save"), $("llm-pair-add"), $("llm-pair-input")]) {
+    if (el) el.disabled = locked;
+  }
+  const toggle = $("llm-toggle");
+  if (toggle) {
+    toggle.textContent = view?.enabled ? "Стоп" : "Старт";
+    toggle.classList.toggle("danger", !!view?.enabled);
+    toggle.classList.toggle("primary", !view?.enabled);
+    toggle.disabled = locked;
+  }
+  const pairs = Array.isArray(settings.pairs) ? settings.pairs : view?.pairs || [];
+  renderLlmPairs(pairs);
+  const subtitle = $("llm-subtitle");
+  if (subtitle) {
+    subtitle.textContent = `вход от ${settings.min_confidence_pct ?? 65}% · стейк ${settings.stake_amount ?? 5} USDT · цикл 30 мин · стоп −2%`;
+  }
+  const decision = $("llm-decision");
+  if (decision) decision.textContent = llmDecisionText(view);
+  renderTradesInto($("llm-trades"), "strategy", view?.trades || []);
+}
+
+async function refreshLlmBot() {
+  if (!userMayUseBlock("llm")) return;
+  const view = await pairConfigApi("/llm");
+  paintLlmBot(view);
+}
+
+async function saveLlmSettings(extra = {}) {
+  const tp = Number($("llm-tp")?.value);
+  const stake = Number($("llm-stake")?.value);
+  const maxOpen = Number($("llm-max")?.value);
+  const minConf = Number($("llm-conf")?.value);
+  const body = {
+    take_profit_pct: tp,
+    stake_amount: stake,
+    max_open_trades: maxOpen,
+    min_confidence_pct: minConf,
+    ...extra,
+  };
+  const view = await pairConfigApi("/llm", "POST", body);
+  paintLlmBot(view);
+  return view;
+}
+
+function showLlmMsg(text, isError = false) {
+  const el = $("llm-msg");
+  if (!el) return;
+  el.textContent = text;
+  el.className = `pair-msg ${isError ? "error" : "ok"}`;
+  el.classList.remove("hidden");
+}
+
+function llm50DecisionText(view) {
+  const actions = Array.isArray(view?.status?.actions) ? view.status.actions : [];
+  const hits = actions.filter((row) => row.result === "signal" || row.result === "close");
+  if (hits.length) {
+    return hits
+      .map((row) => {
+        const base = llmBase(row.pair);
+        if (row.result === "close") return `${base} CLOSE`;
+        const side = row.action === "SELL" ? "SHORT" : "LONG";
+        const stake = Number(row.stake_usdt);
+        const usd = Number.isFinite(stake) ? ` ${stake}$` : "";
+        return `${base} ${side}${usd}`;
+      })
+      .join(" · ");
+  }
+  if (!view?.enabled) return "Нажмите Старт — модель получит бюджет 50 USDT";
+  if (view?.status?.state === "idle") return "Остановлен";
+  if (view?.status?.state === "wait") return "Ждёт ответ DeepSeek";
+  if (view?.status?.state === "error") return llmCycleError(view?.status?.reason);
+  if (view?.status?.reason && !hits.length) return String(view.status.reason);
+  return actions.length ? "Без новых входов" : "Ожидание первого цикла";
+}
+
+function paintLlm50(view) {
+  const badge = $("llm50-state");
+  if (badge) {
+    const on = !!view?.enabled;
+    badge.textContent = on ? "RUNNING" : "STOPPED";
+    badge.className = on ? "badge running" : "badge stopped";
+  }
+  const stats = view?.stats || {};
+  const free = $("llm50-free");
+  const used = $("llm50-used");
+  const pnl = $("llm50-pnl");
+  const trades = $("llm50-count");
+  if (free) free.textContent = `${stats.free_usdt ?? 50} $`;
+  if (used) used.textContent = `${stats.used_usdt ?? 0} $`;
+  if (pnl) {
+    const value = Number(stats.realized_usdt ?? 0);
+    pnl.textContent = `${value > 0 ? "+" : ""}${value.toFixed(2)} $`;
+    pnl.className = value > 0 ? "pos" : value < 0 ? "neg" : "";
+  }
+  if (trades) {
+    trades.textContent = `${stats.closed_count ?? 0} · ${stats.wins ?? 0}/${stats.losses ?? 0}`;
+  }
+  const subtitle = $("llm50-subtitle");
+  if (subtitle) {
+    const pairCount = Array.isArray(view?.pairs) ? view.pairs.length : 25;
+    subtitle.textContent = `бюджет ${view?.budget_usdt ?? 50} USDT · в работе ${stats.used_usdt ?? 0} · ${pairCount} пар · плечо 3x · цикл 30 мин`;
+  }
+  const toggle = $("llm50-toggle");
+  if (toggle) {
+    toggle.textContent = view?.enabled ? "Стоп" : "Старт";
+    toggle.classList.toggle("danger", !!view?.enabled);
+    toggle.classList.toggle("primary", !view?.enabled);
+    toggle.disabled = !!settingsReadonly;
+  }
+  const decision = $("llm50-decision");
+  if (decision) decision.textContent = llm50DecisionText(view);
+  renderTradesInto($("llm50-trades"), "strategy", view?.trades || []);
+}
+
+async function refreshLlm50() {
+  if (!userMayUseBlock("llm")) return;
+  const view = await pairConfigApi("/llm50");
+  paintLlm50(view);
+}
+
+function showLlm50Msg(text, isError = false) {
+  const el = $("llm50-msg");
+  if (!el) return;
+  el.textContent = text;
+  el.className = `pair-msg ${isError ? "error" : "ok"}`;
+  el.classList.remove("hidden");
+}
+
+function bindLlm50Controls() {
+  $("llm50-toggle")?.addEventListener("click", async () => {
+    const btn = $("llm50-toggle");
+    if (!btn || btn.disabled) return;
+    const enable = btn.textContent.trim() !== "Стоп";
+    btn.disabled = true;
+    try {
+      const view = await pairConfigApi("/llm50", "POST", { enabled: enable });
+      paintLlm50(view);
+      showLlm50Msg(enable ? "Бот запущен, бюджет 50 USDT" : "Новые решения остановлены");
+    } catch (e) {
+      if (e.message === "auth") logout();
+      else showLlm50Msg(formatApiError(e.message), true);
+    } finally {
+      btn.disabled = !!settingsReadonly;
+    }
+  });
+}
+
+function bindLlmControls() {
+  $("llm-save")?.addEventListener("click", async () => {
+    const btn = $("llm-save");
+    if (!btn || btn.disabled) return;
+    btn.disabled = true;
+    try {
+      await saveLlmSettings();
+      showLlmMsg("Сохранено");
+    } catch (e) {
+      if (e.message === "auth") logout();
+      else showLlmMsg(formatApiError(e.message), true);
+    } finally {
+      btn.disabled = !!settingsReadonly;
+    }
+  });
+  $("llm-toggle")?.addEventListener("click", async () => {
+    const btn = $("llm-toggle");
+    if (!btn || btn.disabled) return;
+    const enable = btn.textContent.trim() !== "Стоп";
+    btn.disabled = true;
+    try {
+      await saveLlmSettings({ enabled: enable });
+      showLlmMsg(enable ? "Бот запущен" : "Новые входы остановлены");
+    } catch (e) {
+      if (e.message === "auth") logout();
+      else showLlmMsg(formatApiError(e.message), true);
+    } finally {
+      btn.disabled = !!settingsReadonly;
+    }
+  });
+  $("llm-tickers-btn")?.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    const wrap = $("llm-tickers");
+    const panel = $("llm-tickers-panel");
+    const btn = $("llm-tickers-btn");
+    if (!wrap || !panel || !btn) return;
+    const willOpen = panel.hidden;
+    closeAllStrategyTickersPanels();
+    closeAllMlConfidenceMenus();
+    if (!willOpen) {
+      closeLlmTickersPanel();
+      return;
+    }
+    panel.hidden = false;
+    btn.setAttribute("aria-expanded", "true");
+    wrap.classList.add("is-open");
+    requestAnimationFrame(() => {
+      positionStrategyTickersPanel(wrap, panel);
+      const input = $("llm-pair-input");
+      if (input && !input.disabled) input.focus();
+    });
+  });
+  $("llm-pair-form")?.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const input = $("llm-pair-input");
+    const raw = String(input?.value || "").trim();
+    if (!raw || settingsReadonly) return;
+    const btn = $("llm-pair-add");
+    if (btn) btn.disabled = true;
+    try {
+      await saveLlmSettings({ pairs: [...llmPairs, raw] });
+      if (input) input.value = "";
+      showLlmMsg("Пара добавлена");
+    } catch (e) {
+      if (e.message === "auth") logout();
+      else showLlmMsg(formatApiError(e.message), true);
+    } finally {
+      if (btn) btn.disabled = !!settingsReadonly;
+    }
+  });
+  $("llm-pairs")?.addEventListener("click", async (ev) => {
+    const btn = ev.target.closest(".strategy-tickers-remove");
+    if (!btn || btn.disabled) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const pair = btn.getAttribute("data-pair");
+    if (!pair) return;
+    btn.disabled = true;
+    try {
+      await saveLlmSettings({ pairs: llmPairs.filter((item) => item !== pair) });
+      showLlmMsg(`${pairBaseLabel(pair)} убрана`);
+    } catch (e) {
+      if (e.message === "auth") logout();
+      else showLlmMsg(formatApiError(e.message), true);
+    }
+  });
+}
+
+let cursorPairs = [];
+
+function cursorDownText(view) {
+  const reason = String(view?.health_reason || view?.status?.reason || "");
+  if (/not available in your region/i.test(reason)) return "Cursor API недоступен из региона сервера";
+  if (/token/i.test(reason) || !reason) return "Токен Cursor не задан";
+  return `Cursor не отвечает: ${reason.slice(0, 140)}`;
+}
+
+function cursorDecisionText(view) {
+  if (!view) return "—";
+  if (!view.openseek_up) return cursorDownText(view);
+  const st = view.status || {};
+  const rows = Array.isArray(st.decisions) ? st.decisions : [];
+  const hits = rows.filter((row) => row.side === "long" || row.side === "short");
+  if (st.state === "idle") return "Остановлен — модель не вызывается";
+  if (st.state === "wait") return "Ждёт ответ Cursor";
+  if (st.state === "error") return llmCycleError(st.reason);
+  if (hits.length) {
+    return hits
+      .map((row) => {
+        const conf = Number(row.confidence);
+        const pct = Number.isFinite(conf) ? ` ${(conf * 100).toFixed(0)}%` : "";
+        const side = row.side === "short" ? "SHORT" : "LONG";
+        return `${llmBase(row.pair)} ${side}${pct}`;
+      })
+      .join(" · ");
+  }
+  if (st.state === "flat" || st.state === "signal") {
+    if (st.reason) return String(st.reason);
+    const n = rows.length || (Array.isArray(view.pairs) ? view.pairs.length : 0);
+    return n ? `HOLD по ${n} парам` : "HOLD";
+  }
+  return "Ожидание первого цикла";
+}
+
+function renderCursorPairs(pairs) {
+  const el = $("cursor-pairs");
+  if (!el) return;
+  cursorPairs = Array.isArray(pairs) ? pairs.slice() : [];
+  const count = $("cursor-tickers-count");
+  if (count) count.textContent = String(cursorPairs.length);
+  const key = cursorPairs.join("|");
+  if (el.dataset.pairsKey === key) return;
+  el.dataset.pairsKey = key;
+  el.innerHTML = cursorPairs.length
+    ? cursorPairs
+        .map(
+          (pair) => `
+      <li class="strategy-tickers-item">
+        <span class="strategy-tickers-pair" title="${escapeHtml(pair)}">${escapeHtml(pairBaseLabel(pair))}</span>
+        <button type="button" class="strategy-tickers-remove" data-pair="${escapeHtml(pair)}" title="Убрать ${escapeHtml(pairBaseLabel(pair))}" ${settingsReadonly ? "disabled" : ""}>×</button>
+      </li>`
+        )
+        .join("")
+    : `<li class="strategy-tickers-empty muted">Нет тикеров — бот не торгует</li>`;
+}
+
+function paintCursorBot(view) {
+  const badge = $("cursor-state");
+  if (badge) {
+    const on = !!view?.enabled;
+    badge.textContent = on ? "RUNNING" : "STOPPED";
+    badge.className = on ? "badge running" : "badge stopped";
+  }
+  const tp = $("cursor-tp");
+  const stake = $("cursor-stake");
+  const max = $("cursor-max");
+  const conf = $("cursor-conf");
+  const active = document.activeElement;
+  const settings = view?.settings || {};
+  if (tp && active !== tp) tp.value = String(settings.take_profit_pct ?? 3);
+  if (stake && active !== stake) stake.value = String(settings.stake_amount ?? 5);
+  if (max && active !== max) max.value = String(settings.max_open_trades ?? 1);
+  if (conf && active !== conf) conf.value = String(settings.min_confidence_pct ?? 65);
+  const locked = !!settingsReadonly;
+  for (const el of [tp, stake, max, conf, $("cursor-save"), $("cursor-pair-add"), $("cursor-pair-input")]) {
+    if (el) el.disabled = locked;
+  }
+  const toggle = $("cursor-toggle");
+  if (toggle) {
+    toggle.textContent = view?.enabled ? "Стоп" : "Старт";
+    toggle.classList.toggle("danger", !!view?.enabled);
+    toggle.classList.toggle("primary", !view?.enabled);
+    toggle.disabled = locked;
+  }
+  renderCursorPairs(Array.isArray(settings.pairs) ? settings.pairs : view?.pairs || []);
+  const subtitle = $("cursor-subtitle");
+  if (subtitle) {
+    subtitle.textContent = `вход от ${settings.min_confidence_pct ?? 65}% · стейк ${settings.stake_amount ?? 5} USDT · цикл 30 мин · стоп −2%`;
+  }
+  const decision = $("cursor-decision");
+  if (decision) decision.textContent = cursorDecisionText(view);
+  renderTradesInto($("cursor-trades"), "strategy", view?.trades || []);
+}
+
+async function refreshCursorBot() {
+  if (!userMayUseBlock("llm")) return;
+  const view = await pairConfigApi("/cursor");
+  paintCursorBot(view);
+}
+
+async function saveCursorSettings(extra = {}) {
+  const body = {
+    take_profit_pct: Number($("cursor-tp")?.value),
+    stake_amount: Number($("cursor-stake")?.value),
+    max_open_trades: Number($("cursor-max")?.value),
+    min_confidence_pct: Number($("cursor-conf")?.value),
+    ...extra,
+  };
+  const view = await pairConfigApi("/cursor", "POST", body);
+  paintCursorBot(view);
+  return view;
+}
+
+function showCursorMsg(text, isError = false) {
+  const el = $("cursor-msg");
+  if (!el) return;
+  el.textContent = text;
+  el.className = `pair-msg ${isError ? "error" : "ok"}`;
+  el.classList.remove("hidden");
+}
+
+function cursor50DecisionText(view) {
+  const actions = Array.isArray(view?.status?.actions) ? view.status.actions : [];
+  const hits = actions.filter((row) => row.result === "signal" || row.result === "close");
+  if (hits.length) {
+    return hits
+      .map((row) => {
+        const base = llmBase(row.pair);
+        if (row.result === "close") return `${base} CLOSE`;
+        const side = row.action === "SELL" ? "SHORT" : "LONG";
+        const stake = Number(row.stake_usdt);
+        const usd = Number.isFinite(stake) ? ` ${stake}$` : "";
+        return `${base} ${side}${usd}`;
+      })
+      .join(" · ");
+  }
+  if (!view?.openseek_up) return cursorDownText(view);
+  if (!view?.enabled) return "Нажмите Старт — модель получит бюджет 50 USDT";
+  if (view?.status?.state === "idle") return "Остановлен";
+  if (view?.status?.state === "wait") return "Ждёт ответ Cursor";
+  if (view?.status?.state === "error") return llmCycleError(view?.status?.reason);
+  if (view?.status?.reason && !hits.length) return String(view.status.reason);
+  return actions.length ? "Без новых входов" : "Ожидание первого цикла";
+}
+
+function paintCursor50(view) {
+  const badge = $("cursor50-state");
+  if (badge) {
+    const on = !!view?.enabled;
+    badge.textContent = on ? "RUNNING" : "STOPPED";
+    badge.className = on ? "badge running" : "badge stopped";
+  }
+  const stats = view?.stats || {};
+  const free = $("cursor50-free");
+  const used = $("cursor50-used");
+  const pnl = $("cursor50-pnl");
+  const trades = $("cursor50-count");
+  if (free) free.textContent = `${stats.free_usdt ?? 50} $`;
+  if (used) used.textContent = `${stats.used_usdt ?? 0} $`;
+  if (pnl) {
+    const value = Number(stats.realized_usdt ?? 0);
+    pnl.textContent = `${value > 0 ? "+" : ""}${value.toFixed(2)} $`;
+    pnl.className = value > 0 ? "pos" : value < 0 ? "neg" : "";
+  }
+  if (trades) trades.textContent = `${stats.closed_count ?? 0} · ${stats.wins ?? 0}/${stats.losses ?? 0}`;
+  const subtitle = $("cursor50-subtitle");
+  if (subtitle) {
+    const pairCount = Array.isArray(view?.pairs) ? view.pairs.length : 25;
+    subtitle.textContent = `бюджет ${view?.budget_usdt ?? 50} USDT · в работе ${stats.used_usdt ?? 0} · ${pairCount} пар · плечо 3x · цикл 30 мин`;
+  }
+  const toggle = $("cursor50-toggle");
+  if (toggle) {
+    toggle.textContent = view?.enabled ? "Стоп" : "Старт";
+    toggle.classList.toggle("danger", !!view?.enabled);
+    toggle.classList.toggle("primary", !view?.enabled);
+    toggle.disabled = !!settingsReadonly;
+  }
+  const decision = $("cursor50-decision");
+  if (decision) decision.textContent = cursor50DecisionText(view);
+  renderTradesInto($("cursor50-trades"), "strategy", view?.trades || []);
+}
+
+async function refreshCursor50() {
+  if (!userMayUseBlock("llm")) return;
+  const view = await pairConfigApi("/cursor50");
+  paintCursor50(view);
+}
+
+function showCursor50Msg(text, isError = false) {
+  const el = $("cursor50-msg");
+  if (!el) return;
+  el.textContent = text;
+  el.className = `pair-msg ${isError ? "error" : "ok"}`;
+  el.classList.remove("hidden");
+}
+
+function bindCursorControls() {
+  $("cursor-save")?.addEventListener("click", async () => {
+    const btn = $("cursor-save");
+    if (!btn || btn.disabled) return;
+    btn.disabled = true;
+    try {
+      await saveCursorSettings();
+      showCursorMsg("Сохранено");
+    } catch (e) {
+      if (e.message === "auth") logout();
+      else showCursorMsg(formatApiError(e.message), true);
+    } finally {
+      btn.disabled = !!settingsReadonly;
+    }
+  });
+  $("cursor-toggle")?.addEventListener("click", async () => {
+    const btn = $("cursor-toggle");
+    if (!btn || btn.disabled) return;
+    const enable = btn.textContent.trim() !== "Стоп";
+    btn.disabled = true;
+    try {
+      await saveCursorSettings({ enabled: enable });
+      showCursorMsg(enable ? "Бот запущен" : "Новые входы остановлены");
+    } catch (e) {
+      if (e.message === "auth") logout();
+      else showCursorMsg(formatApiError(e.message), true);
+    } finally {
+      btn.disabled = !!settingsReadonly;
+    }
+  });
+  $("cursor-tickers-btn")?.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    const wrap = $("cursor-tickers");
+    const panel = $("cursor-tickers-panel");
+    const btn = $("cursor-tickers-btn");
+    if (!wrap || !panel || !btn) return;
+    const willOpen = panel.hidden;
+    closeLlmTickersPanel();
+    if (!willOpen) return;
+    panel.hidden = false;
+    btn.setAttribute("aria-expanded", "true");
+    wrap.classList.add("is-open");
+    requestAnimationFrame(() => {
+      positionStrategyTickersPanel(wrap, panel);
+      const input = $("cursor-pair-input");
+      if (input && !input.disabled) input.focus();
+    });
+  });
+  $("cursor-pair-form")?.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const input = $("cursor-pair-input");
+    const raw = String(input?.value || "").trim();
+    if (!raw || settingsReadonly) return;
+    const btn = $("cursor-pair-add");
+    if (btn) btn.disabled = true;
+    try {
+      await saveCursorSettings({ pairs: [...cursorPairs, raw] });
+      if (input) input.value = "";
+      showCursorMsg("Пара добавлена");
+    } catch (e) {
+      if (e.message === "auth") logout();
+      else showCursorMsg(formatApiError(e.message), true);
+    } finally {
+      if (btn) btn.disabled = !!settingsReadonly;
+    }
+  });
+  $("cursor-pairs")?.addEventListener("click", async (ev) => {
+    const btn = ev.target.closest(".strategy-tickers-remove");
+    if (!btn || btn.disabled) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const pair = btn.getAttribute("data-pair");
+    if (!pair) return;
+    btn.disabled = true;
+    try {
+      await saveCursorSettings({ pairs: cursorPairs.filter((item) => item !== pair) });
+      showCursorMsg(`${pairBaseLabel(pair)} убрана`);
+    } catch (e) {
+      if (e.message === "auth") logout();
+      else showCursorMsg(formatApiError(e.message), true);
+    }
+  });
+  $("cursor50-toggle")?.addEventListener("click", async () => {
+    const btn = $("cursor50-toggle");
+    if (!btn || btn.disabled) return;
+    const enable = btn.textContent.trim() !== "Стоп";
+    btn.disabled = true;
+    try {
+      const view = await pairConfigApi("/cursor50", "POST", { enabled: enable });
+      paintCursor50(view);
+      showCursor50Msg(enable ? "Бот запущен, бюджет 50 USDT" : "Новые решения остановлены");
+    } catch (e) {
+      if (e.message === "auth") logout();
+      else showCursor50Msg(formatApiError(e.message), true);
+    } finally {
+      btn.disabled = !!settingsReadonly;
+    }
+  });
+}
+
+let fastRefreshLock = false;
+let heavyRefreshLock = false;
+let fastRefreshAgain = false;
+let lastHeavyRefreshAt = 0;
+let telegramPaused = false;
+const HEAVY_REFRESH_MS = 40000;
+
+function panelIsActive() {
+  const app = $("app-screen");
+  return !!(
+    sessionToken &&
+    app &&
+    !app.classList.contains("hidden") &&
+    document.visibilityState !== "hidden" &&
+    !telegramPaused
+  );
+}
+
+function stampLastUpdate() {
+  const stamp = $("last-update");
+  if (stamp) stamp.textContent = `Обновлено: ${fmtAppTime(new Date())} ${APP_TZ_LABEL}`;
+}
+
+async function refreshOpenTradesFast() {
+  try {
+    if (openSummaryCache) renderTradesSummaryFromOpen(openSummaryCache);
+    let cachedTrades = [];
+    try {
+      const bundle = await fetchOpenTradesCache();
+      cachedTrades = paintOpenTradesFromServerBundle(bundle) || [];
+    } catch (e) {
+      if (e.message === "auth") throw e;
+      console.warn("open-trades cache:", e.message);
+    }
+    renderTradesSummary(cachedTrades);
+    stampLastUpdate();
+  } catch (e) {
+    if (e.message === "auth") logout();
+    else console.error(e);
+  }
+}
+
+async function refreshPanelHeavy() {
   try {
     const now = Date.now();
     if (sessionToken) {
@@ -6519,41 +9122,19 @@ async function refreshAll() {
         if (e.message === "auth") throw e;
       }
     }
-    if (openSummaryCache) renderTradesSummaryFromOpen(openSummaryCache);
 
-    // Instant path: pair-config open-trades (sqlite/cache) — never waits on ctbot.
-    let cachedTrades = [];
-    try {
-      const bundle = await fetchOpenTradesCache();
-      cachedTrades = paintOpenTradesFromServerBundle(bundle) || [];
-    } catch (e) {
-      if (e.message === "auth") throw e;
-      console.warn("open-trades cache:", e.message);
-    }
-
-    renderTradesSummary(cachedTrades);
-    $("last-update").textContent = `Обновлено: ${fmtAppTime(new Date())} ${APP_TZ_LABEL}`;
-
-    // Test-block limits live in pair-config files — sync even if /strategies is slow.
     pairConfigApi("/pairs")
       .then((data) => {
         syncTestSettingsFromPayload(data);
-        const strat = data?.strategy || {};
-        if (strat.max_open_trades != null) applyPinnedMaxTrades("strategy", strat.max_open_trades);
-        if (strat.max_open_trades_per_strategy != null) {
-          applyPinnedMaxPerStrategy(strat.max_open_trades_per_strategy);
-        }
-        updateBotSettingsSummaries();
+        syncLimitsFromPairPayload(data);
       })
       .catch(() => {});
 
-    // Background: strategy flags + live bot APIs (may be slow; UI already painted).
     refreshStrategyEnabled().catch((e) => {
       if (e.message === "auth") logout();
       else console.warn("refreshStrategyEnabled:", e.message);
     });
-    // Always refresh grid — shared-stack only replaces strategy trading, not Volatility Grid.
-    const liveBots = ["strategy", "grid", "finder"];
+    const liveBots = ["strategy"];
     Promise.all(liveBots.map((b) => refreshBotSafe(b)))
       .then((results) => {
         const stratTrades = results[0] || [];
@@ -6564,7 +9145,7 @@ async function refreshAll() {
           ...(gridTrades || []),
           ...(finderTrades || []),
         ]);
-        $("last-update").textContent = `Обновлено: ${fmtAppTime(new Date())} ${APP_TZ_LABEL}`;
+        stampLastUpdate();
       })
       .catch(() => {});
 
@@ -6572,19 +9153,57 @@ async function refreshAll() {
       refreshPairlistMode().catch(() => {}),
       refreshServerStats().catch(() => {}),
       refreshReconcileBanner().catch(() => {}),
-      loadGridScanInfo().catch(() => {}),
       loadStrategyScanInfo().catch(() => {}),
+      refreshLlm50().catch((e) => {
+        if (e.message === "auth") throw e;
+      }),
+      refreshLlmBot().catch((e) => {
+        if (e.message === "auth") logout();
+      }),
+      refreshCursor50().catch((e) => {
+        if (e.message === "auth") throw e;
+      }),
+      refreshCursorBot().catch((e) => {
+        if (e.message === "auth") logout();
+      }),
     ];
-    if (now - lastBybitGridRefresh >= BYBIT_GRID_REFRESH_MS) {
-      sideTasks.push(refreshBybitGrid().catch(() => {}));
-      lastBybitGridRefresh = now;
-    }
     Promise.all(sideTasks).catch(() => {});
     prefetchStatsBundle().catch(() => {});
   } catch (e) {
     if (e.message === "auth") logout();
     else console.error(e);
   }
+}
+
+async function refreshAll({ heavy = null } = {}) {
+  if (!panelIsActive()) return;
+  const wantHeavy =
+    heavy === true || (heavy !== false && Date.now() - lastHeavyRefreshAt >= HEAVY_REFRESH_MS);
+  const jobs = [];
+  if (fastRefreshLock) {
+    fastRefreshAgain = true;
+  } else {
+    fastRefreshLock = true;
+    jobs.push(
+      refreshOpenTradesFast().finally(() => {
+        fastRefreshLock = false;
+        if (fastRefreshAgain) {
+          fastRefreshAgain = false;
+          refreshAll({ heavy: false }).catch(() => {});
+        }
+      })
+    );
+  }
+  if (wantHeavy && !heavyRefreshLock) {
+    lastHeavyRefreshAt = Date.now();
+    heavyRefreshLock = true;
+    jobs.push(
+      refreshPanelHeavy().finally(() => {
+        heavyRefreshLock = false;
+      })
+    );
+  }
+  if (jobs.length) await Promise.all(jobs);
 }
 
 function showPairMsg(text, isError = false) {
@@ -6611,14 +9230,7 @@ async function loadPairSettings() {
   ];
 
   syncTestSettingsFromPayload(data);
-  if (finder.max_open_trades != null) applyPinnedMaxTrades("finder", finder.max_open_trades);
-  if (strategy.max_open_trades != null) applyPinnedMaxTrades("strategy", strategy.max_open_trades);
-  if (strategy.max_open_trades_per_strategy != null) {
-    applyPinnedMaxPerStrategy(strategy.max_open_trades_per_strategy);
-  }
-  if (grid.max_open_trades != null) applyPinnedMaxTrades("grid", grid.max_open_trades);
-  if (grid.stake_amount != null) BOTS.grid.stakeAmount = Number(grid.stake_amount);
-  if (strategy.stake_amount != null) BOTS.strategy.stakeAmount = Number(strategy.stake_amount);
+  syncLimitsFromPairPayload(data);
   if (strategy.enabled_strategies) {
     enabledStrategies = { ...enabledStrategies, ...strategy.enabled_strategies };
     updateStrategyDisplay();
@@ -6714,6 +9326,52 @@ function showTelegramMsg(text, isError = false) {
   el.classList.toggle("hidden", !text);
 }
 
+function collectTelegramNotifyPrefs() {
+  const prefs = {};
+  document.querySelectorAll("[data-tg-notify]").forEach((el) => {
+    const key = el.getAttribute("data-tg-notify");
+    if (key) prefs[key] = !!el.checked;
+  });
+  if (prefs.trade_close_all) {
+    prefs.trade_close_profit = true;
+    prefs.trade_close_loss = true;
+  }
+  return prefs;
+}
+
+function applyTelegramNotifyPrefs(notify) {
+  const prefs = notify && typeof notify === "object" ? notify : {};
+  document.querySelectorAll("[data-tg-notify]").forEach((el) => {
+    const key = el.getAttribute("data-tg-notify");
+    if (!key) return;
+    el.checked = prefs[key] !== undefined ? !!prefs[key] : !!el.checked;
+  });
+  syncTelegramCloseAllUi();
+}
+
+function syncTelegramCloseAllUi() {
+  const all = document.querySelector('[data-tg-notify="trade_close_all"]');
+  const profit = document.querySelector('[data-tg-notify="trade_close_profit"]');
+  const loss = document.querySelector('[data-tg-notify="trade_close_loss"]');
+  if (!all) return;
+  if (all.checked) {
+    if (profit) {
+      profit.checked = true;
+      profit.disabled = true;
+    }
+    if (loss) {
+      loss.checked = true;
+      loss.disabled = true;
+    }
+  } else {
+    if (profit) profit.disabled = false;
+    if (loss) loss.disabled = false;
+  }
+  const master = $("telegram-notify-enabled");
+  const box = $("telegram-notify-kinds");
+  if (box) box.classList.toggle("is-disabled", master && !master.checked);
+}
+
 async function loadTelegramSettings() {
   const statusEl = $("telegram-status");
   const input = $("telegram-chat-id");
@@ -6724,6 +9382,7 @@ async function loadTelegramSettings() {
       input.value = data.chat_id || "";
     }
     if (chk) chk.checked = data.enabled !== false && !!data.chat_id;
+    applyTelegramNotifyPrefs(data.notify || {});
     if (statusEl) {
       const bot = data.bot_configured ? "бот настроен" : "TELEGRAM_BOT_TOKEN не задан";
       statusEl.textContent = data.chat_id
@@ -6747,6 +9406,7 @@ async function saveTelegramSettings({ clear = false } = {}) {
   const payload = {
     chat_id: chatId,
     enabled: clear ? false : !!(chk?.checked ?? true),
+    notify: clear ? undefined : collectTelegramNotifyPrefs(),
   };
   const initData = window.Telegram?.WebApp?.initData;
   if (!chatId && initData && !clear) {
@@ -6758,6 +9418,7 @@ async function saveTelegramSettings({ clear = false } = {}) {
     delete input.dataset.dirty;
   }
   if (chk) chk.checked = !!data.enabled;
+  applyTelegramNotifyPrefs(data.notify || {});
   showTelegramMsg(
     data.chat_id
       ? `Сохранено: chat id ${data.chat_id}. Проверьте сообщение в Telegram.`
@@ -6787,6 +9448,72 @@ async function saveTradingToggle(enabled) {
   }
 }
 
+function showScanFreqMsg(text, isError = false) {
+  const el = $("scan-freq-msg");
+  if (!el) return;
+  el.textContent = text || "";
+  el.className = isError ? "pair-msg error" : "pair-msg ok";
+  el.classList.toggle("hidden", !text);
+}
+
+function syncScanFreqFixedVisibility() {
+  const mode = $("scan-freq-mode")?.value || "adaptive";
+  const wrap = $("scan-freq-fixed-wrap");
+  if (wrap) wrap.classList.toggle("hidden", mode !== "fixed");
+}
+
+async function loadScanFreqSettings() {
+  if (!isAdminUser()) return;
+  const statusEl = $("scan-freq-status");
+  const modeEl = $("scan-freq-mode");
+  const fixedEl = $("scan-freq-fixed");
+  try {
+    const data = await pairConfigApi("/adaptive-scan");
+    const settings = data.settings || {};
+    const mode = settings.mode || data.mode || "adaptive";
+    const fixed = Number(settings.fixed_interval_min || 15);
+    if (modeEl) modeEl.value = mode === "fixed" ? "fixed" : "adaptive";
+    if (fixedEl) {
+      const allowed = data.allowed_fixed_intervals_min || [5, 10, 15, 30, 60];
+      if (allowed.length && fixedEl.options.length !== allowed.length) {
+        fixedEl.innerHTML = allowed
+          .map((m) => `<option value="${m}">Каждые ${m} мин</option>`)
+          .join("");
+      }
+      fixedEl.value = String(allowed.includes(fixed) ? fixed : allowed[0] || 15);
+    }
+    syncScanFreqFixedVisibility();
+    if (statusEl) {
+      if (mode === "fixed") {
+        statusEl.textContent = `Сейчас: каждые ${fixed} мин (фикс.) · текущий шаг ${data.current_interval_min ?? fixed} мин`;
+      } else {
+        const ladder = (data.adaptive_intervals_min || data.intervals_min || [5, 10, 15, 30]).join("→");
+        statusEl.textContent = `Сейчас: адаптивно ${ladder} мин · текущий интервал ${data.current_interval_min ?? "—"} мин`;
+      }
+    }
+  } catch (e) {
+    if (statusEl) statusEl.textContent = e.message || "Ошибка загрузки частоты скана";
+  }
+}
+
+async function saveScanFreqSettings() {
+  const mode = $("scan-freq-mode")?.value || "adaptive";
+  const fixed = Number($("scan-freq-fixed")?.value || 15);
+  const payload = {
+    mode,
+    fixed_interval_min: fixed,
+  };
+  const data = await pairConfigApi("/adaptive-scan/settings", "PATCH", payload);
+  showScanFreqMsg(
+    mode === "fixed"
+      ? `Сохранено: каждые ${data.settings?.fixed_interval_min || fixed} мин`
+      : "Сохранено: адаптивный режим (5→10→15→30)",
+  );
+  await loadScanFreqSettings();
+  refreshServerStats().catch(() => {});
+  return data;
+}
+
 function openSettings() {
   closeMobileMenu();
   hideMainViewsForOverlay();
@@ -6804,6 +9531,7 @@ function openSettings() {
   if (isAdminUser()) {
     loadUsersAdmin().catch(() => {});
     renderPlacementAdmin({ strategies: strategyCatalog });
+    loadScanFreqSettings().catch(() => {});
   }
 }
 
@@ -6862,6 +9590,11 @@ $("login-btn").addEventListener("click", async () => {
   creds.pass = $("login-pass").value;
   sessionToken = "";
   $("login-error").classList.add("hidden");
+  if (!creds.user || !creds.pass) {
+    $("login-error").textContent = "Введите логин и пароль";
+    $("login-error").classList.remove("hidden");
+    return;
+  }
   try {
     await loginAll();
     $("login-screen").classList.add("hidden");
@@ -6919,7 +9652,9 @@ async function loadUsersAdmin() {
           ${
             isAdm
               ? ""
-              : `<div class="muted users-perms-hint">блоки: ${blockN} · стратегии: ${stratN}</div>`
+              : `<div class="muted users-perms-hint">блоки: ${blockN} · стратегии: ${stratN}${
+                  u.demo_username ? ` · demo: ${escapeHtml(u.demo_username)}` : ""
+                }</div>`
           }
         </div>
         <div class="users-list-actions">
@@ -7006,6 +9741,28 @@ async function stopImpersonation() {
   tokens = { finder: "proxy", strategy: "proxy", grid: "proxy" };
   await refreshAll().catch(() => {});
   if (isAdminUser()) loadUsersAdmin().catch(() => {});
+}
+
+async function switchAccount(target) {
+  const data = await pairConfigApi("/auth/switch-account", "POST", { target });
+  sessionToken = data.token || "";
+  currentUser = data.user || null;
+  creds.user = currentUser?.username || "";
+  tokens = { finder: null, strategy: null, grid: null };
+  saveSession();
+  // Apply full switch payload immediately (includes account_kind, allowed_blocks,
+  // secrets) so Live/Demo buttons and panels update before /auth/me round-trip.
+  applyAuthMeState(data);
+  updateMultiUserUi(data);
+  // Allow reverse switch while panels refresh (do not hold UI lock across refreshAll).
+  _accountSwitchInFlight = false;
+  try {
+    await refreshAuthMe();
+  } catch (e) {
+    if (e.message === "auth") throw e;
+  }
+  tokens = { finder: "proxy", strategy: "proxy", grid: "proxy" };
+  await refreshAll().catch(() => {});
 }
 
 function showUserPermsMsg(text, isError = false) {
@@ -7106,7 +9863,22 @@ $("users-create-btn")?.addEventListener("click", async () => {
     await pairConfigApi("/users", "POST", { username, password });
     $("users-new-name").value = "";
     $("users-new-pass").value = "";
-    showUsersMsg(`Пользователь ${username} создан (лимиты 1/1/1). Пусть задаст ключи Bybit.`);
+    showUsersMsg(
+      `Созданы ${username} + ${username}_demo (одинаковый пароль). Боты выкл.; у Live без тестовых стратегий.`
+    );
+    await loadUsersAdmin();
+  } catch (e) {
+    showUsersMsg(formatApiError(e.message), true);
+  }
+});
+
+$("users-backfill-demo-btn")?.addEventListener("click", async () => {
+  if (!confirm("Создать недостающие *_demo пары для существующих пользователей?")) return;
+  try {
+    const r = await pairConfigApi("/users/backfill-demo-pairs", "POST", {});
+    showUsersMsg(
+      `Demo-пары: создано ${ (r.created || []).length }, уже были ${ (r.skipped || []).length }, ошибок ${ (r.errors || []).length }`
+    );
     await loadUsersAdmin();
   } catch (e) {
     showUsersMsg(formatApiError(e.message), true);
@@ -7118,6 +9890,32 @@ $("impersonate-return-btn")?.addEventListener("click", async () => {
     await stopImpersonation();
   } catch (e) {
     alert(formatApiError(e.message));
+  }
+});
+
+let _accountSwitchInFlight = false;
+$("account-switch-live")?.addEventListener("click", async () => {
+  if (_accountSwitchInFlight) return;
+  if (accountKind === "live") return;
+  _accountSwitchInFlight = true;
+  try {
+    await switchAccount("live");
+  } catch (e) {
+    alert(formatApiError(e.message) || "Не удалось переключить аккаунт");
+  } finally {
+    _accountSwitchInFlight = false;
+  }
+});
+$("account-switch-demo")?.addEventListener("click", async () => {
+  if (_accountSwitchInFlight) return;
+  if (accountKind === "demo") return;
+  _accountSwitchInFlight = true;
+  try {
+    await switchAccount("demo");
+  } catch (e) {
+    alert(formatApiError(e.message) || "Не удалось переключить аккаунт");
+  } finally {
+    _accountSwitchInFlight = false;
   }
 });
 
@@ -7151,7 +9949,9 @@ $("user-perms-strats-none")?.addEventListener("click", () => {
 $("secrets-save-btn")?.addEventListener("click", async () => {
   const key = $("secrets-api-key")?.value.trim() || "";
   const secret = $("secrets-api-secret")?.value || "";
-  const demoTrading = !!$("secrets-mode-demo")?.checked;
+  let demoTrading = !!$("secrets-mode-demo")?.checked;
+  if (accountKind === "demo") demoTrading = true;
+  else if (accountKind === "live" && !isAdminUser()) demoTrading = false;
   const name =
     $("secrets-name")?.value.trim() ||
     (demoTrading ? "Demo Trading" : "Live");
@@ -7195,6 +9995,16 @@ $("trading-strategy-enabled")?.addEventListener("change", async (e) => {
 $("telegram-chat-id")?.addEventListener("input", () => {
   if ($("telegram-chat-id")) $("telegram-chat-id").dataset.dirty = "1";
 });
+$("telegram-notify-enabled")?.addEventListener("change", () => {
+  syncTelegramCloseAllUi();
+});
+$("telegram-notify-kinds")?.addEventListener("change", (e) => {
+  const t = e.target;
+  if (!(t instanceof HTMLInputElement) || !t.hasAttribute("data-tg-notify")) return;
+  if (t.getAttribute("data-tg-notify") === "trade_close_all") {
+    syncTelegramCloseAllUi();
+  }
+});
 $("telegram-save-btn")?.addEventListener("click", async () => {
   try {
     await saveTelegramSettings();
@@ -7209,6 +10019,43 @@ $("telegram-clear-btn")?.addEventListener("click", async () => {
   } catch (e) {
     if (e.message === "auth") logout();
     else showTelegramMsg(formatApiError(e.message), true);
+  }
+});
+
+$("scan-freq-mode")?.addEventListener("change", () => {
+  syncScanFreqFixedVisibility();
+});
+$("scan-freq-save-btn")?.addEventListener("click", async () => {
+  try {
+    await saveScanFreqSettings();
+  } catch (e) {
+    if (e.message === "auth") logout();
+    else showScanFreqMsg(formatApiError(e.message), true);
+  }
+});
+
+function showStrategyBotRestartMsg(text, isError = false) {
+  const el = $("strategy-bot-restart-msg");
+  if (!el) return;
+  el.textContent = text;
+  el.className = isError ? "pair-msg error" : "pair-msg ok";
+  el.classList.remove("hidden");
+}
+
+$("strategy-bot-restart-btn")?.addEventListener("click", async () => {
+  const btn = $("strategy-bot-restart-btn");
+  if (!confirm("Перезапустить бот стратегий? На время старта новые сигналы не пойдут.")) return;
+  if (btn) btn.disabled = true;
+  showStrategyBotRestartMsg("Перезапуск…");
+  try {
+    const data = await pairConfigApi("/strategy-bot/restart", "POST", {});
+    const state = data.state || "active";
+    showStrategyBotRestartMsg(`Бот стратегий перезапущен (${state}).`);
+  } catch (e) {
+    if (e.message === "auth") logout();
+    else showStrategyBotRestartMsg(formatApiError(e.message), true);
+  } finally {
+    if (btn) btn.disabled = false;
   }
 });
 
@@ -7720,22 +10567,161 @@ $("bybitgrid-create")?.addEventListener("click", async () => {
 });
 
 const savedSession = loadStoredSession();
+showTelegramLoginHint();
+
+function enterAppAfterLogin() {
+  $("login-screen").classList.add("hidden");
+  $("app-screen").classList.remove("hidden");
+  loadStrategySettings()
+    .catch(() => {})
+    .finally(() => refreshAll());
+}
+
 if (savedSession) {
   applyStoredCreds(savedSession);
   loginAll()
-    .then(() => {
-      $("login-screen").classList.add("hidden");
-      $("app-screen").classList.remove("hidden");
-      loadStrategySettings()
-        .catch(() => {})
-        .finally(() => refreshAll());
-    })
+    .then(() => enterAppAfterLogin())
     .catch(() => {
       clearSession();
+      // Session expired: try Telegram Mini App silent login
+      tryTelegramWebAppLogin()
+        .then((ok) => {
+          if (ok) enterAppAfterLogin();
+        })
+        .catch(() => {});
     });
+} else if (window.Telegram?.WebApp?.initData) {
+  tryTelegramWebAppLogin()
+    .then((ok) => {
+      if (ok) enterAppAfterLogin();
+    })
+    .catch(() => {});
 }
 
-setInterval(refreshAll, 10000);
+function closeTelegramOverlay() {
+  if (isNavSurfaceOpen("changelog-view")) {
+    closeChangelog();
+    return true;
+  }
+  if (isNavSurfaceOpen("logs-view")) {
+    closeLogs();
+    return true;
+  }
+  if (isNavSurfaceOpen("pnl-dashboard-view")) {
+    closePnlDashboard();
+    return true;
+  }
+  if (isNavSurfaceOpen("rating-view")) {
+    closeRating();
+    return true;
+  }
+  if (isNavSurfaceOpen("history-view")) {
+    closeHistory();
+    return true;
+  }
+  if (isNavSurfaceOpen("settings-view")) {
+    closeSettings();
+    return true;
+  }
+  if (isNavSurfaceOpen("stats-modal")) {
+    closeStats();
+    return true;
+  }
+  if (isNavSurfaceOpen("info-modal")) {
+    closeInfo();
+    return true;
+  }
+  if (isNavSurfaceOpen("guide-modal")) {
+    closeGuide();
+    return true;
+  }
+  if (isNavSurfaceOpen("bybitgrid-modal")) {
+    closeBybitGridModal();
+    return true;
+  }
+  if ($("topbar")?.classList.contains("is-menu-open")) {
+    closeMobileMenu();
+    return true;
+  }
+  return false;
+}
+
+function telegramOverlayOpen() {
+  const ids = [
+    "changelog-view",
+    "logs-view",
+    "pnl-dashboard-view",
+    "rating-view",
+    "history-view",
+    "settings-view",
+    "stats-modal",
+    "info-modal",
+    "guide-modal",
+    "bybitgrid-modal",
+  ];
+  if (ids.some((id) => isNavSurfaceOpen(id))) return true;
+  return !!$("topbar")?.classList.contains("is-menu-open");
+}
+
+function syncTelegramBackButton() {
+  const back = window.Telegram?.WebApp?.BackButton;
+  if (!back) return;
+  if (telegramOverlayOpen()) back.show();
+  else back.hide();
+}
+
+function bindTelegramShell() {
+  const tg = window.Telegram?.WebApp;
+  if (!tg?.initData || bindTelegramShell.done) return;
+  bindTelegramShell.done = true;
+  if (tg.BackButton) {
+    tg.BackButton.onClick(() => {
+      closeTelegramOverlay();
+      syncTelegramBackButton();
+    });
+  }
+  const watch = [
+    "changelog-view",
+    "logs-view",
+    "pnl-dashboard-view",
+    "rating-view",
+    "history-view",
+    "settings-view",
+    "stats-modal",
+    "info-modal",
+    "guide-modal",
+    "bybitgrid-modal",
+    "topbar",
+  ];
+  const obs = new MutationObserver(() => syncTelegramBackButton());
+  watch.forEach((id) => {
+    const el = $(id);
+    if (el) obs.observe(el, { attributes: true, attributeFilter: ["class"] });
+  });
+  if (tg.onEvent) {
+    tg.onEvent("deactivated", () => {
+      telegramPaused = true;
+    });
+    tg.onEvent("activated", () => {
+      telegramPaused = false;
+      lastHeavyRefreshAt = 0;
+      refreshAll({ heavy: true }).catch(() => {});
+    });
+  }
+  syncTelegramBackButton();
+}
+
+bindTelegramShell();
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") return;
+  lastHeavyRefreshAt = 0;
+  refreshAll({ heavy: true }).catch(() => {});
+});
+
+setInterval(() => {
+  refreshAll().catch(() => {});
+}, 10000);
 setInterval(() => {
   if (loadStoredSession() && $("app-screen") && !$("app-screen").classList.contains("hidden")) {
     reloginFromStorage().catch(() => {});
@@ -7746,6 +10732,10 @@ bindCollapsibleSections();
 bindUiHints();
 updateBotSettingsSummaries();
 bindTradeLists();
+bindLlmControls();
+bindLlm50Controls();
+bindCursorControls();
+bindStrategyRunScanButton();
 bindPanelStatsButtons();
 bindStatsPeriodButtons();
 bindHistoryControls();

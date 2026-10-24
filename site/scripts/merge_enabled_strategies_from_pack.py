@@ -41,6 +41,7 @@ def main() -> int:
     inverted = dict(data.get("inverted") or {})
     trained = dict(data.get("trained_risk") or {})
     mlc = dict(data.get("ml_confidence") or {})
+    pairs = dict(data.get("pairs") or {})
     sim_map = dict(data.get("_sim_map") or {})
     rank_order = [s["class_name"] for s in strategies if s.get("class_name")]
 
@@ -59,26 +60,31 @@ def main() -> int:
             trained[cls] = True
             mlc[cls] = gate
             inverted[cls] = False
+            pairs.setdefault(cls, [])
             added.append(cls)
         else:
             trained.setdefault(cls, True)
             mlc.setdefault(cls, gate)
             inverted.setdefault(cls, False)
+            pairs.setdefault(cls, list(pairs.get(cls) or []))
 
     for cls in legacy:
         enabled[cls] = False
         trained.setdefault(cls, False)
         mlc.setdefault(cls, 0.55)
         inverted.setdefault(cls, False)
+        pairs.setdefault(cls, list(pairs.get(cls) or []))
 
     out = {
         **{k: v for k, v in data.items() if k.startswith("_") or k not in {
-            "enabled", "inverted", "trained_risk", "ml_confidence", "_sim_map", "_rank_order"
+            "enabled", "inverted", "trained_risk", "ml_confidence", "pairs",
+            "_sim_map", "_rank_order"
         }},
         "enabled": enabled,
         "inverted": {k: bool(inverted.get(k, False)) for k in enabled},
         "trained_risk": {k: bool(trained.get(k, False)) for k in enabled},
         "ml_confidence": {k: float(mlc.get(k, 0.55)) for k in enabled},
+        "pairs": {k: list(pairs.get(k) or []) for k in enabled},
         "_sim_map": sim_map,
         "_rank_order": rank_order,
         "_note": data.get("_note")
@@ -90,6 +96,7 @@ def main() -> int:
         "inverted": out["inverted"],
         "trained_risk": out["trained_risk"],
         "ml_confidence": out["ml_confidence"],
+        "pairs": out["pairs"],
     }
     BOT.write_text(json.dumps(bot, indent=4, ensure_ascii=False) + "\n", encoding="utf-8")
     on = sum(1 for v in enabled.values() if v)

@@ -1,97 +1,125 @@
 ﻿# CryptoTools
 
-Торговый стек для **Bybit USDT Perpetual**: live-боты, панель управления, ML entry-gate, симуляции и обучение моделей.
+Торговый стек для **Bybit USDT Perpetual**: live-боты, веб-панель, multi-user (Live/Demo), ML entry-gate, симуляции и обучение.
 
-**Репозиторий:** `D:\cryptotools`.  
-**Для AI/агента:** сначала [`AGENTS.md`](AGENTS.md) — структура, правила прода vs симов, как добавлять стратегии.
+| | |
+|--|--|
+| **Прод (сейчас)** | Contabo `194.163.149.122` → UI [https://194.163.149.122:8443/](https://194.163.149.122:8443/) |
+| **Код прода** | `site/` ≈ `/home/cryptotools/app` на VPS |
+| **UI на сервере** | `/var/www/criptotools-ui/` |
+| **Симуляции** | `simulation/` (offline; live сами не трогают) |
+| **Для AI** | [`AGENTS.md`](AGENTS.md) — читай перед правками |
 
-| Папка | Назначение |
-|-------|------------|
-| `site/` | Прод: боты, UI, pair-config, shared stack, деплой на VPS |
-| `simulation/` | Офлайн: симы, replay, свипы, обучение ML |
-| `user_data/`, `.venv/` | Junction → `site/` (локально; в git не входят) |
-
----
-
-## Архитектура прода
-
-```
-Browser (custom-ui)
-        │  HTTPS :8443  (локально: gateway :8443)
-        ▼
-     nginx / local_site_gateway
-        ├── static UI
-        ├── /api/pair-config/*  → pair_config :8090
-        ├── /api/strategy/*     → signal-engine :8081  (shared stack)
-        ├── /api/grid/*         → Grid         :8082
-        └── /api/finder/*       → ML Finder    :8080
-
-pair-config ──► control-plane, whitelist, лимиты, reconcile vs Bybit
-signal-engine ──► MultiStrategyRouter ──► signal_bus ──► trade-executor ──► Bybit
-ML Finder     ──► barrier Transformer (или XGBoost) + optional LightGBM gate
-Grid          ──► VolatilityGridStrategy
-```
-
-| Роль | Config / unit | Стратегия / процесс | Порт |
-|------|---------------|---------------------|------|
-| **Strategy (signals)** | `config_signal_engine.json` / `cryptotools-signal-engine` | `MultiStrategyRouter` (signal-only) | 8081 |
-| **Executor** | `trade-executor.service` | `scripts/trade_executor.py` | — |
-| **Grid** | `config_grid.json` | `VolatilityGridStrategy` | 8082 |
-| **ML Finder** | `config.json` | `TradeFinderStrategy` (barrier XF) | 8080 |
-| **pair-config** | — | `pair_config_server.py` | 8090 |
-
-Strategy risk (основные): **SL −15%**, **ROI +5%**.  
-Тестовый блок: свои лимиты в `test_strategy_settings.json` (max open / per / stake / SL·TP); потолок Strategy-бота поднимается до тестового max.
-
-### Защита от дублей на одном счёте Bybit
-
-- `scripts/pair_entry_guard.py` — first-wins между Finder / Strategy / Grid (БД ботов + Bybit).
-- UI «Синхронизировать» + auto-reconcile (~5 мин) — призраки и дубли пар (`reconcile_positions.py`).
+Старый VPS `77.222.35.209` **не используется**. Все деплои и SSH — только на Contabo.
 
 ---
 
-## Быстрый старт (локально)
+## Что это
+
+На одном Bybit-счёте (или tenant-счётах) крутятся:
+
+1. **Strategy** — shared `signal-engine` (`MultiStrategyRouter`) пишет сигналы → `trade-executor` исполняет на ключах пользователя.
+2. **Grid** — `VolatilityGridStrategy`.
+3. **ML Finder** — `TradeFinderStrategy` (barrier Transformer).
+4. **pair-config** — whitelist, лимиты, Start/Stop (control-plane), JWT/auth, reconcile vs Bybit.
+5. **custom-ui** — панель за nginx `:8443`.
+
+```
+Browser → HTTPS :8443 (nginx)
+           ├── static UI  (/var/www/criptotools-ui)
+           ├── /api/pair-config/*  → :8090
+           ├── /api/strategy/*     → :8081  (signal-engine)
+           ├── /api/grid/*         → :8082
+           └── /api/finder/*       → :8080
+```
+
+| Unit | Config / код | Порт |
+|------|--------------|------|
+| `cryptotools-signal-engine` | `config_signal_engine.json` | 8081 |
+| `trade-executor` | `scripts/trade_executor.py` | — |
+| `cryptotools-grid` | `config_grid.json` | 8082 |
+| `cryptotools-finder` | `config.json` | 8080 |
+| `pair-config` | `pair_config_server.py` | 8090 |
+| `cryptotools-telegram-bot` | `telegram_bot.py` | — |
+
+Секреты на VPS: `/home/cryptotools/.cryptotools.env`. SSH: `site/deploy/id_rsa/id_rsa`, user `root`.  
+Если SSH/SCP таймаутится — **выключите VPN** и используйте батники в `site/deploy/*.bat`.
+
+---
+
+## Правила работы
+
+1. **`site/` = прод, `simulation/` = офлайн.** Не заливайте sim-конфиги на Contabo «молча»; синхрон ML/флагов — только через `apply_prod_ml_config.py` + деплой.
+2. **Не коммитить секреты:** `.env`, API-ключи, `deploy/id_rsa/`.
+3. **Не править `site/ctengine/`** без явной нужды.
+4. **Стратегии:** логика в `simulation/strategies/`, в проде — тонкие wrappers в `site/user_data/strategies/`.
+5. **Один Strategy-бот** = `MultiStrategyRouter` + shared executor (tenant’ы не поднимают отдельный strategy-unit).
+6. **Start/Stop в UI** пишет `desired` в `control_plane.sqlite`; `bot_reconcile` поднимает процессы через:
+   - admin: `deploy/admin-systemctl.sh` (NOPASSWD sudoers);
+   - tenant grid/finder: `deploy/tenant-systemctl.sh`.
+7. **Настройки пользователя** (enabled, placement, test limits) — в `control_plane.sqlite` (`user_settings`), не только JSON.
+8. **Коммиты / push** — только по просьбе. **Не выдумывать PnL** — смотреть отчёты/логи.
+9. **Деплой Contabo** — VPN off; ключ `site/deploy/id_rsa`; хост `194.163.149.122`.
+10. **Cross-bot:** `pair_entry_guard` (first-wins) + UI «Синхронизировать» / `reconcile_positions.py`.
+
+Подробности для агента: [`AGENTS.md`](AGENTS.md). Сервер: [`site/SERVER_SETUP.md`](site/SERVER_SETUP.md).
+
+---
+
+## Multi-user (кратко)
+
+| Роль | Как |
+|------|-----|
+| **Admin** | Shared units + `.cryptotools.env` |
+| **Live** | `users.json` + `secrets/{id}.enc` + `tenants/{id}/` |
+| **Demo** | Пара `username_demo` (api-demo Bybit), переключатель Live↔Demo в UI |
+
+Логин: `POST /api/pair-config/auth/login`. Боты пользователя: `PATCH /api/pair-config/bots/{strategy|grid|finder}`.
+
+---
+
+## Локально
 
 ```powershell
 cd D:\cryptotools\site
 .\scripts\load_env.ps1
+.\scripts\start_local_site.ps1   # UI :8443 + pair-config
 
-# Панель + pair-config (без обязательного старта ботов)
-.\scripts\start_local_site.ps1
-
-# Shared Strategy stack
+# Shared Strategy (осторожно — нужен .env)
 $env:CT_SIGNAL_ONLY = "1"
-.\.venv\Scripts\ctbot.exe trade --config user_data\config_signal_engine.json --strategy MultiStrategyRouter --strategy-path user_data\strategies
+.\.venv\Scripts\ctbot.exe trade --config user_data\config_signal_engine.json `
+  --strategy MultiStrategyRouter --strategy-path user_data\strategies
 .\.venv\Scripts\python.exe scripts\trade_executor.py
 ```
 
-Секреты: `site/.env`. Деплой/VPS: [`site/SERVER_SETUP.md`](site/SERVER_SETUP.md).
-
-### Симуляции и обучение
+Симы:
 
 ```powershell
 cd D:\cryptotools\simulation\scripts
-.\run_sim_replay.ps1
 .\start_player.ps1 -SkipDownload
-python train_pnl_classifier.py
-python train_trade_finder.py
-python train_eval_barrier_transformer.py   # barrier XF для Finder
 ```
-
-Подробнее: [`simulation/README.md`](simulation/README.md).
 
 ---
 
-## VPS (ориентир)
+## Деплой на Contabo
 
-| | Минимум | Комфорт |
-|--|---------|---------|
-| ОС | **Ubuntu 24.04/26.04 LTS** | то же |
-| CPU | 3× ~3.6 ГГц | 4+ vCPU |
-| RAM | **6 GB** (без Finder можно 4 GB впритык) | 8–12 GB |
-| Диск | 40 GB NVMe | 80 GB+ |
+```powershell
+# Полный ML/стратегии (осторожно)
+cd D:\cryptotools\site\scripts
+.\deploy_prod_ml.ps1   # ServerIp по умолчанию = Contabo
 
-С Finder (PyTorch) запас RAM важнее числа ядер. Обучение ML — не на том же VPS, что live.
+# Точечные фиксы — батники (VPN OFF → Enter)
+cd D:\cryptotools\site\deploy
+.\fix_finder_start_auth.bat
+```
+
+Проверка на сервере:
+
+```bash
+systemctl is-active cryptotools-signal-engine trade-executor cryptotools-grid cryptotools-finder pair-config
+journalctl -u pair-config -n 50 --no-pager
+journalctl -u cryptotools-finder -n 40 --no-pager
+```
 
 ---
 
@@ -99,13 +127,14 @@ python train_eval_barrier_transformer.py   # barrier XF для Finder
 
 ```
 cryptotools/
-├── site/                 # прод ≈ VPS
+├── README.md / AGENTS.md
+├── site/                 # прод ≈ Contabo app/
 │   ├── custom-ui/
-│   ├── scripts/          # pair-config, executor, guard, reconcile, deploy
-│   ├── deploy/           # systemd, nginx
-│   ├── user_data/        # configs, strategies, ml/, models/
-│   └── ctengine/         # торговый движок (не править без нужды)
-└── simulation/           # симы + обучение ML
+│   ├── scripts/          # pair-config, executor, reconcile, deploy_*.ps1
+│   ├── deploy/           # systemd, nginx, sudo wrappers, *.bat
+│   ├── user_data/        # configs, strategies, ml, models
+│   └── ctengine/         # движок (не трогать без нужды)
+└── simulation/           # offline + ML train
 ```
 
-CLI/пакет движка: `ctengine` / `ctbot`. В продукте и UI — бренд **CryptoTools**.
+CLI: `ctbot` / пакет `ctengine`. Бренд в UI: **CryptoTools**.

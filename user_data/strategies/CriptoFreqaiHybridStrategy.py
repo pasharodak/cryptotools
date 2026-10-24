@@ -34,7 +34,7 @@ class CriptoFreqaiHybridStrategy(IStrategy):
     }
 
     process_only_new_candles = True
-    stoploss = -0.05
+    stoploss = -0.034
     use_exit_signal = True
     startup_candle_count: int = 500
     can_short = True

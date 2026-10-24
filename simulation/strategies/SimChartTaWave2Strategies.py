@@ -14,7 +14,7 @@ from simulation.strategies.LiteFinanceStrategies import _LiteBase
 class AroonCrossStrategy(_LiteBase):
     """Aroon Up/Down cross — trend inception signal."""
 
-    stoploss = -0.018
+    stoploss = -0.006
     minimal_roi = {"0": 0.012, "50": 0.006, "150": 0}
     pair_cooldown_minutes = 120
 
@@ -53,7 +53,7 @@ class AroonCrossStrategy(_LiteBase):
 class MfiReclaimStrategy(_LiteBase):
     """Money Flow Index — fade MFI extremes reclaiming 20 / 80."""
 
-    stoploss = -0.015
+    stoploss = -0.009
     minimal_roi = {"0": 0.01, "40": 0.005, "110": 0}
     pair_cooldown_minutes = 90
 
@@ -82,7 +82,7 @@ class MfiReclaimStrategy(_LiteBase):
 class StochRsiCrossStrategy(_LiteBase):
     """Stochastic RSI — %K/%D cross in oversold/overbought zones."""
 
-    stoploss = -0.014
+    stoploss = -0.008
     minimal_roi = {"0": 0.009, "35": 0.0045, "90": 0}
     pair_cooldown_minutes = 80
 
@@ -117,7 +117,7 @@ class StochRsiCrossStrategy(_LiteBase):
 class TrixSignalStrategy(_LiteBase):
     """TRIX — oscillator vs its signal EMA."""
 
-    stoploss = -0.017
+    stoploss = -0.005
     minimal_roi = {"0": 0.011, "45": 0.0055, "130": 0}
     pair_cooldown_minutes = 100
 
@@ -155,7 +155,7 @@ class TrixSignalStrategy(_LiteBase):
 class UltimateOscStrategy(_LiteBase):
     """Ultimate Oscillator — reclaim 30 / 70 levels."""
 
-    stoploss = -0.016
+    stoploss = -0.004
     minimal_roi = {"0": 0.01, "40": 0.005, "120": 0}
     pair_cooldown_minutes = 95
 
@@ -184,7 +184,7 @@ class UltimateOscStrategy(_LiteBase):
 class ObvEmaCrossStrategy(_LiteBase):
     """OBV vs its EMA — volume-trend confirmation."""
 
-    stoploss = -0.018
+    stoploss = -0.006
     minimal_roi = {"0": 0.012, "55": 0.006, "160": 0}
     pair_cooldown_minutes = 110
 
@@ -218,7 +218,7 @@ class ObvEmaCrossStrategy(_LiteBase):
 class EngulfingTrendStrategy(_LiteBase):
     """Bullish/bearish engulfing candle with EMA trend filter."""
 
-    stoploss = -0.016
+    stoploss = -0.01
     minimal_roi = {"0": 0.011, "40": 0.0055, "110": 0}
     pair_cooldown_minutes = 100
 
@@ -254,7 +254,7 @@ class EngulfingTrendStrategy(_LiteBase):
 class VortexCrossStrategy(_LiteBase):
     """Vortex Indicator — VI+ / VI− cross (trend confirmation)."""
 
-    stoploss = -0.019
+    stoploss = -0.007
     minimal_roi = {"0": 0.013, "55": 0.0065, "160": 0}
     pair_cooldown_minutes = 120
 
@@ -296,7 +296,7 @@ class VortexCrossStrategy(_LiteBase):
 class CmfZeroCrossStrategy(_LiteBase):
     """Chaikin Money Flow — zero-line cross with volume."""
 
-    stoploss = -0.017
+    stoploss = -0.005
     minimal_roi = {"0": 0.011, "45": 0.0055, "130": 0}
     pair_cooldown_minutes = 100
 
@@ -334,7 +334,7 @@ class CmfZeroCrossStrategy(_LiteBase):
 class CmfZeroCrossTestStrategy(CmfZeroCrossStrategy):
     """CMF test block: 1x, tighter chase, long-only (shorts SL-heavy Aug 15–16)."""
 
-    stoploss = -0.02
+    stoploss = -0.014
     minimal_roi = {"0": 0.02, "60": 0.012, "180": 0.008, "480": 0.0}
     pair_cooldown_minutes = 180
     sim_leverage = 1.0
@@ -388,7 +388,7 @@ class CmfZeroCrossTestStrategy(CmfZeroCrossStrategy):
 class KamaTrendStrategy(_LiteBase):
     """Kaufman Adaptive MA — price cross with slope filter."""
 
-    stoploss = -0.02
+    stoploss = -0.008
     minimal_roi = {"0": 0.014, "60": 0.007, "180": 0}
     pair_cooldown_minutes = 130
 
@@ -417,7 +417,7 @@ class KamaTrendStrategy(_LiteBase):
 class ObvEmaCrossTestStrategy(ObvEmaCrossStrategy):
     """OBV/EMA test: long-only (simeon shorts dominated −3% SL hits)."""
 
-    stoploss = -0.02
+    stoploss = -0.014
     minimal_roi = {"0": 0.02, "60": 0.012, "180": 0.006, "480": 0.0}
     pair_cooldown_minutes = 360
     sim_leverage = 1.0

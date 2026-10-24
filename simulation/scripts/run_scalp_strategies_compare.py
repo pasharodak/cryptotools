@@ -94,6 +94,35 @@ CHART4_SCENARIOS = [
     "chart4_zscore",
     "chart4_ttm",
 ]
+CHART5_SCENARIOS = [
+    "chart5_chop",
+    "chart5_natr",
+    "chart5_connors",
+    "chart5_dema",
+    "chart5_apo",
+    "chart5_bop",
+    "chart5_linreg",
+    "chart5_mass",
+    "chart5_force",
+    "chart5_cvd",
+    "chart5_rsbtc",
+]
+DAYTRADE_SCENARIOS = [
+    "day_orb",
+    "day_vwap_pb",
+    "day_ema_ribbon",
+    "day_pdh_pdl",
+    "day_ny_mom",
+    "day_inside",
+    "day_nr7",
+    "day_burst",
+]
+PROTRADER_SCENARIOS = [
+    "pro_okala_8020",
+    "pro_clement_ema",
+    "pro_jason_confl",
+    "pro_marc_filter",
+]
 
 # Default cut = start of test window (overridden in main from --test-range).
 # Train uses ALL available history before cut (data from 2025-01-01).
@@ -194,6 +223,7 @@ def wrap_trade_record(tr: dict[str, Any], sid: str, pair: str, sc: dict[str, Any
             "close_rate": float(tr.get("close_rate") or 0),
             "is_short": bool(tr.get("is_short")),
             "profit_abs": profit,
+            "profit_ratio": float(tr.get("profit_ratio") or 0),
             "exit_reason": tr.get("exit_reason") or "",
         },
         "basis": {
@@ -331,6 +361,12 @@ def resolve_scenarios(arg: str) -> list[str]:
         return list(COMBO_SCENARIOS)
     if key in {"chart4", "wave4", "ta4"}:
         return list(CHART4_SCENARIOS)
+    if key in {"chart5", "wave5", "ta5"}:
+        return list(CHART5_SCENARIOS)
+    if key in {"daytrade", "day", "dt"}:
+        return list(DAYTRADE_SCENARIOS)
+    if key in {"protrader", "pro", "okala"}:
+        return list(PROTRADER_SCENARIOS)
     if key == "scalp":
         return list(SCALP_SCENARIOS)
     return [s.strip() for s in arg.split(",") if s.strip()]
@@ -347,11 +383,11 @@ def main() -> int:
     ap.add_argument("--train-range", default="20250101-20260331")
     ap.add_argument("--test-range", default="20260401-20260625")
     ap.add_argument("--pairs", default="pool", help="pool|prod200|scalp")
-    ap.add_argument("--max-pairs", type=int, default=20)
+    ap.add_argument("--max-pairs", type=int, default=20, help="0 = no limit")
     ap.add_argument(
         "--scenarios",
         default=",".join(SCALP_SCENARIOS),
-        help="Comma-separated ids, or alias: scalp|newset|chart|chart2|chart3|chart4|combo",
+        help="Comma-separated ids, or alias: scalp|newset|chart|chart2|chart3|chart4|chart5|daytrade|protrader|combo",
     )
     ap.add_argument("--out-dir", default=str(DEFAULT_OUT_DIR))
     args = ap.parse_args()
@@ -366,7 +402,8 @@ def main() -> int:
         pairs = list(json.loads(path.read_text(encoding="utf-8")).get("pairs") or [])
     else:
         pairs = pairs_from_source(ROOT, args.pairs, min_start="2025-01-01")
-    pairs = pairs[: args.max_pairs]
+    if args.max_pairs and args.max_pairs > 0:
+        pairs = pairs[: args.max_pairs]
     datadir = ROOT / "simulation/data/ctengine"
     out_dir = Path(args.out_dir)
 

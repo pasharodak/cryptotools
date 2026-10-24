@@ -119,8 +119,9 @@ def _stop(*_args: object) -> None:
     _running = False
 
 
-signal.signal(signal.SIGTERM, _stop)
-signal.signal(signal.SIGINT, _stop)
+if threading.current_thread() is threading.main_thread():
+    signal.signal(signal.SIGTERM, _stop)
+    signal.signal(signal.SIGINT, _stop)
 
 
 def tenant_dir(user_id: str) -> Path:
@@ -142,16 +143,110 @@ def load_user_config(user_id: str) -> dict[str, Any]:
     return load_json(tenant_dir(user_id) / "config_strategy.json", {})
 
 
+def _strategy_stake(user_id: str, tag: str, cfg: dict[str, Any]) -> float:
+    """1h entries use the user's 1h stake. Everything else uses the strategy stake."""
+    base = trade_exit_monitor.base_enter_tag(tag)
+    try:
+        from htf1h_catalog import HTF1H_IDS
+    except Exception:
+        HTF1H_IDS = frozenset()
+    if base in HTF1H_IDS:
+        try:
+            import user_prefs as up
+
+            blob = up.load_bot_limits_payload(user_id)
+            raw = blob.get("htf_stake_amount") if isinstance(blob, dict) else None
+            if raw is not None:
+                return float(raw)
+        except Exception:
+            pass
+    try:
+        return float(cfg.get("stake_amount") or 5)
+    except (TypeError, ValueError):
+        return 5.0
+
+
 def load_enabled(user_id: str) -> dict[str, bool]:
-    data = load_json(tenant_dir(user_id) / "enabled_strategies.json", {})
-    enabled = data.get("enabled") if isinstance(data, dict) else {}
-    if not isinstance(enabled, dict):
-        return {}
-    return {str(k): bool(v) for k, v in enabled.items()}
+    try:
+        import user_prefs as up
+
+        payload = up.load_enabled_payload(user_id)
+        enabled = payload.get("enabled") if isinstance(payload, dict) else {}
+        if not isinstance(enabled, dict):
+            return {}
+        return {str(k): bool(v) for k, v in enabled.items()}
+    except Exception:
+        data = load_json(tenant_dir(user_id) / "enabled_strategies.json", {})
+        enabled = data.get("enabled") if isinstance(data, dict) else {}
+        if not isinstance(enabled, dict):
+            return {}
+        return {str(k): bool(v) for k, v in enabled.items()}
+
+
+def _strategy_base_id(sid: str) -> str:
+    raw = str(sid or "")
+    while True:
+        low = raw.lower()
+        if low.endswith(":hedge"):
+            raw = raw[: -len(":hedge")]
+        elif low.endswith(":inv"):
+            raw = raw[: -len(":inv")]
+        else:
+            return raw
+
+
+def _normalize_signal_side(side: str) -> str:
+    raw = str(side or "long").strip().lower()
+    if raw in {"short", "sell"}:
+        return "short"
+    return "long"
+
+
+def _normalize_allowed_side(value: Any) -> str:
+    raw = str(value or "both").strip().lower()
+    if raw in {"long", "buy"}:
+        return "long"
+    if raw in {"short", "sell"}:
+        return "short"
+    return "both"
+
+
+def entry_side_skip(allowed: str, signal_side: str, strategy_id: str) -> str | None:
+    """None when the published side is allowed. Filter is after invert."""
+    want = _normalize_allowed_side(allowed)
+    got = _normalize_signal_side(signal_side)
+    if want in {"long", "short"} and got != want:
+        label = "лонг" if want == "long" else "шорт"
+        got_label = "шорт" if got == "short" else "лонг"
+        name = strategy_id or "стратегия"
+        return f"{name}: направление {got_label} выключено (только {label})"
+    return None
+
+
+def load_entry_sides(user_id: str) -> dict[str, str]:
+    try:
+        import user_prefs as up
+
+        data = up.load_enabled_payload(user_id)
+    except Exception:
+        data = load_json(tenant_dir(user_id) / "enabled_strategies.json", {})
+    raw = data.get("entry_sides") if isinstance(data, dict) else {}
+    out: dict[str, str] = {}
+    if isinstance(raw, dict):
+        for key, value in raw.items():
+            side = _normalize_allowed_side(value)
+            if side != "both":
+                out[str(key)] = side
+    return out
 
 
 def load_ml_confidence(user_id: str) -> dict[str, float]:
-    data = load_json(tenant_dir(user_id) / "enabled_strategies.json", {})
+    try:
+        import user_prefs as up
+
+        data = up.load_enabled_payload(user_id)
+    except Exception:
+        data = load_json(tenant_dir(user_id) / "enabled_strategies.json", {})
     raw = data.get("ml_confidence") if isinstance(data, dict) else {}
     out: dict[str, float] = {}
     if isinstance(raw, dict):
@@ -164,54 +259,86 @@ def load_ml_confidence(user_id: str) -> dict[str, float]:
 
 
 def load_test_settings(user_id: str) -> dict[str, Any]:
-    return load_json(tenant_dir(user_id) / "test_strategy_settings.json", {})
+    try:
+        import user_prefs as up
+
+        return up.load_test_settings(user_id)
+    except Exception:
+        return load_json(tenant_dir(user_id) / "test_strategy_settings.json", {})
 
 
 def load_test_strategy_ids(user_id: str) -> set[str]:
-    """Best-effort test-panel strategy ids (fallback list + placement)."""
-    fallback = {
-        "PsaraFlipTestStrategy",
-        "AtrChannelBreakoutTestStrategy",
-        "AdxMomentumTestStrategy",
-        "SupertrendTestStrategy",
-        "CmfZeroCrossTestStrategy",
-        "ScalpEmaCrossTestStrategy",
-        "ChaikinOscTestStrategy",
-        "DonchianBreakoutTestStrategy",
-        "PpoSignalTestStrategy",
-        "DonchianAdxVolComboTestStrategy",
-        "ObvEmaCrossTestStrategy",
-        "ElderRayTestStrategy",
-        "AltVolumeBreakoutTestStrategy",
-        "BollingerRsiTestStrategy",
-        "MacdEmaTestStrategy",
-        "GruBarrierStrategy",
-    }
-    path = tenant_dir(user_id) / "strategy_ui_placement.json"
-    data = load_json(path, {})
-    main = {str(x) for x in (data.get("main") or [])} if isinstance(data, dict) else set()
-    return {sid for sid in fallback if sid not in main}
+    """Test-panel strategy ids from per-user placement (not in main, not hidden)."""
+    try:
+        import user_prefs as up
+
+        placement = up.load_placement(user_id)
+        main = {str(x) for x in (placement.get("main") or [])}
+        hidden = {str(x) for x in (placement.get("hidden") or [])}
+        # Prefer enabled map keys + known registry via enabled payload / fallback
+        payload = up.load_enabled_payload(user_id)
+        catalog = set((payload.get("enabled") or {}).keys())
+        if not catalog:
+            catalog = set(load_enabled(user_id).keys())
+        # Also include any class currently known from open trades / defaults
+        for sid in list(catalog):
+            pass
+        # Build from all strategies that appear in enabled payload + placement-aware defaults
+        from pathlib import Path
+
+        strat_dir = Path(__file__).resolve().parent.parent / "user_data" / "strategies"
+        if strat_dir.is_dir():
+            for p in strat_dir.glob("*Strategy.py"):
+                catalog.add(p.stem)
+        return {sid for sid in catalog if sid not in main and sid not in hidden}
+    except Exception:
+        path = tenant_dir(user_id) / "strategy_ui_placement.json"
+        data = load_json(path, {})
+        main = {str(x) for x in (data.get("main") or [])} if isinstance(data, dict) else set()
+        hidden = {str(x) for x in (data.get("hidden") or [])} if isinstance(data, dict) else set()
+        fallback = set(load_enabled(user_id).keys())
+        return {sid for sid in fallback if sid not in main and sid not in hidden}
 
 
 def load_limits(user_id: str) -> dict[str, int]:
-    cfg = load_user_config(user_id)
-    max_open = int(cfg.get("max_open_trades") or 0)
-    # Test-block concurrent cap must fit under the strategy-bot ceiling.
+    """Slot caps from SQLite user_settings.bot_limits (never live show_config).
+
+    Main and test pools are separate: test_max must NOT inflate the main
+    strategy ceiling (that previously made UI/executor show open=N/100 while
+    bot_limits.strategy was 1).
+    """
+    max_open = 0
+    per = 0
+    try:
+        import user_prefs as up
+
+        bl = up.load_bot_limits_payload(user_id)
+        trades = bl.get("max_open_trades") if isinstance(bl, dict) else {}
+        if isinstance(trades, dict) and trades.get("strategy") is not None:
+            max_open = int(trades["strategy"])
+        per_blob = up.load_max_per_strategy(user_id)
+        per = max(0, int(per_blob.get("value") or 0))
+        if isinstance(bl, dict) and bl.get("max_open_trades_per_strategy") is not None:
+            try:
+                per = max(0, int(bl["max_open_trades_per_strategy"]))
+            except (TypeError, ValueError):
+                pass
+    except Exception:
+        cfg = load_user_config(user_id)
+        max_open = int(cfg.get("max_open_trades") or 0)
+        per_path = tenant_dir(user_id) / "max_open_trades_per_strategy.json"
+        per = 0
+        data = load_json(per_path, {})
+        if isinstance(data, dict):
+            try:
+                per = max(0, int(data.get("value") or 0))
+            except (TypeError, ValueError):
+                per = 0
     test = load_test_settings(user_id)
     try:
         test_max = max(0, int(test.get("max_open_trades") or 0))
     except (TypeError, ValueError):
         test_max = 0
-    if test_max > max_open:
-        max_open = test_max
-    per_path = tenant_dir(user_id) / "max_open_trades_per_strategy.json"
-    per = 0
-    data = load_json(per_path, {})
-    if isinstance(data, dict):
-        try:
-            per = max(0, int(data.get("value") or 0))
-        except (TypeError, ValueError):
-            per = 0
     try:
         test_per = max(0, int(test.get("max_open_trades_per_strategy") or 0))
     except (TypeError, ValueError):
@@ -222,6 +349,10 @@ def load_limits(user_id: str) -> dict[str, int]:
         "test_max_open_trades": test_max,
         "test_max_per_strategy": test_per,
     }
+
+
+# AdxMomentum shorts underperform live — allow long only (main + test tags).
+ADX_LONG_ONLY_TAGS = frozenset({"AdxMomentumStrategy", "AdxMomentumTestStrategy"})
 
 
 def db_path(user_id: str) -> Path:
@@ -373,13 +504,7 @@ def get_exchange(user_id: str) -> UserBybitExchange | None:
         secret = str(blob.get("bybit_api_secret") or "").strip()
         demo_trading = bool(tm._as_bool(blob.get("bybit_demo_trading")))
         if not key or not secret:
-            key = (os.environ.get("BYBIT_API_KEY") or "").strip()
-            secret = (os.environ.get("BYBIT_API_SECRET") or "").strip()
-            demo_trading = str(
-                os.environ.get("BYBIT_DEMO_TRADING")
-                or os.environ.get("CTENGINE__EXCHANGE__DEMO_TRADING")
-                or ""
-            ).strip().lower() in ("1", "true", "t", "yes", "y", "on")
+            key, secret, demo_trading = tm._admin_env_credentials()
     else:
         sec = tm.load_user_secrets(user_id)
         if sec:
@@ -430,11 +555,233 @@ def get_exchange(user_id: str) -> UserBybitExchange | None:
     return ex
 
 
+def count_open_by_panel(user_id: str, *, test: bool) -> int:
+    """Count open trades in main vs test panel (by enter_tag / strategy id)."""
+    test_ids = load_test_strategy_ids(user_id)
+    path = db_path(user_id)
+    if not path.is_file():
+        return 0
+    try:
+        with sqlite3.connect(path) as conn:
+            rows = conn.execute(
+                "SELECT enter_tag, strategy FROM trades WHERE is_open=1"
+            ).fetchall()
+    except sqlite3.Error:
+        return 0
+    n = 0
+    for enter_tag, strategy in rows:
+        tag = trade_exit_monitor.base_enter_tag(str(enter_tag or strategy or ""))
+        is_test = tag in test_ids
+        if is_test == test:
+            n += 1
+    return n
+
+
+def _llm_open_count(user_id: str) -> int:
+    path = db_path(user_id)
+    if not path.is_file():
+        return 0
+    try:
+        with sqlite3.connect(path) as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) FROM trades
+                WHERE is_open=1 AND (
+                    enter_tag LIKE 'DeepseekLlmStrategy%'
+                    OR strategy='DeepseekLlmStrategy'
+                )
+                """
+            ).fetchone()
+    except sqlite3.Error:
+        return 0
+    return int(row[0] if row else 0)
+
+
+def _llm_skip_reason(user_id: str, ev: dict[str, Any]) -> str | None:
+    import llm_settings
+
+    pair = str(ev.get("pair") or "")
+    side = str(ev.get("side") or "long")
+    allowed = set(llm_settings.pairs_for(user_id))
+    if pair not in allowed:
+        return f"DeepSeek не торгует {pair or '?'}"
+    settings = llm_settings.load(user_id)
+    conf = llm_settings.signal_confidence(ev)
+    need = float(settings["min_confidence"])
+    if conf is None:
+        return "DeepSeek: в сигнале нет уверенности"
+    if conf < need:
+        return f"DeepSeek уверенность {conf * 100:.0f}% ниже порога {need * 100:.0f}%"
+    cap = int(settings["max_open_trades"])
+    if cap <= 0:
+        return "DeepSeek: макс. сделок = 0"
+    open_n = _llm_open_count(user_id)
+    if open_n >= cap:
+        return f"DeepSeek лимит открытых сделок {open_n}/{cap}"
+    if count_open_on_pair(user_id, pair) > 0:
+        return f"уже есть открытая сделка по {pair} в БД"
+    try:
+        if exchange_has_position(user_id, pair, side):
+            return f"на бирже уже есть позиция {side} по {pair}"
+    except Exception as exc:
+        return f"не удалось проверить позиции на бирже: {exc}"
+    busy = pair_entry_guard.busy_reason(
+        pair,
+        side,
+        bot="llm",
+        tenant_id=user_id,
+        check_bybit=(user_id == "admin"),
+    )
+    if busy:
+        return busy
+    return None
+
+
+def _llm50_skip_reason(user_id: str, ev: dict[str, Any]) -> str | None:
+    import llm_book
+
+    pair = str(ev.get("pair") or "")
+    side = str(ev.get("side") or "long")
+    if pair not in set(llm_book.pairs()):
+        return f"DeepSeek 50 не торгует {pair or '?'}"
+    positions = llm_book.open_positions(llm_book.trades_db_for(user_id))
+    if any(row["pair"] == pair for row in positions):
+        return f"DeepSeek 50 уже держит {pair}"
+    try:
+        stake = float(ev.get("stake_usdt") or 0)
+    except (TypeError, ValueError):
+        stake = 0.0
+    free = llm_book.free_margin(positions)
+    if stake < llm_book.MIN_STAKE or stake > free + 1e-6:
+        return f"DeepSeek 50 бюджет: нужно {stake:.2f}, свободно {free:.2f} из {llm_book.BUDGET_USDT:.0f}"
+    if count_open_on_pair(user_id, pair) > 0:
+        return f"уже есть открытая сделка по {pair} в БД"
+    try:
+        if exchange_has_position(user_id, pair, side):
+            return f"на бирже уже есть позиция {side} по {pair}"
+    except Exception as exc:
+        return f"не удалось проверить позиции на бирже: {exc}"
+    busy = pair_entry_guard.busy_reason(
+        pair,
+        side,
+        bot="llm50",
+        tenant_id=user_id,
+        check_bybit=(user_id == "admin"),
+    )
+    if busy:
+        return busy
+    return None
+
+
+def _cursor_open_count(user_id: str) -> int:
+    path = db_path(user_id)
+    if not path.is_file():
+        return 0
+    try:
+        with sqlite3.connect(path) as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) FROM trades
+                WHERE is_open=1 AND (
+                    enter_tag LIKE 'CursorLlmStrategy%'
+                    OR strategy='CursorLlmStrategy'
+                )
+                """
+            ).fetchone()
+    except sqlite3.Error:
+        return 0
+    return int(row[0] if row else 0)
+
+
+def _cursor_skip_reason(user_id: str, ev: dict[str, Any]) -> str | None:
+    import cursor_settings
+
+    pair = str(ev.get("pair") or "")
+    side = str(ev.get("side") or "long")
+    allowed = set(cursor_settings.pairs_for(user_id))
+    if pair not in allowed:
+        return f"Cursor не торгует {pair or '?'}"
+    settings = cursor_settings.load(user_id)
+    conf = cursor_settings.signal_confidence(ev)
+    need = float(settings["min_confidence"])
+    if conf is None:
+        return "Cursor: в сигнале нет уверенности"
+    if conf < need:
+        return f"Cursor уверенность {conf * 100:.0f}% ниже порога {need * 100:.0f}%"
+    cap = int(settings["max_open_trades"])
+    if cap <= 0:
+        return "Cursor: макс. сделок = 0"
+    open_n = _cursor_open_count(user_id)
+    if open_n >= cap:
+        return f"Cursor лимит открытых сделок {open_n}/{cap}"
+    if count_open_on_pair(user_id, pair) > 0:
+        return f"уже есть открытая сделка по {pair} в БД"
+    try:
+        if exchange_has_position(user_id, pair, side):
+            return f"на бирже уже есть позиция {side} по {pair}"
+    except Exception as exc:
+        return f"не удалось проверить позиции на бирже: {exc}"
+    busy = pair_entry_guard.busy_reason(
+        pair,
+        side,
+        bot="cursor",
+        tenant_id=user_id,
+        check_bybit=(user_id == "admin"),
+    )
+    if busy:
+        return busy
+    return None
+
+
+def _cursor50_skip_reason(user_id: str, ev: dict[str, Any]) -> str | None:
+    import cursor_book
+
+    pair = str(ev.get("pair") or "")
+    side = str(ev.get("side") or "long")
+    if pair not in set(cursor_book.pairs()):
+        return f"Cursor 50 не торгует {pair or '?'}"
+    positions = cursor_book.open_positions(cursor_book.trades_db_for(user_id))
+    if any(row["pair"] == pair for row in positions):
+        return f"Cursor 50 уже держит {pair}"
+    try:
+        stake = float(ev.get("stake_usdt") or 0)
+    except (TypeError, ValueError):
+        stake = 0.0
+    free = cursor_book.free_margin(positions)
+    if stake < cursor_book.MIN_STAKE or stake > free + 1e-6:
+        return f"Cursor 50 бюджет: нужно {stake:.2f}, свободно {free:.2f} из {cursor_book.BUDGET_USDT:.0f}"
+    if count_open_on_pair(user_id, pair) > 0:
+        return f"уже есть открытая сделка по {pair} в БД"
+    try:
+        if exchange_has_position(user_id, pair, side):
+            return f"на бирже уже есть позиция {side} по {pair}"
+    except Exception as exc:
+        return f"не удалось проверить позиции на бирже: {exc}"
+    busy = pair_entry_guard.busy_reason(
+        pair,
+        side,
+        bot="cursor50",
+        tenant_id=user_id,
+        check_bybit=(user_id == "admin"),
+    )
+    if busy:
+        return busy
+    return None
+
+
 def skip_reason(user_id: str, ev: dict[str, Any]) -> str | None:
     """Human-readable why this signal will not open a trade (None = allowed)."""
     sid = str(ev.get("strategy_id") or "")
     pair = str(ev.get("pair") or "")
     side = str(ev.get("side") or "long")
+    if str(ev.get("bot") or "") == "llm":
+        return _llm_skip_reason(user_id, ev)
+    if str(ev.get("bot") or "") == "llm50":
+        return _llm50_skip_reason(user_id, ev)
+    if str(ev.get("bot") or "") == "cursor":
+        return _cursor_skip_reason(user_id, ev)
+    if str(ev.get("bot") or "") == "cursor50":
+        return _cursor50_skip_reason(user_id, ev)
     if not sid:
         return "нет strategy_id в сигнале"
     enabled = load_enabled(user_id)
@@ -442,10 +789,18 @@ def skip_reason(user_id: str, ev: dict[str, Any]) -> str | None:
         return f"пустой enabled_strategies для {user_id}"
     if not enabled.get(sid, False):
         return f"стратегия {sid} выключена у пользователя"
+    base_sid = _strategy_base_id(sid)
+    allowed_side = load_entry_sides(user_id).get(base_sid, "both")
+    blocked_side = entry_side_skip(allowed_side, side, base_sid or sid)
+    if blocked_side:
+        return blocked_side
+    if sid in ADX_LONG_ONLY_TAGS and side.lower() in ("short", "sell"):
+        return f"{sid}: shorts отключены (только long)"
     if not pair:
         return "нет pair в сигнале"
-    if not pair_allowed(user_id, pair):
-        return f"пара {pair} не в whitelist пользователя"
+    blocked = pair_block_reason(user_id, sid, pair)
+    if blocked:
+        return blocked
     if count_open_on_pair(user_id, pair) > 0:
         return f"уже есть открытая сделка по {pair} в БД"
     try:
@@ -464,23 +819,22 @@ def skip_reason(user_id: str, ev: dict[str, Any]) -> str | None:
     if busy:
         return busy
     limits = load_limits(user_id)
-    if limits["max_open_trades"] <= 0:
-        return "max_open_trades=0 (лимит сделок выключен/ноль)"
-    open_n = count_open_trades(user_id)
-    if open_n >= limits["max_open_trades"]:
-        return f"лимит открытых сделок {open_n}/{limits['max_open_trades']}"
     test_ids = load_test_strategy_ids(user_id)
     if sid in test_ids:
         test_cap = int(limits.get("test_max_open_trades") or 0)
-        if test_cap > 0:
-            # Count only open test-panel trades toward the test-block ceiling.
-            test_open = 0
-            for tid in test_ids:
-                test_open += count_open_trades(user_id, tag=tid)
-            if test_open >= test_cap:
-                return f"лимит тестовых стратегий {test_open}/{test_cap}"
+        if test_cap <= 0:
+            return "max_open_trades=0 для тестовых (лимит выключен/ноль)"
+        test_open = count_open_by_panel(user_id, test=True)
+        if test_open >= test_cap:
+            return f"лимит тестовых стратегий {test_open}/{test_cap}"
         per = int(limits.get("test_max_per_strategy") or 0)
     else:
+        main_cap = int(limits.get("max_open_trades") or 0)
+        if main_cap <= 0:
+            return "max_open_trades=0 (лимит сделок выключен/ноль)"
+        main_open = count_open_by_panel(user_id, test=False)
+        if main_open >= main_cap:
+            return f"лимит открытых сделок {main_open}/{main_cap}"
         per = limits["max_per_strategy"]
     if per > 0:
         tag_n = count_open_trades(user_id, tag=sid)
@@ -542,8 +896,19 @@ def execute_for_user(user_id: str, ev: dict[str, Any]) -> None:
                 block,
             )
             return
+        bot_name = str(ev.get("bot") or "")
+        if bot_name == "llm":
+            claim_bot = "llm"
+        elif bot_name == "llm50":
+            claim_bot = "llm50"
+        elif bot_name == "cursor":
+            claim_bot = "cursor"
+        elif bot_name == "cursor50":
+            claim_bot = "cursor50"
+        else:
+            claim_bot = "strategy"
         ok_claim, claim_reason = pair_entry_guard.claim_pair(
-            "strategy",
+            claim_bot,
             pair,
             side,
             tenant_id=user_id,
@@ -561,16 +926,33 @@ def execute_for_user(user_id: str, ev: dict[str, Any]) -> None:
             )
             return
         cfg = load_user_config(user_id)
-        stake = float(cfg.get("stake_amount") or 5)
+        if str(ev.get("bot") or "") == "llm":
+            import llm_settings
+
+            stake = float(llm_settings.load(user_id)["stake_amount"])
+        elif str(ev.get("bot") or "") == "llm50":
+            stake = float(ev.get("stake_usdt") or 0)
+        elif str(ev.get("bot") or "") == "cursor":
+            import cursor_settings
+
+            stake = float(cursor_settings.load(user_id)["stake_amount"])
+        elif str(ev.get("bot") or "") == "cursor50":
+            stake = float(ev.get("stake_usdt") or 0)
+        else:
+            stake = _strategy_stake(user_id, str(ev.get("entry_tag") or ev.get("strategy_id") or ""), cfg)
         leverage = 3.0
         tag = str(ev.get("entry_tag") or ev.get("strategy_id") or "")
-        sl, tp = trade_exit_monitor.risk_thresholds(
-            user_id,
-            trade_exit_monitor.base_enter_tag(tag),
-            tenant_dir=tenant_dir,
-            load_json=load_json,
-            load_user_config=load_user_config,
-        )
+        if str(ev.get("bot") or "") in {"llm50", "cursor50"}:
+            sl = float(ev.get("stop_loss_ratio"))
+            tp = float(ev.get("take_profit_ratio"))
+        else:
+            sl, tp = trade_exit_monitor.risk_thresholds(
+                user_id,
+                trade_exit_monitor.base_enter_tag(tag),
+                tenant_dir=tenant_dir,
+                load_json=load_json,
+                load_user_config=load_user_config,
+            )
         try:
             ensure_trades_db(user_id)
             res = ex.market_entry(
@@ -582,7 +964,7 @@ def execute_for_user(user_id: str, ev: dict[str, Any]) -> None:
                 take_profit=tp,
             )
         except Exception as exc:
-            pair_entry_guard.release_pair("strategy", pair, side, tenant_id=user_id)
+            pair_entry_guard.release_pair(claim_bot, pair, side, tenant_id=user_id)
             log.error(
                 "ORDER FAIL user=%s %s %s tag=%s stake=%.2f — %s",
                 user_id,
@@ -603,6 +985,7 @@ def execute_for_user(user_id: str, ev: dict[str, Any]) -> None:
                         strategy=tag,
                         error=str(exc),
                     ),
+                    kind="other",
                 )
             except Exception:
                 pass
@@ -621,6 +1004,7 @@ def execute_for_user(user_id: str, ev: dict[str, Any]) -> None:
                 amount=qty,
                 leverage=leverage,
                 stop_loss_ratio=sl,
+                take_profit_ratio=tp,
                 ml_meta=_ml_meta_from_event(user_id, ev),
             )
         except Exception as exc:
@@ -661,9 +1045,165 @@ def execute_for_user(user_id: str, ev: dict[str, Any]) -> None:
                     demo=bool(getattr(ex, "demo_trading", False)),
                     order_id=str(res.get("order_id") or "") or None,
                 ),
+                kind="trade_open",
             )
         except Exception:
             pass
+
+
+def _flat_close_from_exchange(
+    ex: Any, pair: str, open_rate: float
+) -> tuple[float, float | None]:
+    """When position is already flat: Bybit avgExitPrice + closedPnl, else ticker."""
+    sym = ft_pair_to_symbol(pair)
+    close_rate = open_rate
+    profit_abs: float | None = None
+    got_exit = False
+    try:
+        closed = ex.latest_closed_pnl(sym)
+        if closed:
+            exit_px = float(closed.get("avgExitPrice") or 0)
+            if exit_px > 0:
+                close_rate = exit_px
+                got_exit = True
+            if closed.get("closedPnl") is not None:
+                profit_abs = float(closed["closedPnl"])
+    except Exception:
+        pass
+    if not got_exit:
+        try:
+            close_rate = float(ex.last_price(sym) or open_rate)
+        except Exception:
+            close_rate = open_rate
+    return close_rate, profit_abs
+
+
+def force_close_trade(user_id: str, trade_id: int) -> dict[str, Any]:
+    """Manual UI close for shared-stack strategy trades (Bybit market + sqlite archive)."""
+    tid = int(trade_id)
+    uid = str(user_id)
+    path = db_path(uid)
+    if not path.is_file():
+        raise FileNotFoundError(f"trades db missing for {uid}")
+    with sqlite3.connect(path) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT * FROM trades WHERE id=? AND is_open=1",
+            (tid,),
+        ).fetchone()
+    if not row:
+        raise KeyError(f"open trade #{tid} not found")
+    pair = str(row["pair"] or "")
+    is_short = bool(row["is_short"])
+    open_rate = float(row["open_rate"] or 0)
+    stake = float(row["stake_amount"] or 0)
+    amount = float(row["amount"] or 0)
+    tag = str(row["enter_tag"] or row["strategy"] or "")
+    side = "short" if is_short else "long"
+
+    ex = get_exchange(uid)
+    if ex is None:
+        raise RuntimeError("нет API-ключей Bybit")
+    block = ex.trade_block_reason()
+    if block:
+        raise RuntimeError(block)
+
+    close_rate = open_rate
+    order_id = None
+    closed_on_exchange = False
+    try:
+        res = ex.market_close(pair=pair, is_short=is_short, qty=amount if amount > 0 else None)
+        closed_on_exchange = bool(res.get("closed"))
+        close_rate = float(res.get("price") or open_rate)
+        order_id = res.get("order_id")
+        if not closed_on_exchange and res.get("reason") in ("no_position", "zero_size"):
+            close_rate, _ = _flat_close_from_exchange(ex, pair, open_rate)
+    except Exception as exc:
+        msg = str(exc)
+        # If exchange says flat / already closed, archive anyway
+        low = msg.lower()
+        if "110017" in msg or "position is zero" in low or "position idx" in low:
+            close_rate, _ = _flat_close_from_exchange(ex, pair, open_rate)
+        else:
+            raise
+
+    # Gross (price) PnL — UI applies fixed fee % for «С комиссией».
+    if is_short and open_rate > 0:
+        ratio = (open_rate - close_rate) / open_rate
+    elif open_rate > 0:
+        ratio = (close_rate - open_rate) / open_rate
+    else:
+        ratio = 0.0
+    lev = float(row["leverage"] or 1) or 1.0
+    ratio *= lev
+    profit_abs = ratio * stake
+
+    archived = archive_trade_in_db(
+        path,
+        tid,
+        close_rate=close_rate,
+        profit_abs=profit_abs,
+        exit_reason="force_exit",
+    )
+    try:
+        pair_entry_guard.release_pair("strategy", pair, side, tenant_id=uid)
+    except Exception:
+        pass
+
+    log.info(
+        "FORCE CLOSE user=%s #%s %s %s rate=%.6f pnl=%.4f order=%s exchange_closed=%s",
+        uid,
+        tid,
+        side,
+        pair,
+        close_rate,
+        profit_abs,
+        order_id,
+        closed_on_exchange,
+    )
+    try:
+        import telegram_links as tg_links
+
+        fee_info = tg_links.pnl_with_fees(
+            profit_abs,
+            amount=amount or None,
+            open_rate=open_rate or None,
+            close_rate=close_rate,
+            stake_amount=stake or None,
+            leverage=lev,
+            profit_pct=ratio * 100,
+        )
+        tg_links.notify_user(
+            uid,
+            tg_links.format_exit_ru(
+                pair=pair,
+                strategy=trade_exit_monitor.base_enter_tag(tag),
+                reason="force_exit",
+                pnl_pct=ratio * 100,
+                pnl_usdt=profit_abs,
+                stake=stake or None,
+                is_short=is_short,
+                close_rate=close_rate,
+                amount=amount or None,
+                open_rate=open_rate or None,
+                leverage=lev,
+            ),
+            kind="trade_close",
+            pnl_pct=fee_info["net_pct"],
+        )
+    except Exception:
+        pass
+    return {
+        "ok": True,
+        "result": "force_exit",
+        "trade_id": tid,
+        "pair": pair,
+        "close_rate": close_rate,
+        "profit_abs": round(profit_abs, 6),
+        "order_id": order_id,
+        "closed_on_exchange": closed_on_exchange,
+        "archived": archived,
+    }
 
 
 def count_open_trades(user_id: str, *, tag: str | None = None) -> int:
@@ -713,6 +1253,82 @@ def exchange_has_position(user_id: str, pair: str, side: str) -> bool:
         return False
 
 
+_SHARED_WL_CACHE: tuple[float, set[str]] | None = None
+
+
+def shared_strategy_pairs() -> set[str]:
+    """Pairs the shared signal-engine is allowed to watch (admin whitelist)."""
+    global _SHARED_WL_CACHE
+    now = time.monotonic()
+    if _SHARED_WL_CACHE is not None and now - _SHARED_WL_CACHE[0] < 30.0:
+        return _SHARED_WL_CACHE[1]
+    pairs: set[str] = set()
+    try:
+        import user_prefs as up
+
+        raw = up.load_strategy_whitelist().get("pairs") or []
+        pairs = {str(p) for p in raw if str(p).strip()}
+    except Exception:
+        pairs = set()
+    if not pairs:
+        data = load_json(BASE / "user_data" / "config_signal_engine.json", {})
+        raw = (data.get("exchange") or {}).get("pair_whitelist") or []
+        pairs = {str(p) for p in raw if str(p).strip()}
+    _SHARED_WL_CACHE = (now, pairs)
+    return pairs
+
+
+def selected_strategy_pairs(user_id: str, strategy_id: str) -> list[str] | None:
+    """Tickers chosen for a main-panel strategy. None when the user has no pair map."""
+    try:
+        import user_prefs as up
+
+        data = up.load_enabled_payload(user_id)
+    except Exception:
+        data = load_json(tenant_dir(user_id) / "enabled_strategies.json", {})
+    if not isinstance(data, dict):
+        return None
+    raw = data.get("pairs")
+    if not isinstance(raw, dict) or strategy_id not in raw:
+        return None
+    return [str(p) for p in (raw.get(strategy_id) or []) if str(p).strip()]
+
+
+def _shared_whitelist_block(pair: str) -> str | None:
+    wl = shared_strategy_pairs()
+    if wl and pair not in wl:
+        return f"пара {pair} не в общем списке пар"
+    return None
+
+
+def pair_block_reason(user_id: str, strategy_id: str, pair: str) -> str | None:
+    """Test panel may use the whole shared list. Main panel only the chosen tickers.
+
+    Users with no tickers chosen trade the shared whitelist. A non-empty ticker
+    list, including on 1h strategies, limits entries to those pairs.
+    """
+    try:
+        from htf1h_catalog import HTF1H_IDS
+    except Exception:
+        HTF1H_IDS = frozenset()
+    selected = selected_strategy_pairs(user_id, strategy_id)
+    if user_id != "admin" and not selected:
+        return _shared_whitelist_block(pair)
+    if strategy_id in HTF1H_IDS and selected:
+        if pair not in selected:
+            return f"пара {pair} не выбрана для {strategy_id}"
+        return None
+    if strategy_id in load_test_strategy_ids(user_id):
+        return _shared_whitelist_block(pair)
+    if selected is None:
+        if not pair_allowed(user_id, pair):
+            return f"пара {pair} не в whitelist пользователя"
+        return None
+    if pair not in selected:
+        return f"пара {pair} не выбрана для {strategy_id}"
+    return None
+
+
 def pair_allowed(user_id: str, pair: str) -> bool:
     cfg = load_user_config(user_id)
     wl = (cfg.get("exchange") or {}).get("pair_whitelist") or []
@@ -738,6 +1354,7 @@ def insert_trade_row(
     amount: float,
     leverage: float,
     stop_loss_ratio: float | None = None,
+    take_profit_ratio: float | None = None,
     ml_meta: dict[str, Any] | None = None,
 ) -> int:
     path = ensure_trades_db(user_id)
@@ -745,11 +1362,13 @@ def insert_trade_row(
     sl_price = None
     sl_pct = None
     if stop_loss_ratio is not None and stop_loss_ratio < 0 and open_rate > 0:
+        # stop_loss_pct stays as stake-PnL ratio (TAG_RISK); price uses / leverage.
         sl_pct = float(stop_loss_ratio)
+        move = UserBybitExchange.stake_risk_to_price_move(sl_pct, leverage)
         if is_short:
-            sl_price = open_rate * (1 + abs(sl_pct))
+            sl_price = open_rate * (1 + move)
         else:
-            sl_price = open_rate * (1 - abs(sl_pct))
+            sl_price = open_rate * (1 - move)
     with sqlite3.connect(path) as conn:
         cur = conn.execute(
             """
@@ -764,7 +1383,7 @@ def insert_trade_row(
             ) VALUES (
                 'bybit', ?, 'USDT', 'USDT', 1, 0, 0,
                 ?, ?, ?,
-                0, 0, ?,
+                NULL, NULL, ?,
                 ?, ?, ?,
                 ?, ?, ?, ?,
                 ?, ?, '5m', 'futures', ?,
@@ -791,8 +1410,13 @@ def insert_trade_row(
             ),
         )
         trade_id = int(cur.lastrowid or 0)
-        if trade_id and ml_meta:
-            _insert_trade_custom_data(conn, trade_id, ml_meta, now=now)
+        meta = dict(ml_meta or {})
+        if stop_loss_ratio is not None:
+            meta["stop_loss_ratio"] = float(stop_loss_ratio)
+        if take_profit_ratio is not None and float(take_profit_ratio) > 0:
+            meta["take_profit_ratio"] = float(take_profit_ratio)
+        if trade_id and meta:
+            _insert_trade_custom_data(conn, trade_id, meta, now=now)
         conn.commit()
     return trade_id
 
@@ -853,6 +1477,8 @@ def _ml_meta_from_event(user_id: str, ev: dict[str, Any]) -> dict[str, Any]:
 
 def _reconcile_user_positions(user_id: str) -> None:
     try:
+        # New tenants often have no sqlite yet — create before import.
+        ensure_trades_db(user_id)
         from import_exchange_positions import import_positions
 
         result = import_positions(user_id)
@@ -911,7 +1537,7 @@ def ml_allows(user_id: str, ev: dict[str, Any]) -> bool:
     if not scenario:
         return True
     cfg = load_user_config(user_id)
-    stake = float(cfg.get("stake_amount") or 5)
+    stake = _strategy_stake(user_id, sid, cfg)
     side = str(ev.get("side") or "long")
     rate = float(ev.get("rate") or 0)
     tag = trade_exit_monitor.base_enter_tag(sid)
@@ -968,14 +1594,65 @@ def ml_allows(user_id: str, ev: dict[str, Any]) -> bool:
         return True
 
 
+def _close_book_pair(user_id: str, pair: str, *, tag: str = "Deepseek50", bot: str = "llm50") -> None:
+    path = db_path(user_id)
+    if not path.is_file():
+        return
+    try:
+        with sqlite3.connect(path) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                """
+                SELECT id, is_short FROM trades
+                WHERE is_open=1 AND pair=? AND (
+                    enter_tag LIKE ? OR strategy=?
+                )
+                ORDER BY id DESC LIMIT 1
+                """,
+                (pair, f"{tag}%", tag),
+            ).fetchone()
+    except sqlite3.Error as exc:
+        log.warning("%s close lookup user=%s %s: %s", bot, user_id, pair, exc)
+        return
+    if row is None:
+        log.info("%s CLOSE skip user=%s %s — нет открытой сделки", bot, user_id, pair)
+        return
+    side = "short" if row["is_short"] else "long"
+    force_close_trade(user_id, int(row["id"]))
+    try:
+        pair_entry_guard.release_pair(bot, pair, side, tenant_id=user_id)
+    except Exception:
+        pass
+
+
 def process_event(ev: dict[str, Any]) -> None:
     eid = str(ev.get("id") or "")
     if not eid or eid in _processed:
         return
+    if ev.get("event") == "exit_signal" and str(ev.get("bot") or "") in {"llm50", "cursor50"}:
+        book = str(ev.get("bot") or "")
+        tag = "Cursor50" if book == "cursor50" else "Deepseek50"
+        target = str(ev.get("user_id") or "")
+        users = user_trading.list_active_traders(book)
+        if target:
+            users = [uid for uid in users if uid == target]
+        for uid in users:
+            try:
+                _close_book_pair(uid, str(ev.get("pair") or ""), tag=tag, bot=book)
+            except Exception as exc:
+                log.exception("%s close user=%s: %s", book, uid, exc)
+        _processed.add(eid)
+        return
     if ev.get("event") != "entry_signal":
         _processed.add(eid)
         return
-    users = user_trading.list_active_traders("strategy")
+    bot = str(ev.get("bot") or "strategy")
+    if bot not in ("strategy", "llm", "llm50", "cursor", "cursor50"):
+        bot = "strategy"
+    users = user_trading.list_active_traders(bot)
+    target = str(ev.get("user_id") or "")
+    if bot in {"llm50", "cursor50"} and target:
+        users = [uid for uid in users if uid == target]
     for uid in users:
         try:
             execute_for_user(uid, ev)
@@ -1028,14 +1705,18 @@ def _log_idle_status(traders: list[str]) -> None:
             log.error("STATUS user=%s: сделки не открываются — %s", uid, block)
             continue
         limits = load_limits(uid)
-        open_n = count_open_trades(uid)
+        main_open = count_open_by_panel(uid, test=False)
+        test_open = count_open_by_panel(uid, test=True)
         log.info(
-            "STATUS user=%s: ключ OK demo=%s open=%s/%s feed=%s (lines=%s) entry_ok=%s — %s. "
+            "STATUS user=%s: ключ OK demo=%s open_main=%s/%s open_test=%s/%s feed=%s "
+            "(lines=%s) entry_ok=%s — %s. "
             "Стратегии: signal→executor; если мало ENTRY — смотрите SKIP (чаще ML gate).",
             uid,
             ex.demo_trading,
-            open_n,
+            main_open,
             limits.get("max_open_trades"),
+            test_open,
+            limits.get("test_max_open_trades"),
             "ok" if feed_ok else "MISSING",
             feed_lines,
             _recent_entry_ok,
@@ -1089,10 +1770,11 @@ def main() -> None:
     exit_ctx = _exit_ctx()
     while _running:
         _touch_heartbeat()
-        events, last_line = signal_bus.tail_new_events(last_line)
-        if len(events) > MAX_EVENTS_PER_LOOP:
-            log.warning("feed backlog %s events — processing first %s", len(events), MAX_EVENTS_PER_LOOP)
-            events = events[:MAX_EVENTS_PER_LOOP]
+        # Cap per loop but advance offset only through processed events —
+        # truncating a full read used to skip the rest of the backlog forever.
+        events, last_line = signal_bus.tail_new_events(
+            last_line, limit=MAX_EVENTS_PER_LOOP
+        )
         for ev in events:
             process_event(ev)
         if events:
@@ -1102,6 +1784,10 @@ def main() -> None:
         if now - last_exit >= EXIT_INTERVAL_SEC:
             trade_exit_monitor.monitor_all_users(exit_ctx)
             for uid in user_trading.list_active_traders("strategy"):
+                try:
+                    ensure_trades_db(uid)
+                except Exception as exc:
+                    log.warning("ensure db user=%s: %s", uid, exc)
                 _reconcile_user_positions(uid)
             last_exit = now
         if now - last_status >= 60.0:

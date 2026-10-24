@@ -1040,7 +1040,7 @@ class BotSessionManager:
                 msg = str(exc)
                 # Drop pairs ctengine rejects for missing leverage tiers, then retry.
                 m = re.search(
-                    r"Pairs\s+(.+?)\s+got no leverage\s*tiers",
+                    r"Pairs\s+(.+?)\s+got\s+no\s+leverage\s*tiers",
                     msg,
                     flags=re.S,
                 )

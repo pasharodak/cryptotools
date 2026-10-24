@@ -233,19 +233,10 @@
         "demo_trading": true
     },
     "telegram": {
-        "enabled": true,
+        "enabled": false,
         "token": "",
         "chat_id": "",
-        "notification_settings": {
-            "status": "on",
-            "warning": "on",
-            "startup": "on",
-            "entry": "on",
-            "entry_fill": "on",
-            "exit": "on",
-            "exit_fill": "on"
-        },
-        "reload": true
+        "_note": "Disabled — use CryptoTools telegram_bot (shared). Finder ctengine /status only sees Finder DB."
     },
     "api_server": {
         "enabled": true,

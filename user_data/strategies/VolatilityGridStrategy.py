@@ -16,8 +16,15 @@ _USER_DATA = Path(__file__).resolve().parent.parent
 if str(_USER_DATA) not in sys.path:
     sys.path.insert(0, str(_USER_DATA))
 from ml.gate import allow_trade_entry, persist_entry_ml  # noqa: E402
-from _pair_guard import claim_entry  # noqa: E402
 from _sim_live import PROD_MINIMAL_ROI, PROD_STOPLOSS  # noqa: E402
+
+try:
+    from _pair_guard import claim_entry  # noqa: E402
+except Exception:  # noqa: BLE001
+    def claim_entry(bot: str, pair: str, side: str) -> bool:  # type: ignore[misc]
+        # Fail-closed: never open if cross-bot guard cannot load.
+        return False
+
 
 GRID_SCENARIO = {
     "scenario_id": "live_grid",
@@ -139,6 +146,16 @@ class VolatilityGridStrategy(IStrategy):
         )
 
     def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+        pair = str((metadata or {}).get("pair") or "")
+        try:
+            from _pair_guard import pair_open_elsewhere
+
+            if pair_open_elsewhere("grid", pair):
+                dataframe["enter_long"] = 0
+                dataframe["enter_short"] = 0
+                return dataframe
+        except Exception:
+            pass
         ranging = self._ranging_volatile(dataframe)
 
         dataframe.loc[

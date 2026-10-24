@@ -264,6 +264,25 @@ def reconcile(
         p for p in occupied_pairs if sum(1 for t in open_trades if t["pair"] == p) > 1
     )
 
+    # Fresh fills may lag on Bybit demo/API — do not forceexit them as ghosts yet.
+    ghost_grace_sec = float(os.environ.get("CT_RECONCILE_GHOST_GRACE_SEC", "180"))
+    now_ts = time.time()
+
+    def _open_age_sec(open_date: str) -> float | None:
+        if not open_date:
+            return None
+        raw = str(open_date).strip().replace("T", " ")
+        for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"):
+            try:
+                # ctengine stores UTC-naive open_date.
+                from datetime import datetime, timezone
+
+                dt = datetime.strptime(raw[:26], fmt).replace(tzinfo=timezone.utc)
+                return max(0.0, now_ts - dt.timestamp())
+            except ValueError:
+                continue
+        return None
+
     ghosts: list[dict[str, Any]] = []
     matched: list[dict[str, Any]] = []
     claims: dict[tuple[str, str], list[dict[str, Any]]] = {}
@@ -278,14 +297,22 @@ def reconcile(
             "port": t["port"],
             "amount": float(t.get("amount") or 0),
             "open_date": t.get("open_date") or "",
+            "strategy": str(t.get("strategy") or ""),
+            "enter_tag": str(t.get("enter_tag") or ""),
         }
         claims.setdefault((sym, side), []).append(entry)
         if (sym, side) in bybit_map:
             matched.append(entry)
         else:
-            ghosts.append(entry)
+            age = _open_age_sec(str(entry.get("open_date") or ""))
+            if age is not None and age < ghost_grace_sec:
+                # Still settling on exchange — leave alone this cycle.
+                matched.append({**entry, "pending_exchange": True})
+            else:
+                ghosts.append(entry)
 
     # Several bot rows can match one Bybit position — keep one owner, mark extras.
+    # Prefer real Finder/Grid/Strategy rows over executor "ImportedPosition" steals.
     bot_rank = {"strategy": 0, "grid": 1, "finder": 2}
     duplicates: list[dict[str, Any]] = []
     kept_owners: list[dict[str, Any]] = []
@@ -298,9 +325,22 @@ def reconcile(
             continue
         size = float(pos.get("size") or 0)
 
+        def _is_imported(row: dict[str, Any]) -> bool:
+            tag = f"{row.get('strategy') or ''} {row.get('enter_tag') or ''}".lower()
+            return "importedposition" in tag.replace(" ", "") or "imported" == (
+                str(row.get("enter_tag") or "").strip().lower()
+            )
+
         def _owner_sort(row: dict[str, Any]) -> tuple:
-            amt_err = abs(float(row.get("amount") or 0) - size)
+            amt = float(row.get("amount") or 0)
+            # amount=0 / empty rows always lose (phantom Finder copies).
+            zero_pen = 0 if amt > 1e-12 else 1
+            # Executor import must not outrank the bot that actually opened.
+            imported_pen = 1 if _is_imported(row) else 0
+            amt_err = abs(amt - size) if amt > 0 else size + 1e9
             return (
+                zero_pen,
+                imported_pen,
                 amt_err,
                 str(row.get("open_date") or ""),
                 bot_rank.get(str(row.get("bot")), 9),
@@ -316,7 +356,7 @@ def reconcile(
                 "pair": keep["pair"],
                 "side": keep["side"],
                 "port": keep["port"],
-                "reason": "amount+oldest",
+                "reason": "amount+real+oldest",
             }
         )
         for extra in ordered[1:]:

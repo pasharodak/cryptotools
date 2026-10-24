@@ -103,6 +103,7 @@ def publish_entry_signal(
     indicators: dict[str, str] | None = None,
     ml: dict[str, Any] | None = None,
     timestamp: datetime | None = None,
+    bot: str = "strategy",
 ) -> dict[str, Any]:
     ts = timestamp or datetime.now(UTC)
     if ts.tzinfo is None:
@@ -125,6 +126,7 @@ def publish_entry_signal(
             "indicators": indicators or {},
             "ml": ml or {},
             "signal_time": ts.isoformat(),
+            "bot": bot or "strategy",
         }
     )
 
@@ -169,12 +171,23 @@ def iter_events(*, after_line: int = 0) -> Iterator[dict[str, Any]]:
                 continue
 
 
-def tail_new_events(last_line: int) -> tuple[list[dict[str, Any]], int]:
+def tail_new_events(
+    last_line: int,
+    *,
+    limit: int | None = None,
+) -> tuple[list[dict[str, Any]], int]:
+    """
+    Return new events after ``last_line`` and the line number of the last returned event.
+
+    If ``limit`` is set, stop after that many events so callers can advance the offset
+    only for processed rows (avoids silently dropping a backlog).
+    """
     out: list[dict[str, Any]] = []
     max_line = last_line
     path = feed_path()
     if not path.is_file():
         return out, max_line
+    cap = None if limit is None else max(0, int(limit))
     with path.open("r", encoding="utf-8") as fh:
         for line_no, line in enumerate(fh, start=1):
             if line_no <= last_line:
@@ -188,6 +201,8 @@ def tail_new_events(last_line: int) -> tuple[list[dict[str, Any]], int]:
                 continue
             out.append(ev)
             max_line = line_no
+            if cap is not None and len(out) >= cap:
+                break
     return out, max_line
 
 

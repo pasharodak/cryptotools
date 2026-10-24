@@ -17,8 +17,14 @@ if str(_USER_DATA) not in sys.path:
     sys.path.insert(0, str(_USER_DATA))
 from ml.finder_live import FinderLive  # noqa: E402
 from ml.gate import save_ml_to_trade  # noqa: E402
-from _pair_guard import claim_entry  # noqa: E402
 from _sim_live import PROD_MINIMAL_ROI, PROD_STOPLOSS  # noqa: E402
+
+try:
+    from _pair_guard import claim_entry  # noqa: E402
+except Exception:  # noqa: BLE001
+    def claim_entry(bot: str, pair: str, side: str) -> bool:  # type: ignore[misc]
+        # Fail-closed: never open if cross-bot guard cannot load.
+        return False
 
 
 class TradeFinderStrategy(IStrategy):
@@ -49,6 +55,13 @@ class TradeFinderStrategy(IStrategy):
         pair = metadata["pair"]
         if len(dataframe) < 2:
             return dataframe
+        try:
+            from _pair_guard import pair_open_elsewhere
+
+            if pair_open_elsewhere("finder", pair):
+                return dataframe
+        except Exception:
+            pass
 
         bar_ms = int(dataframe["date"].iloc[-1].timestamp() * 1000)
         if self._cooldown_until.get(pair, 0) > bar_ms:
@@ -85,18 +98,34 @@ class TradeFinderStrategy(IStrategy):
         side: str,
         **kwargs,
     ) -> bool:
+        import logging
+
+        log = logging.getLogger(__name__)
         signal = self._pending_by_pair.get(pair)
         if not signal:
-            signal = self.finder.scan_last_bar(pair, self.dp.get_analyzed_dataframe(pair, self.timeframe)[0])
+            try:
+                df0 = self.dp.get_analyzed_dataframe(pair, self.timeframe)[0]
+            except Exception:  # noqa: BLE001
+                df0 = None
+            signal = self.finder.scan_last_bar(pair, df0) if df0 is not None else None
         if not signal:
+            log.info("Finder confirm DENY %s — нет сигнала XF/ML", pair)
             return False
         df, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
         if not self.finder.allow_with_classifier_gate(signal, current_time=current_time, ohlcv_df=df):
+            log.info("Finder confirm DENY %s — classifier gate", pair)
             return False
         # First-wins across Strategy/Grid/Finder (same Bybit account).
         if not claim_entry("finder", pair, side):
+            # pair_entry_guard already logs SKIP pair busy …
             return False
         self._pending_by_pair[pair] = signal
+        log.info(
+            "Finder confirm ALLOW %s %s profit=%.1f%%",
+            pair,
+            side,
+            float((signal.get("finder_ml") or {}).get("confidence_profit") or 0) * 100,
+        )
         return True
 
     def order_filled(

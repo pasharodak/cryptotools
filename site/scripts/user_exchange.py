@@ -159,6 +159,129 @@ class UserBybitExchange:
             raise RuntimeError(f"no ticker for {symbol}")
         return float(items[0].get("lastPrice") or 0)
 
+    def order_avg_price(
+        self,
+        symbol: str,
+        order_id: str,
+        *,
+        attempts: int = 10,
+        delay_s: float = 0.25,
+    ) -> float | None:
+        """Actual fill avgPrice for an order (not ticker lastPrice)."""
+        oid = str(order_id or "").strip()
+        if not oid:
+            return None
+        for attempt in range(max(1, attempts)):
+            for path in ("/v5/order/realtime", "/v5/order/history"):
+                try:
+                    res = self._request(
+                        "GET",
+                        path,
+                        params={
+                            "category": "linear",
+                            "symbol": symbol,
+                            "orderId": oid,
+                        },
+                    )
+                    items = res.get("list") or []
+                    if items:
+                        avg = float(items[0].get("avgPrice") or 0)
+                        if avg > 0:
+                            return avg
+                except Exception:
+                    pass
+            try:
+                res = self._request(
+                    "GET",
+                    "/v5/execution/list",
+                    params={
+                        "category": "linear",
+                        "symbol": symbol,
+                        "orderId": oid,
+                        "limit": "50",
+                    },
+                )
+                rows = res.get("list") or []
+                notional = 0.0
+                qty = 0.0
+                for row in rows:
+                    px = float(row.get("execPrice") or 0)
+                    q = float(row.get("execQty") or 0)
+                    if px > 0 and q > 0:
+                        notional += px * q
+                        qty += q
+                if qty > 0:
+                    return notional / qty
+            except Exception:
+                pass
+            if attempt + 1 < attempts:
+                time.sleep(delay_s * (1.0 + 0.15 * attempt))
+        return None
+
+    def latest_closed_pnl(
+        self,
+        symbol: str,
+        *,
+        attempts: int = 8,
+        delay_s: float = 0.3,
+    ) -> dict[str, Any] | None:
+        """Latest Bybit closed-pnl row for symbol (avgExitPrice / closedPnl)."""
+        for attempt in range(max(1, attempts)):
+            try:
+                res = self._request(
+                    "GET",
+                    "/v5/position/closed-pnl",
+                    params={"category": "linear", "symbol": symbol, "limit": "5"},
+                )
+                rows = res.get("list") or []
+                if rows:
+                    return rows[0]
+            except Exception:
+                pass
+            if attempt + 1 < attempts:
+                time.sleep(delay_s * (1.0 + 0.15 * attempt))
+        return None
+
+    def fill_or_last_price(self, symbol: str, order_id: str | None) -> float:
+        """Prefer order fill avgPrice; fall back to ticker lastPrice."""
+        if order_id:
+            fill = self.order_avg_price(symbol, str(order_id))
+            if fill and fill > 0:
+                return float(fill)
+        return float(self.last_price(symbol))
+
+    def resolve_close_result(
+        self,
+        symbol: str,
+        *,
+        order_id: str | None = None,
+        fallback_price: float | None = None,
+    ) -> dict[str, Any]:
+        """Fill price + Bybit realized PnL (fees included) after a close."""
+        price: float | None = None
+        if order_id:
+            fill = self.order_avg_price(symbol, str(order_id))
+            if fill and fill > 0:
+                price = float(fill)
+        profit_abs: float | None = None
+        closed = self.latest_closed_pnl(symbol)
+        if closed:
+            if price is None:
+                exit_px = float(closed.get("avgExitPrice") or 0)
+                if exit_px > 0:
+                    price = exit_px
+            if closed.get("closedPnl") is not None:
+                try:
+                    profit_abs = float(closed["closedPnl"])
+                except (TypeError, ValueError):
+                    profit_abs = None
+        if price is None or price <= 0:
+            try:
+                price = float(fallback_price) if fallback_price and fallback_price > 0 else self.last_price(symbol)
+            except Exception:
+                price = float(fallback_price or 0)
+        return {"price": float(price or 0), "profit_abs": profit_abs, "closed_row": closed}
+
     def query_api_key(self, *, force: bool = False) -> dict[str, Any]:
         """Bybit /v5/user/query-api — permissions, readOnly flag, note."""
         if self._api_key_info is not None and not force:
@@ -237,6 +360,58 @@ class UserBybitExchange:
             q = min_qty
         return format(q.normalize() if q == q.to_integral() else q, "f")
 
+    @staticmethod
+    def stake_risk_to_price_move(ratio: float, leverage: float) -> float:
+        """Convert stake-PnL ratio (as used by exit monitor / TAG_RISK) to price move.
+
+        Soft exits compare leveraged PnL to TAG_RISK. Exchange stopLoss/takeProfit
+        are absolute prices, so divide by leverage or the exchange stop is ~Nx wider
+        than the software SL and never fires first.
+        """
+        lev = max(float(leverage or 1.0), 1.0)
+        return abs(float(ratio)) / lev
+
+    def set_trading_stop(
+        self,
+        *,
+        pair: str,
+        is_short: bool,
+        open_rate: float,
+        leverage: float = 3.0,
+        stop_loss: float | None = None,
+        take_profit: float | None = None,
+    ) -> dict[str, Any]:
+        """Attach / refresh position TP-SL on Bybit from stake-PnL ratios."""
+        symbol = ft_pair_to_symbol(pair)
+        if open_rate <= 0:
+            raise RuntimeError(f"invalid open_rate for {symbol}")
+        body: dict[str, Any] = {
+            "category": "linear",
+            "symbol": symbol,
+            "positionIdx": 0,
+            "tpslMode": "Full",
+            "slTriggerBy": "LastPrice",
+            "tpTriggerBy": "LastPrice",
+        }
+        if stop_loss is not None and stop_loss < 0:
+            move = self.stake_risk_to_price_move(stop_loss, leverage)
+            sl_price = open_rate * (1 + move) if is_short else open_rate * (1 - move)
+            body["stopLoss"] = str(round(sl_price, 8))
+        if take_profit is not None and take_profit > 0:
+            move = self.stake_risk_to_price_move(take_profit, leverage)
+            tp_price = open_rate * (1 - move) if is_short else open_rate * (1 + move)
+            body["takeProfit"] = str(round(tp_price, 8))
+        if "stopLoss" not in body and "takeProfit" not in body:
+            return {"ok": False, "reason": "no_sl_tp"}
+        result = self._request("POST", "/v5/position/trading-stop", body=body)
+        return {
+            "ok": True,
+            "symbol": symbol,
+            "stopLoss": body.get("stopLoss"),
+            "takeProfit": body.get("takeProfit"),
+            "result": result,
+        }
+
     def market_entry(
         self,
         *,
@@ -268,11 +443,14 @@ class UserBybitExchange:
             "qty": qty_str,
             "positionIdx": 0,
         }
+        # TAG_RISK / soft monitor use stake-PnL ratios — convert to price for Bybit.
         if stop_loss is not None and stop_loss < 0:
-            sl_price = price * (1 + stop_loss) if is_short else price * (1 - abs(stop_loss))
+            move = self.stake_risk_to_price_move(stop_loss, leverage)
+            sl_price = price * (1 + move) if is_short else price * (1 - move)
             body["stopLoss"] = str(round(sl_price, 8))
         if take_profit is not None and take_profit > 0:
-            tp_price = price * (1 - take_profit) if is_short else price * (1 + take_profit)
+            move = self.stake_risk_to_price_move(take_profit, leverage)
+            tp_price = price * (1 - move) if is_short else price * (1 + move)
             body["takeProfit"] = str(round(tp_price, 8))
         try:
             result = self._request("POST", "/v5/order/create", body=body)
@@ -285,15 +463,42 @@ class UserBybitExchange:
                 )
                 raise RuntimeError(f"{msg} — {hint}") from exc
             raise
+        order_id = result.get("orderId")
+        # Prefer actual fill — ticker lastPrice often differs from Bybit avgEntryPrice.
+        fill_price = self.fill_or_last_price(symbol, order_id)
+        fill = float(fill_price)
+        # Re-anchor TP/SL to fill price (order-time ticker can differ from avg fill).
+        sl_set = None
+        tp_set = None
+        try:
+            if (stop_loss is not None and stop_loss < 0) or (
+                take_profit is not None and take_profit > 0
+            ):
+                anchored = self.set_trading_stop(
+                    pair=pair,
+                    is_short=is_short,
+                    open_rate=fill if fill > 0 else price,
+                    leverage=leverage,
+                    stop_loss=stop_loss,
+                    take_profit=take_profit,
+                )
+                sl_set = anchored.get("stopLoss")
+                tp_set = anchored.get("takeProfit")
+        except Exception:
+            # Entry already filled — soft exit monitor remains the backup.
+            sl_set = body.get("stopLoss")
+            tp_set = body.get("takeProfit")
         return {
             "symbol": symbol,
             "pair": pair,
             "side": side_l,
-            "order_id": result.get("orderId"),
-            "price": price,
+            "order_id": order_id,
+            "price": fill,
             "qty": qty_str,
             "stake_usdt": float(stake_usdt),
             "leverage": float(leverage),
+            "stop_loss": sl_set,
+            "take_profit": tp_set,
         }
 
     def positions_map(self) -> dict[tuple[str, str], dict[str, Any]]:
@@ -345,14 +550,19 @@ class UserBybitExchange:
                 "positionIdx": 0,
             },
         )
-        price = self.last_price(symbol)
-        return {
+        order_id = result.get("orderId")
+        # Fill avgPrice + Bybit closedPnl (net of fees) — matches exchange history.
+        resolved = self.resolve_close_result(symbol, order_id=order_id)
+        out: dict[str, Any] = {
             "closed": True,
             "symbol": symbol,
-            "order_id": result.get("orderId"),
-            "price": price,
+            "order_id": order_id,
+            "price": float(resolved["price"]),
             "qty": qty_str,
         }
+        if resolved.get("profit_abs") is not None:
+            out["profit_abs"] = float(resolved["profit_abs"])
+        return out
 
 
 def fetch_public_klines(symbol: str, *, interval: str = "5", limit: int = 250) -> list[list[Any]]:

@@ -6,6 +6,7 @@ import json
 import sqlite3
 import threading
 import time
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -31,12 +32,27 @@ def db_path() -> Path:
     return base / "control_plane.sqlite"
 
 
-def _connect() -> sqlite3.Connection:
+@contextmanager
+def _connect() -> Any:
+    """Open SQLite and always close — Connection context mgr alone does not close FDs."""
     conn = sqlite3.connect(str(db_path()), timeout=30, check_same_thread=False)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=5000")
-    return conn
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
+        yield conn
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 def init_db() -> None:
@@ -86,6 +102,21 @@ def init_db() -> None:
                     created_at TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_bot_events_id ON bot_events(id);
+                CREATE TABLE IF NOT EXISTS app_settings (
+                    key TEXT PRIMARY KEY,
+                    value_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    updated_by TEXT
+                );
+                CREATE TABLE IF NOT EXISTS user_settings (
+                    user_id TEXT NOT NULL,
+                    key TEXT NOT NULL,
+                    value_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (user_id, key)
+                );
+                CREATE INDEX IF NOT EXISTS idx_user_settings_user
+                    ON user_settings(user_id);
                 """
             )
             conn.commit()
@@ -95,6 +126,140 @@ def init_db() -> None:
 def ensure_init() -> None:
     if not _INITED:
         init_db()
+
+
+def get_app_setting(key: str, default: Any = None) -> Any:
+    """Read JSON value from app_settings (control_plane.sqlite)."""
+    ensure_init()
+    with _DB_LOCK:
+        with _connect() as conn:
+            row = conn.execute(
+                "SELECT value_json FROM app_settings WHERE key = ?",
+                (str(key),),
+            ).fetchone()
+    if not row:
+        return default
+    try:
+        return json.loads(row["value_json"])
+    except (TypeError, json.JSONDecodeError):
+        return default
+
+
+def set_app_setting(
+    key: str,
+    value: Any,
+    *,
+    updated_by: str | None = None,
+) -> Any:
+    """Upsert JSON value into app_settings; returns the stored value."""
+    ensure_init()
+    payload = json.dumps(value, ensure_ascii=False)
+    now = _now_iso()
+    with _DB_LOCK:
+        with _connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO app_settings(key, value_json, updated_at, updated_by)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    value_json = excluded.value_json,
+                    updated_at = excluded.updated_at,
+                    updated_by = excluded.updated_by
+                """,
+                (str(key), payload, now, updated_by),
+            )
+            conn.commit()
+    return value
+
+
+def delete_app_setting(key: str) -> bool:
+    ensure_init()
+    with _DB_LOCK:
+        with _connect() as conn:
+            cur = conn.execute("DELETE FROM app_settings WHERE key = ?", (str(key),))
+            conn.commit()
+            return cur.rowcount > 0
+
+
+def get_user_setting(user_id: str, key: str, default: Any = None) -> Any:
+    """Read JSON value from user_settings for a tenant/admin id."""
+    ensure_init()
+    uid = str(user_id or "").strip()
+    if not uid:
+        return default
+    with _DB_LOCK:
+        with _connect() as conn:
+            row = conn.execute(
+                "SELECT value_json FROM user_settings WHERE user_id = ? AND key = ?",
+                (uid, str(key)),
+            ).fetchone()
+    if not row:
+        return default
+    try:
+        return json.loads(row["value_json"])
+    except (TypeError, json.JSONDecodeError):
+        return default
+
+
+def set_user_setting(user_id: str, key: str, value: Any) -> Any:
+    """Upsert JSON value into user_settings; returns the stored value."""
+    ensure_init()
+    uid = str(user_id or "").strip()
+    if not uid:
+        raise ValueError("user_id required")
+    payload = json.dumps(value, ensure_ascii=False)
+    now = _now_iso()
+    with _DB_LOCK:
+        with _connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO user_settings(user_id, key, value_json, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(user_id, key) DO UPDATE SET
+                    value_json = excluded.value_json,
+                    updated_at = excluded.updated_at
+                """,
+                (uid, str(key), payload, now),
+            )
+            conn.commit()
+    return value
+
+
+def has_user_setting(user_id: str, key: str) -> bool:
+    ensure_init()
+    uid = str(user_id or "").strip()
+    if not uid:
+        return False
+    with _DB_LOCK:
+        with _connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM user_settings WHERE user_id = ? AND key = ? LIMIT 1",
+                (uid, str(key)),
+            ).fetchone()
+    return row is not None
+
+
+def list_user_ids_with_setting(key: str) -> list[str]:
+    ensure_init()
+    with _DB_LOCK:
+        with _connect() as conn:
+            rows = conn.execute(
+                "SELECT user_id FROM user_settings WHERE key = ?",
+                (str(key),),
+            ).fetchall()
+    return [str(r["user_id"]) for r in rows]
+
+
+def delete_user_setting(user_id: str, key: str) -> bool:
+    ensure_init()
+    with _DB_LOCK:
+        with _connect() as conn:
+            cur = conn.execute(
+                "DELETE FROM user_settings WHERE user_id = ? AND key = ?",
+                (str(user_id), str(key)),
+            )
+            conn.commit()
+            return cur.rowcount > 0
 
 
 def add_listener(cb: Callable[[dict[str, Any]], None]) -> None:
@@ -304,14 +469,16 @@ def update_observed(
 def derive_status(desired: bool, observed: dict[str, Any] | None) -> str:
     obs = observed or {}
     process_up = bool(obs.get("process_up"))
-    trading = str(obs.get("trading_state") or "unknown")
+    trading = str(obs.get("trading_state") or "unknown").lower()
     last_error = obs.get("last_error")
     starting_since = obs.get("starting_since")
+    # reload_config / reloading = bot is up and applying config (whitelist/scan), not cold start.
+    running_like = trading in ("running", "reload_config", "reloading")
     if not desired:
-        if process_up and trading == "running":
+        if process_up and running_like:
             return "STOPPING"
         return "OFF"
-    if process_up and trading == "running":
+    if process_up and running_like:
         return "RUNNING"
     if last_error and starting_since:
         try:

@@ -17,7 +17,7 @@ FALLBACK_MODEL = ROOT / "simulation/data/models/barrier_transformer_5m.pt"
 class TransformerBarrierStrategy(ScalpEmaCrossStrategy):
     """EMA 8/21 cross entries gated by XF profit-proba (strategy-gate model)."""
 
-    stoploss = -0.01
+    stoploss = -0.004
     minimal_roi = {"0": 0.008, "20": 0.004, "60": 0}
     pair_cooldown_minutes = 60
     startup_candle_count = 140

@@ -21,7 +21,7 @@ DEFAULT_MODEL = next((p for p in _CANDIDATES if p.is_file()), _CANDIDATES[0])
 class GruBarrierStrategy(ScalpEmaCrossStrategy):
     """EMA 8/21 cross + seq-gate GRU (compare leader, thr≈0.85)."""
 
-    stoploss = -0.01
+    stoploss = -0.004
     minimal_roi = {"0": 0.008, "20": 0.004, "60": 0}
     pair_cooldown_minutes = 60
     startup_candle_count = 140

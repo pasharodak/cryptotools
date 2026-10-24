@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import importlib
+import json
 import logging
 import sqlite3
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,6 +16,26 @@ from typing import Any
 import pandas as pd
 
 log = logging.getLogger("trade_exit_monitor")
+
+# Bybit tick rounding can leave the exchange price slightly off the target.
+# 0.1% of price is enough to notice a 0.5% stake step at 3x, and the cooldown
+# stops a retry every monitor tick when the exchange cannot match exactly.
+_STOP_SYNC_AT: dict[tuple, float] = {}
+_STOP_SYNC_INTERVAL = 30.0
+_STOP_MOVE_EPS = 0.001
+
+
+def _price_move_off(exchange_price: str, open_rate: float, expect_move: float) -> bool:
+    raw = str(exchange_price or "").strip()
+    if not raw or raw in ("0", "0.0"):
+        return expect_move > 0
+    if open_rate <= 0 or expect_move <= 0:
+        return False
+    try:
+        actual = abs(float(raw) - open_rate) / open_rate
+    except (TypeError, ValueError):
+        return True
+    return abs(actual - expect_move) > _STOP_MOVE_EPS
 
 HEDGE_SUFFIX = ":hedge"
 INV_SUFFIX = ":inv"
@@ -31,6 +53,131 @@ def base_enter_tag(tag: str | None) -> str:
 
 def is_test_tag(tag: str) -> bool:
     return tag.endswith("TestStrategy")
+
+
+def _repo_roots() -> list[Path]:
+    here = Path(__file__).resolve()
+    site = here.parent.parent  # .../site
+    return [site.parent, site, here.parents[2]]
+
+
+def _load_trained_risk_catalog() -> dict[str, dict[str, Any]]:
+    """SL/TP keyed by strategy class — same sources as pair_config / TAG_RISK."""
+    out: dict[str, dict[str, Any]] = {}
+    for root in _repo_roots():
+        pack_path = root / "simulation" / "config" / "prod_top30_pack.json"
+        if not pack_path.is_file():
+            continue
+        try:
+            pack = json.loads(pack_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        for s in pack.get("strategies") or []:
+            cls = s.get("class_name")
+            if not cls:
+                continue
+            out[str(cls)] = {
+                "stoploss": float(s.get("stoploss") or 0),
+                "tp": float(s.get("tp") or 0),
+                "minimal_roi": s.get("minimal_roi") or {"0": float(s.get("tp") or 0)},
+            }
+        break
+    for root in _repo_roots():
+        sc_path = root / "simulation" / "config" / "player_scenarios.json"
+        if not sc_path.is_file():
+            continue
+        try:
+            scenarios = json.loads(sc_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if not isinstance(scenarios, list):
+            break
+        for sc in scenarios:
+            if not isinstance(sc, dict):
+                continue
+            cls = sc.get("strategy")
+            if not cls or cls in out:
+                continue
+            sl = sc.get("stoploss")
+            roi = sc.get("minimal_roi")
+            if sl is None and not isinstance(roi, dict):
+                continue
+            tp = 0.0
+            if isinstance(roi, dict) and roi:
+                try:
+                    tp = float(roi.get("0") or next(iter(roi.values())))
+                except (TypeError, ValueError, StopIteration):
+                    tp = 0.0
+            out[str(cls)] = {
+                "stoploss": float(sl or 0),
+                "tp": float(tp),
+                "minimal_roi": roi if isinstance(roi, dict) else {"0": float(tp)},
+            }
+        break
+    return out
+
+
+def risk_from_trained(tag: str) -> tuple[float, float] | None:
+    catalog = _load_trained_risk_catalog()
+    risk = catalog.get(tag)
+    if not risk:
+        return None
+    sl = float(risk.get("stoploss") or 0)
+    if sl > 0:
+        sl = -abs(sl)
+    elif sl == 0:
+        return None
+    tp = float(risk.get("tp") or 0)
+    if tp <= 0:
+        mroi = risk.get("minimal_roi") or {}
+        if isinstance(mroi, dict) and mroi:
+            try:
+                tp = abs(float(next(iter(mroi.values()))))
+            except (TypeError, ValueError, StopIteration):
+                tp = 0.0
+    if tp <= 0:
+        return None
+    return sl, abs(tp)
+
+
+def _trained_risk_from_payload(tag: str, data: dict[str, Any]) -> bool | None:
+    """True when «Свой SL/TP» is on for this strategy. Missing key means off."""
+    stored = data.get("trained_risk") or {}
+    if not isinstance(stored, dict) or tag not in stored:
+        return False
+    return bool(stored[tag])
+
+
+def _trained_risk_enabled(user_id: str, tag: str, *, tenant_dir, load_json) -> bool:
+    try:
+        import user_prefs as up
+
+        data = up.load_enabled_payload(user_id)
+        if isinstance(data, dict):
+            return bool(_trained_risk_from_payload(tag, data))
+    except Exception:
+        pass
+    candidates = [
+        tenant_dir(user_id) / "enabled_strategies.json",
+        Path(__file__).resolve().parent.parent / "user_data" / "enabled_strategies.json",
+    ]
+    for path in candidates:
+        if not path.is_file():
+            continue
+        try:
+            data = load_json(path, {})
+        except Exception:
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+        if not isinstance(data, dict):
+            continue
+        stored = data.get("trained_risk") or {}
+        if isinstance(stored, dict) and tag in stored:
+            return bool(stored[tag])
+        return False
+    return False
 
 
 @dataclass
@@ -102,13 +249,147 @@ def update_mark_pnl(db_path, trade_id: int, ratio: float, abs_pnl: float) -> Non
         pass
 
 
-def risk_thresholds(user_id: str, tag: str, *, tenant_dir, load_json, load_user_config) -> tuple[float, float]:
-    cfg = load_user_config(user_id)
+def _is_test_panel_tag(user_id: str, tag: str, *, tenant_dir, load_json) -> bool:
+    try:
+        from htf1h_catalog import HTF1H_IDS
+    except Exception:
+        HTF1H_IDS = frozenset()
+    if tag in HTF1H_IDS:
+        return False
+    if tag.endswith("TestStrategy"):
+        return True
+    data = None
+    try:
+        import user_prefs as up
+
+        data = up.load_placement(user_id)
+    except Exception:
+        data = None
+    if not isinstance(data, dict):
+        data = load_json(tenant_dir(user_id) / "strategy_ui_placement.json", {})
+    if not isinstance(data, dict):
+        return False
+    main = {str(x) for x in (data.get("main") or [])}
+    hidden = {str(x) for x in (data.get("hidden") or [])}
+    return tag not in main and tag not in hidden
+
+
+def _global_sl_tp(user_id: str, cfg: dict[str, Any]) -> tuple[float, float]:
+    """Global SL/TP from SQLite bot_limits, then config_strategy.json."""
     sl = float(cfg.get("stoploss") or -0.15)
     roi = cfg.get("minimal_roi") or {"0": 0.05}
     tp = float(roi.get("0") or roi.get(0) or 0.05)
-    if is_test_tag(tag):
-        ts = load_json(tenant_dir(user_id) / "test_strategy_settings.json", {})
+    try:
+        import user_prefs as up
+
+        data = up.load_bot_limits_payload(user_id)
+    except Exception:
+        data = {}
+    stored = data.get("strategy_risk") if isinstance(data, dict) else None
+    if isinstance(stored, dict):
+        if stored.get("stoploss") is not None:
+            try:
+                sl = float(stored["stoploss"])
+            except (TypeError, ValueError):
+                pass
+        if stored.get("take_profit") is not None:
+            try:
+                tp = abs(float(stored["take_profit"]))
+            except (TypeError, ValueError):
+                pass
+    return sl, tp
+
+
+def _enabled_payload(user_id: str, *, tenant_dir, load_json) -> dict:
+    try:
+        import user_prefs as up
+
+        data = up.load_enabled_payload(user_id)
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+    data = load_json(tenant_dir(user_id) / "enabled_strategies.json", {})
+    return data if isinstance(data, dict) else {}
+
+
+def _explicit_sltp(user_id: str, tag: str, *, tenant_dir, load_json) -> tuple[float, float] | None:
+    """User-picked stop/take for this strategy. Beats trained and the block default."""
+    try:
+        from htf1h_catalog import sltp_ratios
+    except Exception:
+        return None
+    data = _enabled_payload(user_id, tenant_dir=tenant_dir, load_json=load_json)
+    raw_map = data.get("sltp")
+    if not isinstance(raw_map, dict):
+        return None
+    raw = raw_map.get(tag)
+    if not isinstance(raw, dict):
+        return None
+    if raw.get("sl") is None and raw.get("tp") is None:
+        return None
+    return sltp_ratios(tag, raw)
+
+
+def _htf_default_sltp(tag: str) -> tuple[float, float] | None:
+    try:
+        from htf1h_catalog import HTF1H_IDS, sltp_ratios
+    except Exception:
+        return None
+    if tag not in HTF1H_IDS:
+        return None
+    return sltp_ratios(tag, None)
+
+
+def risk_thresholds(user_id: str, tag: str, *, tenant_dir, load_json, load_user_config) -> tuple[float, float]:
+    """Return (stoploss_ratio < 0, take_profit_ratio > 0) for entry + exit monitor.
+
+    Priority:
+      1) DeepSeek / Cursor own settings
+      2) «Свой SL/TP» on: the stop and take chosen on that strategy row
+         (1h catalog default if that row has no saved choice)
+      3) «Свой SL/TP» off: general block SL/TP (test block for test-panel tags)
+    """
+    tag = base_enter_tag(tag)
+    if tag == "DeepseekLlmStrategy":
+        try:
+            import llm_settings
+
+            cfg = llm_settings.load(user_id)
+            return float(cfg["stoploss"]), float(cfg["take_profit"])
+        except Exception:
+            return -0.02, 0.03
+    if tag == "CursorLlmStrategy":
+        try:
+            import cursor_settings
+
+            cfg = cursor_settings.load(user_id)
+            return float(cfg["stoploss"]), float(cfg["take_profit"])
+        except Exception:
+            return -0.02, 0.03
+    own = _trained_risk_enabled(user_id, tag, tenant_dir=tenant_dir, load_json=load_json)
+    if own:
+        explicit = _explicit_sltp(user_id, tag, tenant_dir=tenant_dir, load_json=load_json)
+        if explicit is not None:
+            return explicit
+        htf = _htf_default_sltp(tag)
+        if htf is not None:
+            return htf
+    cfg = load_user_config(user_id)
+    if not isinstance(cfg, dict):
+        cfg = {}
+    sl, tp = _global_sl_tp(user_id, cfg)
+
+    if _is_test_panel_tag(user_id, tag, tenant_dir=tenant_dir, load_json=load_json):
+        ts = None
+        try:
+            import user_prefs as up
+
+            ts = up.load_test_settings(user_id)
+        except Exception:
+            ts = None
+        if not isinstance(ts, dict):
+            ts = load_json(tenant_dir(user_id) / "test_strategy_settings.json", {})
         if isinstance(ts, dict):
             if ts.get("stoploss") is not None:
                 sl = -abs(float(ts["stoploss"]))
@@ -196,29 +477,55 @@ def monitor_user_exits(user_id: str, ctx: dict[str, Any]) -> None:
         update_mark_pnl(path, trade.id, ratio, abs_pnl)
 
         if not pos or float(pos.get("size") or 0) <= 0:
+            close_rate = mark
+            try:
+                closed = ex.latest_closed_pnl(sym)
+                if closed:
+                    exit_px = float(closed.get("avgExitPrice") or 0)
+                    if exit_px > 0:
+                        close_rate = exit_px
+            except Exception as exc:
+                log.debug("closed-pnl user=%s %s: %s", user_id, trade.pair, exc)
+            final_ratio = profit_ratio(trade, close_rate)
+            profit_abs = final_ratio * (trade.stake_amount or 0)
             archive_trade_in_db(
                 path,
                 trade.id,
-                close_rate=mark,
-                profit_abs=abs_pnl,
+                close_rate=close_rate,
+                profit_abs=profit_abs,
                 exit_reason="exchange_flat",
             )
             log.info("ARCHIVE user=%s #%s %s (flat on exchange)", user_id, trade.id, trade.pair)
             try:
                 import telegram_links as tg_links
 
+                stake_f = float(trade.stake_amount or 0) or None
+                fee_info = tg_links.pnl_with_fees(
+                    profit_abs,
+                    amount=float(trade.amount or 0) or None,
+                    open_rate=float(trade.open_rate or 0) or None,
+                    close_rate=close_rate,
+                    stake_amount=stake_f,
+                    leverage=float(trade.leverage or 1) or None,
+                    profit_pct=final_ratio * 100,
+                )
                 tg_links.notify_user(
                     user_id,
                     tg_links.format_exit_ru(
                         pair=trade.pair,
                         strategy=base_enter_tag(trade.enter_tag or trade.strategy),
                         reason="exchange_flat",
-                        pnl_pct=ratio * 100,
-                        pnl_usdt=abs_pnl,
-                        stake=float(trade.stake_amount or 0) or None,
+                        pnl_pct=final_ratio * 100,
+                        pnl_usdt=profit_abs,
+                        stake=stake_f,
                         is_short=bool(trade.is_short),
-                        close_rate=mark,
+                        close_rate=close_rate,
+                        amount=float(trade.amount or 0) or None,
+                        open_rate=float(trade.open_rate or 0) or None,
+                        leverage=float(trade.leverage or 1) or None,
                     ),
+                    kind="trade_close",
+                    pnl_pct=fee_info["net_pct"],
                 )
             except Exception:
                 pass
@@ -228,6 +535,47 @@ def monitor_user_exits(user_id: str, ctx: dict[str, Any]) -> None:
         sl, tp = risk_thresholds(
             user_id, tag, tenant_dir=tenant_dir, load_json=load_json, load_user_config=load_user_config
         )
+        # Ensure Bybit position has exchange SL/TP matching stake-PnL risk (backup to soft exits).
+        try:
+            from user_exchange import UserBybitExchange
+
+            ex_sl = str(pos.get("stopLoss") or "").strip()
+            ex_tp = str(pos.get("takeProfit") or "").strip()
+            open_rate = float(trade.open_rate or 0)
+            lev = float(trade.leverage or 1) or 1.0
+            expect_sl = UserBybitExchange.stake_risk_to_price_move(sl, lev) if sl < 0 else 0.0
+            expect_tp = UserBybitExchange.stake_risk_to_price_move(tp, lev) if tp > 0 else 0.0
+            need_sl = _price_move_off(ex_sl, open_rate, expect_sl)
+            need_tp = _price_move_off(ex_tp, open_rate, expect_tp)
+            if need_sl or need_tp:
+                sync_key = (user_id, int(trade.id), round(float(sl), 6), round(float(tp), 6))
+                now = time.monotonic()
+                last = _STOP_SYNC_AT.get(sync_key)
+                if last is not None and now - last < _STOP_SYNC_INTERVAL:
+                    need_sl = False
+                    need_tp = False
+                else:
+                    _STOP_SYNC_AT[sync_key] = now
+            if need_sl or need_tp:
+                anchored = ex.set_trading_stop(
+                    pair=trade.pair,
+                    is_short=bool(trade.is_short),
+                    open_rate=open_rate,
+                    leverage=lev,
+                    stop_loss=sl if sl < 0 else None,
+                    take_profit=tp if tp > 0 else None,
+                )
+                log.info(
+                    "EXCHANGE TP/SL user=%s #%s %s sl=%s tp=%s",
+                    user_id,
+                    trade.id,
+                    trade.pair,
+                    anchored.get("stopLoss"),
+                    anchored.get("takeProfit"),
+                )
+        except Exception as exc:
+            log.debug("set_trading_stop user=%s %s: %s", user_id, trade.pair, exc)
+
         exit_reason: str | None = None
         if tp > 0 and ratio >= tp:
             exit_reason = "roi_take_profit"
@@ -252,26 +600,38 @@ def monitor_user_exits(user_id: str, ctx: dict[str, Any]) -> None:
             res = ex.market_close(pair=trade.pair, is_short=trade.is_short)
             close_rate = float(res.get("price") or mark)
             if res.get("closed"):
+                # Gross price PnL; UI applies fixed Bybit fee % for «С комиссией».
                 final_ratio = profit_ratio(trade, close_rate)
+                pnl_abs = final_ratio * (trade.stake_amount or 0)
                 archive_trade_in_db(
                     path,
                     trade.id,
                     close_rate=close_rate,
-                    profit_abs=final_ratio * (trade.stake_amount or 0),
+                    profit_abs=pnl_abs,
                     exit_reason=exit_reason,
                 )
                 log.info(
-                    "EXIT user=%s #%s %s reason=%s pnl=%.2f%%",
+                    "EXIT user=%s #%s %s reason=%s pnl=%.2f%% abs=%.4f",
                     user_id,
                     trade.id,
                     trade.pair,
                     exit_reason,
                     final_ratio * 100,
+                    pnl_abs,
                 )
                 try:
                     import telegram_links as tg_links
 
-                    pnl_abs = final_ratio * (trade.stake_amount or 0)
+                    stake_f = float(trade.stake_amount or 0) or None
+                    fee_info = tg_links.pnl_with_fees(
+                        pnl_abs,
+                        amount=float(trade.amount or 0) or None,
+                        open_rate=float(trade.open_rate or 0) or None,
+                        close_rate=close_rate,
+                        stake_amount=stake_f,
+                        leverage=float(trade.leverage or 1) or None,
+                        profit_pct=final_ratio * 100,
+                    )
                     tg_links.notify_user(
                         user_id,
                         tg_links.format_exit_ru(
@@ -280,10 +640,15 @@ def monitor_user_exits(user_id: str, ctx: dict[str, Any]) -> None:
                             reason=exit_reason,
                             pnl_pct=final_ratio * 100,
                             pnl_usdt=pnl_abs,
-                            stake=float(trade.stake_amount or 0) or None,
+                            stake=stake_f,
                             is_short=bool(trade.is_short),
                             close_rate=close_rate,
+                            amount=float(trade.amount or 0) or None,
+                            open_rate=float(trade.open_rate or 0) or None,
+                            leverage=float(trade.leverage or 1) or None,
                         ),
+                        kind="trade_close",
+                        pnl_pct=fee_info["net_pct"],
                     )
                 except Exception:
                     pass

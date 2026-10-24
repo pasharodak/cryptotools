@@ -19,7 +19,7 @@ from simulation.strategies.LiteFinanceStrategies import _LiteBase  # noqa: E402
 class SimSupertrend(_LiteBase):
     """Supertrend flip + RSI filter (ATR-based trend following)."""
 
-    stoploss = -0.025
+    stoploss = -0.019
     minimal_roi = {"0": 0.03, "120": 0.015, "360": 0.008, "720": 0}
     pair_cooldown_minutes = 360
     startup_candle_count = 80
@@ -78,7 +78,7 @@ class SimSupertrendTest(SimSupertrend):
     Router reads custom_stoploss_from_ohlcv to trail stop at ST break/fade.
     """
 
-    stoploss = -0.012
+    stoploss = -0.006
     minimal_roi = {"0": 0.016, "60": 0.012, "180": 0.006, "480": 0}
     pair_cooldown_minutes = 480
     sim_leverage = 1.0
@@ -273,7 +273,7 @@ class SimSupertrendTest(SimSupertrend):
 class SimMacdEma(_LiteBase):
     """MACD cross in direction of EMA200 trend."""
 
-    stoploss = -0.025
+    stoploss = -0.019
     minimal_roi = {"0": 0.03, "180": 0.015, "480": 0.008, "960": 0}
     pair_cooldown_minutes = 480
     startup_candle_count = 220
@@ -323,7 +323,7 @@ class SimMacdEma(_LiteBase):
 class SimRsiEmaCross(_LiteBase):
     """RSI oversold/overbought + EMA12/26 + BB filter (CriptoPairs-style)."""
 
-    stoploss = -0.022
+    stoploss = -0.016
     minimal_roi = {"0": 0.025, "90": 0.012, "240": 0.006, "480": 0}
     pair_cooldown_minutes = 300
     startup_candle_count = 80
@@ -373,7 +373,7 @@ class SimRsiEmaCross(_LiteBase):
 class MacdEmaTestStrategy(SimMacdEma):
     """MACD+EMA test: long-only, anti-chase, ADX filter (simeon Aug WR~31%)."""
 
-    stoploss = -0.02
+    stoploss = -0.014
     minimal_roi = {"0": 0.02, "60": 0.012, "180": 0.006, "480": 0.0}
     pair_cooldown_minutes = 360
     sim_leverage = 1.0

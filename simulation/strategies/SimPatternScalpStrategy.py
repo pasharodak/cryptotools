@@ -20,7 +20,7 @@ from simulation.strategies.LiteFinanceStrategies import _LiteBase
 class PatternScalpStrategy(_LiteBase):
     """Pattern Scalp — UTC open manipulation reverse."""
 
-    stoploss = -0.02
+    stoploss = -0.014
     # Soft ROI backup; primary exit is OR opposite side via exit signals.
     minimal_roi = {"0": 0.025, "60": 0.015, "180": 0.008, "360": 0}
     pair_cooldown_minutes = 180
@@ -178,5 +178,5 @@ class PatternScalpStrongStrategy(PatternScalpStrategy):
 
     prefer_strong_manip = True
     strong_manip_atr_frac = 0.50
-    stoploss = -0.025
+    stoploss = -0.019
     minimal_roi = {"0": 0.03, "60": 0.018, "180": 0.01, "360": 0}

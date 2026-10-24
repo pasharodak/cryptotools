@@ -4,12 +4,26 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
 import tenant_manager as tm
 
-DEFAULT_FLAGS = {"strategy": True, "grid": False, "finder": False}
+DEFAULT_FLAGS = {
+    "strategy": False,
+    "grid": False,
+    "finder": False,
+    "llm": False,
+    "llm50": False,
+    "cursor": False,
+    "cursor50": False,
+}
+
+_ACTIVE_CACHE_LOCK = threading.Lock()
+_ACTIVE_CACHE: dict[str, Any] = {}
+_ACTIVE_CACHE_TTL_SEC = 15.0
 
 
 def _path(user_id: str) -> Path:
@@ -53,7 +67,7 @@ def save_trading_flags(user_id: str, flags: dict[str, Any]) -> dict[str, bool]:
 
         cp.ensure_init()
         for key in DEFAULT_FLAGS:
-            if key not in flags:
+            if key not in flags or key not in cp.BOTS:
                 continue
             existing = cp.get_desired(user_id, key)
             want = bool(flags[key])
@@ -70,6 +84,11 @@ def is_trading_enabled(user_id: str, bot: str = "strategy") -> bool:
 
 def list_active_traders(bot: str = "strategy") -> list[str]:
     """Users with secrets + trading flag for the given bot."""
+    now = time.monotonic()
+    with _ACTIVE_CACHE_LOCK:
+        hit = _ACTIVE_CACHE.get(bot)
+        if hit and (now - float(hit["ts"])) < _ACTIVE_CACHE_TTL_SEC:
+            return list(hit["ids"])
     out: list[str] = []
     for user in tm.load_users():
         uid = str(user.get("id") or "")
@@ -83,4 +102,6 @@ def list_active_traders(bot: str = "strategy") -> list[str]:
             continue
         if is_trading_enabled(uid, bot):
             out.append(uid)
+    with _ACTIVE_CACHE_LOCK:
+        _ACTIVE_CACHE[bot] = {"ids": list(out), "ts": now}
     return out

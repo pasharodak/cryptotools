@@ -14,7 +14,7 @@ from simulation.strategies.LiteFinanceStrategies import _LiteBase
 class AwesomeOscStrategy(_LiteBase):
     """Awesome Oscillator — zero-line cross (Bill Williams)."""
 
-    stoploss = -0.017
+    stoploss = -0.005
     minimal_roi = {"0": 0.011, "45": 0.0055, "130": 0}
     pair_cooldown_minutes = 100
 
@@ -49,7 +49,7 @@ class AwesomeOscStrategy(_LiteBase):
 class PpoSignalStrategy(_LiteBase):
     """Percentage Price Oscillator — PPO vs signal EMA."""
 
-    stoploss = -0.016
+    stoploss = -0.004
     minimal_roi = {"0": 0.01, "40": 0.005, "120": 0}
     pair_cooldown_minutes = 95
 
@@ -87,7 +87,7 @@ class PpoSignalStrategy(_LiteBase):
 class CmoReclaimStrategy(_LiteBase):
     """Chande Momentum Oscillator — fade ±50 reclaim."""
 
-    stoploss = -0.015
+    stoploss = -0.009
     minimal_roi = {"0": 0.01, "40": 0.005, "110": 0}
     pair_cooldown_minutes = 90
 
@@ -116,7 +116,7 @@ class CmoReclaimStrategy(_LiteBase):
 class TemaCrossStrategy(_LiteBase):
     """TEMA fast/slow cross — triple EMA trend."""
 
-    stoploss = -0.018
+    stoploss = -0.006
     minimal_roi = {"0": 0.012, "50": 0.006, "150": 0}
     pair_cooldown_minutes = 110
 
@@ -149,7 +149,7 @@ class TemaCrossStrategy(_LiteBase):
 class ChaikinOscStrategy(_LiteBase):
     """Chaikin Oscillator — ADL EMA(3)−EMA(10) zero cross."""
 
-    stoploss = -0.017
+    stoploss = -0.005
     minimal_roi = {"0": 0.011, "45": 0.0055, "130": 0}
     pair_cooldown_minutes = 100
 
@@ -183,7 +183,7 @@ class ChaikinOscStrategy(_LiteBase):
 class RocMomentumStrategy(_LiteBase):
     """Rate of Change — ROC zero cross with EMA filter."""
 
-    stoploss = -0.016
+    stoploss = -0.004
     minimal_roi = {"0": 0.01, "40": 0.005, "120": 0}
     pair_cooldown_minutes = 95
 
@@ -217,7 +217,7 @@ class RocMomentumStrategy(_LiteBase):
 class ElderRayStrategy(_LiteBase):
     """Elder Ray — Bull/Bear Power flip around zero."""
 
-    stoploss = -0.017
+    stoploss = -0.005
     minimal_roi = {"0": 0.011, "45": 0.0055, "130": 0}
     pair_cooldown_minutes = 100
 
@@ -259,7 +259,7 @@ class ElderRayStrategy(_LiteBase):
 class HullMaCrossStrategy(_LiteBase):
     """Hull Moving Average — price cross of HMA(20)."""
 
-    stoploss = -0.018
+    stoploss = -0.006
     minimal_roi = {"0": 0.012, "50": 0.006, "150": 0}
     pair_cooldown_minutes = 110
 
@@ -294,7 +294,7 @@ class HullMaCrossStrategy(_LiteBase):
 class FisherTransformStrategy(_LiteBase):
     """Ehlers Fisher Transform — Fisher / Trigger cross."""
 
-    stoploss = -0.015
+    stoploss = -0.009
     minimal_roi = {"0": 0.01, "40": 0.005, "110": 0}
     pair_cooldown_minutes = 90
 
@@ -338,7 +338,7 @@ class FisherTransformStrategy(_LiteBase):
 class AtrChannelBreakoutStrategy(_LiteBase):
     """ATR channel breakout — close beyond EMA ± k·ATR."""
 
-    stoploss = -0.02
+    stoploss = -0.008
     minimal_roi = {"0": 0.014, "60": 0.007, "180": 0}
     pair_cooldown_minutes = 120
 
@@ -416,7 +416,7 @@ class AtrChannelBreakoutTestStrategy(AtrChannelBreakoutStrategy):
 class ChaikinOscTestStrategy(ChaikinOscStrategy):
     """ADOSC test: long-only, anti-chase (simeon shorts + late longs hit −3% SL)."""
 
-    stoploss = -0.02
+    stoploss = -0.014
     minimal_roi = {"0": 0.02, "60": 0.012, "180": 0.006, "480": 0.0}
     pair_cooldown_minutes = 360
     sim_leverage = 1.0
@@ -476,7 +476,7 @@ class ChaikinOscTestStrategy(ChaikinOscStrategy):
 class PpoSignalTestStrategy(PpoSignalStrategy):
     """PPO test: long-only, anti-chase (both recent entries SL'd)."""
 
-    stoploss = -0.02
+    stoploss = -0.014
     minimal_roi = {"0": 0.02, "60": 0.012, "180": 0.006, "480": 0.0}
     pair_cooldown_minutes = 360
     sim_leverage = 1.0
@@ -537,7 +537,7 @@ class PpoSignalTestStrategy(PpoSignalStrategy):
 class ElderRayTestStrategy(ElderRayStrategy):
     """UI test clone of #10: 1x, SL -3%, no RSI/range chase, custom exit."""
 
-    stoploss = -0.03
+    stoploss = -0.006
     minimal_roi = {'0': 0.012, '60': 0.008, '180': 0.005, '480': 0.0}
     pair_cooldown_minutes = 180
     sim_leverage = 1.0

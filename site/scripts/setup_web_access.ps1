@@ -1,6 +1,6 @@
-# Setup CriptoTools UI in browser via HTTPS on VPS port 8443
+﻿# Setup CriptoTools UI in browser via HTTPS on VPS port 8443
 param(
-    [string]$ServerIp = "77.222.35.209",
+    [string]$ServerIp = "194.163.149.122",
     [string]$SshUser = "root",
     [string]$KeyPath = "D:\cryptotools\site\deploy\id_rsa\id_rsa"
 )

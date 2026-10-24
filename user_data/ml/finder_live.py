@@ -257,7 +257,8 @@ class FinderLive:
         p = float(decision.get("p_tp_first") or 0.0)
         thr = float(decision.get("thr") or self.min_confidence)
         if not decision.get("take"):
-            logger.info(
+            # low_conf/no_setup — частый случай, не спамим INFO по всему whitelist.
+            logger.debug(
                 "Finder XF no signal %s p=%.1f%% thr=%.0f%% reason=%s",
                 pair,
                 p * 100,
