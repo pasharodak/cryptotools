@@ -39,6 +39,7 @@ site/deploy/id_rsa/
 # Local sync staging / bulky model archives
 _prod_sync/
 archives/
+export/
 
 user_data/users.json
 user_data/secrets/

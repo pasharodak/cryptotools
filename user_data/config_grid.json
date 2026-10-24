@@ -246,7 +246,7 @@
         "username": "",
         "password": ""
     },
-    "bot_name": "criptotools-grid",
+    "bot_name": "cryptotools-grid",
     "strategy": "VolatilityGridStrategy",
     "initial_state": "running",
     "force_entry_enable": false,

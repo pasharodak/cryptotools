@@ -36,6 +36,15 @@ _WORKER_STOP = threading.Event()
 _WORKER_STARTED = False
 
 
+def _stable_observed(obs: Any) -> Any:
+    """Observed snapshot without last_seen_at — it changes every poll and
+    otherwise makes the before/after comparison always differ, publishing a
+    bot.status event every tick (~600k/day → multi-GB bot_events)."""
+    if isinstance(obs, dict) and "last_seen_at" in obs:
+        return {k: v for k, v in obs.items() if k != "last_seen_at"}
+    return obs
+
+
 def _ctbot() -> Path:
     if IS_WINDOWS:
         return BASE / ".venv" / "Scripts" / "ctbot.exe"
@@ -596,9 +605,9 @@ def reconcile_tick() -> None:
         try:
             before = cp.snapshot_bot(row["user_id"], row["bot"])
             after = refresh_observed(row["user_id"], row["bot"])
-            if before.get("status") != after.get("status") or before.get("observed") != after.get(
-                "observed"
-            ):
+            if before.get("status") != after.get("status") or _stable_observed(
+                before.get("observed")
+            ) != _stable_observed(after.get("observed")):
                 cp.append_event(row["user_id"], "bot.status", after, bot=row["bot"])
         except Exception:
             logger.debug("refresh observed failed", exc_info=True)

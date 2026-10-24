@@ -245,7 +245,7 @@
         "username": "",
         "password": ""
     },
-    "bot_name": "criptotools-strategy",
+    "bot_name": "cryptotools-strategy",
     "strategy": "MultiStrategyRouter",
     "initial_state": "running",
     "force_entry_enable": false,

@@ -7,7 +7,7 @@ import sqlite3
 import threading
 import time
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
@@ -121,6 +121,7 @@ def init_db() -> None:
             )
             conn.commit()
         _INITED = True
+        threading.Thread(target=_maybe_daily_prune, name="bot-events-prune", daemon=True).start()
 
 
 def ensure_init() -> None:
@@ -316,6 +317,76 @@ def append_event(
     }
     _emit(event)
     return event
+
+
+_BOT_EVENTS_MAX_AGE_DAYS = 7
+_BOT_EVENTS_MAX_ROWS = 200_000
+_BOT_EVENTS_PRUNE_KEY = "bot_events_last_prune_at"
+
+
+def prune_events(
+    *,
+    max_age_days: int = _BOT_EVENTS_MAX_AGE_DAYS,
+    max_rows: int = _BOT_EVENTS_MAX_ROWS,
+    batch_size: int = 50_000,
+) -> int:
+    """Trim bot_events: drop rows older than max_age_days, then cap total rows.
+
+    Batched DELETEs keep each write lock short; returns rows removed.
+    """
+    ensure_init()
+    cutoff = (datetime.now(tz=UTC) - timedelta(days=max_age_days)).isoformat()
+    removed = 0
+    with _DB_LOCK:
+        with _connect() as conn:
+            while True:
+                cur = conn.execute(
+                    """
+                    DELETE FROM bot_events WHERE id IN (
+                        SELECT id FROM bot_events WHERE created_at < ?
+                        ORDER BY id LIMIT ?
+                    )
+                    """,
+                    (cutoff, batch_size),
+                )
+                removed += cur.rowcount
+                conn.commit()
+                if cur.rowcount < batch_size:
+                    break
+            excess = (
+                conn.execute("SELECT COUNT(*) FROM bot_events").fetchone()[0] - max_rows
+            )
+            while excess > 0:
+                cur = conn.execute(
+                    """
+                    DELETE FROM bot_events WHERE id IN (
+                        SELECT id FROM bot_events ORDER BY id LIMIT ?
+                    )
+                    """,
+                    (min(excess, batch_size),),
+                )
+                removed += cur.rowcount
+                conn.commit()
+                excess -= cur.rowcount
+                if cur.rowcount == 0:
+                    break
+    return removed
+
+
+def _maybe_daily_prune() -> None:
+    """prune_events at most once per day; marker written before work starts."""
+    try:
+        last = get_app_setting(_BOT_EVENTS_PRUNE_KEY)
+        if isinstance(last, str):
+            try:
+                if datetime.fromisoformat(last) > datetime.now(tz=UTC) - timedelta(hours=24):
+                    return
+            except ValueError:
+                pass
+        set_app_setting(_BOT_EVENTS_PRUNE_KEY, _now_iso())
+        prune_events()
+    except Exception:
+        pass
 
 
 def get_desired(user_id: str, bot: str) -> bool | None:

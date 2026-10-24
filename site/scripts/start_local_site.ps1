@@ -6,7 +6,8 @@
   - pair-config на :8090
   - gateway (static custom-ui + API proxy) на :8443 (HTTP)
   - Боты strategy/grid/finder по умолчанию НЕ стартуют (live-торговля).
-    Передай -WithBots чтобы поднять dry-run ботов из локальных config_*.json.
+    Передай -WithBots чтобы поднять ботов из локальных config_*.json.
+    Внимание: dry_run=false, торговля идёт через Bybit Demo (exchange.demo_trading=true).
 
 .EXAMPLE
   cd D:\cryptotools\site\scripts

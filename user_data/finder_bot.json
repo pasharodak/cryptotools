@@ -2,5 +2,5 @@
     "enabled": true,
     "reason": "ML Finder включён вручную",
     "enabled_at": "2026-10-04",
-    "systemd_unit": "ctengine.service"
+    "systemd_unit": "cryptotools-finder"
 }

@@ -36,19 +36,17 @@ SSH: `site/deploy/id_rsa/id_rsa` as `root` (VPN off, если timeout).
 | `deploy/tenant-systemctl.sh` | `cryptotools-{grid,finder}@user` |
 | `/etc/sudoers.d/cryptotools-tenants` | NOPASSWD на оба wrapper |
 
-Установка: `site/deploy/fix_finder_start_auth.bat` или вручную `install` + `visudo -cf`.
+Файлы wrappers живут **на сервере** в `/home/cryptotools/app/deploy/` и в git не публикуются (удалены в `f74b321`).
+Проверка: `sudo -n /home/cryptotools/app/deploy/admin-systemctl.sh status cryptotools-finder`; sudoers — `visudo -cf /etc/sudoers.d/cryptotools-tenants`.
 
 ---
 
 ## Деплой с ПК
 
-```powershell
-cd D:\cryptotools\site\scripts
-.\deploy_prod_ml.ps1
-# ServerIp по умолчанию = 194.163.149.122
-```
+> В репозитории нет деплой-скриптов: `site/deploy/*` и `deploy_*.ps1` удалены в `f74b321`.
+> Используйте приватный деплой-набор владельца; на сервере остаются установленные units/nginx/sudo-wrappers.
 
-Точечные Contabo-батники (VPN OFF → Enter): `site/deploy/*.bat`.
+SSH (VPN off): `ssh -i site/deploy/id_rsa/id_rsa root@194.163.149.122`.
 
 Секреты: локально `site/.env` → на сервере `~/.cryptotools.env`.
 

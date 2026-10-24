@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from logging.handlers import RotatingFileHandler
 import os
 import signal
 import sqlite3
@@ -51,7 +52,9 @@ for _stream in (sys.stdout, sys.stderr):
 try:
     _log_dir = BASE / "user_data" / "logs"
     _log_dir.mkdir(parents=True, exist_ok=True)
-    _fh = logging.FileHandler(_log_dir / "trade-executor.log", encoding="utf-8")
+    _fh = RotatingFileHandler(
+        _log_dir / "trade-executor.log", maxBytes=50 * 1024 * 1024, backupCount=3, encoding="utf-8"
+    )
     _fh.setFormatter(
         logging.Formatter("%(asctime)s UTC - %(levelname)s - %(message)s", "%Y-%m-%d %H:%M:%S")
     )

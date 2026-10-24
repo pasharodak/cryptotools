@@ -43,7 +43,7 @@ Browser → HTTPS :8443 (nginx)
 | `cryptotools-telegram-bot` | `telegram_bot.py` | — |
 
 Секреты на VPS: `/home/cryptotools/.cryptotools.env`. SSH: `site/deploy/id_rsa/id_rsa`, user `root`.  
-Если SSH/SCP таймаутится — **выключите VPN** и используйте батники в `site/deploy/*.bat`.
+Если SSH/SCP таймаутится — **выключите VPN**. Скрипты деплоя в репозитории не публикуются (см. раздел «Деплой»).
 
 ---
 
@@ -55,11 +55,11 @@ Browser → HTTPS :8443 (nginx)
 4. **Стратегии:** логика в `simulation/strategies/`, в проде — тонкие wrappers в `site/user_data/strategies/`.
 5. **Один Strategy-бот** = `MultiStrategyRouter` + shared executor (tenant’ы не поднимают отдельный strategy-unit).
 6. **Start/Stop в UI** пишет `desired` в `control_plane.sqlite`; `bot_reconcile` поднимает процессы через:
-   - admin: `deploy/admin-systemctl.sh` (NOPASSWD sudoers);
-   - tenant grid/finder: `deploy/tenant-systemctl.sh`.
+   - admin: `deploy/admin-systemctl.sh` (на сервере, NOPASSWD sudoers);
+   - tenant grid/finder: `deploy/tenant-systemctl.sh` (на сервере).
 7. **Настройки пользователя** (enabled, placement, test limits) — в `control_plane.sqlite` (`user_settings`), не только JSON.
 8. **Коммиты / push** — только по просьбе. **Не выдумывать PnL** — смотреть отчёты/логи.
-9. **Деплой Contabo** — VPN off; ключ `site/deploy/id_rsa`; хост `194.163.149.122`.
+9. **Деплой Contabo** — VPN off; ключ `site/deploy/id_rsa`; хост `194.163.149.122`; деплой-скрипты хранятся вне репозитория.
 10. **Cross-bot:** `pair_entry_guard` (first-wins) + UI «Синхронизировать» / `reconcile_positions.py`.
 
 Подробности для агента: [`AGENTS.md`](AGENTS.md). Сервер: [`site/SERVER_SETUP.md`](site/SERVER_SETUP.md).
@@ -103,15 +103,10 @@ cd D:\cryptotools\simulation\scripts
 
 ## Деплой на Contabo
 
-```powershell
-# Полный ML/стратегии (осторожно)
-cd D:\cryptotools\site\scripts
-.\deploy_prod_ml.ps1   # ServerIp по умолчанию = Contabo
+> В опубликованный репозиторий деплой-инструменты не входят: `site/deploy/*` и `deploy_*.ps1` удалены в `f74b321`.
+> На сервере остаются установленные systemd-юниты, nginx-конфиг и sudo-wrappers. Деплой выполняется приватным набором скриптов владельца — не ищите эти файлы локально.
 
-# Точечные фиксы — батники (VPN OFF → Enter)
-cd D:\cryptotools\site\deploy
-.\fix_finder_start_auth.bat
-```
+SSH (VPN off): `ssh -i site/deploy/id_rsa/id_rsa root@194.163.149.122`.
 
 Проверка на сервере:
 
@@ -130,8 +125,8 @@ cryptotools/
 ├── README.md / AGENTS.md
 ├── site/                 # прод ≈ Contabo app/
 │   ├── custom-ui/
-│   ├── scripts/          # pair-config, executor, reconcile, deploy_*.ps1
-│   ├── deploy/           # systemd, nginx, sudo wrappers, *.bat
+│   ├── scripts/          # pair-config, executor, reconcile
+│   ├── deploy/           # локально только id_rsa; systemd/nginx/wrappers — на сервере
 │   ├── user_data/        # configs, strategies, ml, models
 │   └── ctengine/         # движок (не трогать без нужды)
 └── simulation/           # offline + ML train

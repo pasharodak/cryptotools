@@ -35,8 +35,8 @@ cryptotools/
 ├── site/                     ← прод ≈ Contabo
 │   ├── ctengine/
 │   ├── custom-ui/
-│   ├── deploy/               # systemd, nginx, admin/tenant-systemctl, *.bat
-│   ├── scripts/              # pair-config, executor, guard, reconcile, deploy_*.ps1
+│   ├── deploy/               # локально только id_rsa; systemd/nginx/wrappers — на сервере
+│   ├── scripts/              # pair-config, executor, guard, reconcile
 │   └── user_data/            # configs, strategies, ml, models, tenants/, control_plane.sqlite
 └── simulation/
     ├── config/               # player_scenarios, prod_ml_bots, prod_top30_pack
@@ -57,9 +57,9 @@ cryptotools/
 4. Стратегии: логика в `simulation/strategies/`, wrappers в `site/user_data/strategies/`.
 5. Strategy = **`MultiStrategyRouter`** + **shared** `trade-executor` (нет per-tenant strategy unit).
 6. Коммиты / push / force — только по просьбе пользователя.
-7. **SSH только Contabo** `194.163.149.122`, ключ `site/deploy/id_rsa/id_rsa`, user `root`. VPN часто ломает SSH — батники в `site/deploy/*.bat` при VPN off.
+7. **SSH только Contabo** `194.163.149.122`, ключ `site/deploy/id_rsa/id_rsa`, user `root`. VPN часто ломает SSH — при VPN off. Деплой-скрипты хранятся вне репозитория (удалены в `f74b321`).
 8. Не выдумывать PnL — отчёты `simulation/results/**` или journalctl на VPS.
-9. Admin Start/Stop systemd: через **`deploy/admin-systemctl.sh`** + sudoers (`sudoers-cryptotools-tenants`). Tenant grid/finder: **`tenant-systemctl.sh`**. Plain `systemctl` от user `cryptotools` → `Interactive authentication required`.
+9. Admin Start/Stop systemd: через **`deploy/admin-systemctl.sh`** + sudoers (`sudoers-cryptotools-tenants`) — файлы на сервере, в git их нет. Tenant grid/finder: **`tenant-systemctl.sh`**. Plain `systemctl` от user `cryptotools` → `Interactive authentication required`.
 10. Настройки UI (enabled / placement / test limits / **max_open_trades / stake** / **strategy whitelist**): **`control_plane.sqlite` → `user_settings`** (ключ `bot_limits` и др.); JSON-конфиги — write-through для ctbot. UI и trade-executor **не** читают лимиты из live `show_config`. Shared signal-engine всегда `max_open_trades=1`. Скан стратегий **не** затирает большой StaticPairList (`apply_whitelist=false`, shrink-guard).
 
 ---
@@ -105,13 +105,7 @@ Legacy `cryptotools-strategy` + `config_strategy.json` — не основной
 
 ### Деплой
 
-```powershell
-cd D:\cryptotools\site\scripts
-.\deploy_prod_ml.ps1          # default ServerIp = Contabo
-# точечные фиксы:
-cd D:\cryptotools\site\deploy
-.\fix_finder_start_auth.bat  # VPN OFF
-```
+> Деплой-инструменты (`site/deploy/*`, `deploy_*.ps1`, `fix_finder_start_auth.bat`) в репозиторий не входят — удалены в `f74b321`. На сервере остаются установленные units, nginx-конфиг и sudo-wrappers. Деплой — приватным набором скриптов владельца. SSH: `site/deploy/id_rsa/id_rsa`, VPN off.
 
 `enabled_strategies.json` / `bot_strategies.json` **не заливаются** слепым scp как source of truth с ПК: перед apply — pull с VPS; на сервере merge только дописывает новые id (OFF).
 
@@ -164,12 +158,12 @@ cd D:\cryptotools\site\deploy
 
 | Задача | Куда |
 |--------|------|
-| Start/Stop бота | UI → control-plane; admin unit через `admin-systemctl.sh` |
+| Start/Stop бота | UI → control-plane; admin unit через `admin-systemctl.sh` (на сервере) |
 | Вкл стратегию | UI / user_settings / enabled на VPS |
-| Деплой | `deploy_prod_ml.ps1` или `site/deploy/*.bat` |
+| Деплой | приватный деплой-набор владельца (в репозитории отсутствует) |
 | Логи | `journalctl -u cryptotools-*-n 80` |
 | Sync позиций | UI «Синхронизировать» |
-| Finder не стартует (auth) | `fix_finder_start_auth.bat` |
+| Finder не стартует (auth) | проверить sudoers/wrapper на сервере (батник в репо не входит) |
 
 ---
 
@@ -192,9 +186,7 @@ cd D:\cryptotools\site
 .\scripts\load_env.ps1
 .\scripts\start_local_site.ps1
 
-# Deploy Contabo
-cd D:\cryptotools\site\scripts
-.\deploy_prod_ml.ps1
+# Deploy Contabo: приватный набор скриптов (в репозитории отсутствует)
 ```
 
 ```bash

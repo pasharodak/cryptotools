@@ -1,4 +1,4 @@
-﻿# Freqtrade rules
+# Freqtrade rules
 config*.json
 !user_data/config_strategy.json
 !user_data/config_grid.json

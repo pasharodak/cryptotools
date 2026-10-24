@@ -248,7 +248,7 @@
         "username": "",
         "password": ""
     },
-    "bot_name": "criptotools-finder",
+    "bot_name": "cryptotools-finder",
     "strategy": "TradeFinderStrategy",
     "initial_state": "running",
     "force_entry_enable": false,

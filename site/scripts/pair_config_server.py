@@ -23,6 +23,7 @@ from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from socketserver import ThreadingMixIn
 from typing import Any
@@ -165,7 +166,9 @@ def _setup_server_logging() -> None:
     )
     _server_log.setLevel(logging.INFO)
     if not _server_log.handlers:
-        fh = logging.FileHandler(log_file, encoding="utf-8")
+        fh = RotatingFileHandler(
+            log_file, maxBytes=20 * 1024 * 1024, backupCount=3, encoding="utf-8"
+        )
         fh.setFormatter(fmt)
         _server_log.addHandler(fh)
     # Child loggers (adaptive_scan, …) share the same file without duplicate handlers.
@@ -7267,8 +7270,9 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:  # noqa: BLE001
                 self._json(500, {"error": str(exc)})
             return
-        is_status = method == "GET" and rest.rstrip("/") == "status"
-        is_light = rest.rstrip("/") in ("show_config", "count", "ping", "version")
+        rest_norm = rest.rstrip("/")
+        is_status = method == "GET" and rest_norm == "status"
+        is_light = rest_norm in ("show_config", "count", "ping", "version")
         # Heavy/wedged ctbot must not freeze the UI for 60s.
         if is_status:
             timeout = 2.0
@@ -7277,17 +7281,45 @@ class Handler(BaseHTTPRequestHandler):
         else:
             timeout = 60.0
         proxy_user = self.user or {}
-        # User strategy units are stopped. The pair list on Стратегии and
-        # 1-часовые is the shared signal-engine whitelist.
-        if (
-            method == "GET"
-            and bot == "strategy"
-            and rest.rstrip("/") == "whitelist"
+        shared_strategy = (
+            bot == "strategy"
             and _shared_strategy_uses_signal_engine()
             and not tm.is_admin(self.user)
-        ):
-            proxy_user = {"id": "admin", "role": "admin"}
-            timeout = min(timeout, 5.0)
+        )
+        if shared_strategy:
+            # User strategy units are stopped: every tenant's strategy panel
+            # is served by the shared signal-engine (admin ports/credentials).
+            if method == "GET" and rest_norm == "balance":
+                # The shared engine holds the admin exchange wallet. Never
+                # expose it to tenants; the UI renders "—" for empty currencies.
+                self._json(
+                    200,
+                    {
+                        "currencies": [],
+                        "shared_engine": True,
+                        "note": "per-user balance is not exposed by the shared signal-engine",
+                    },
+                )
+                return
+            if method == "GET" and rest_norm in (
+                "show_config",
+                "profit",
+                "whitelist",
+                "ping",
+                "version",
+                "count",
+            ):
+                proxy_user = {"id": "admin", "role": "admin"}
+                timeout = min(timeout, 8.0)
+            elif method == "POST" and rest_norm == "reload_config":
+                self._json(
+                    403,
+                    {
+                        "error": "shared signal-engine config is managed by admin",
+                        "shared_engine": True,
+                    },
+                )
+                return
         status, headers, body_out = tm.proxy_bot_request(
             proxy_user,
             bot,
@@ -7298,6 +7330,21 @@ class Handler(BaseHTTPRequestHandler):
             content_type=self.headers.get("Content-Type"),
             timeout=timeout,
         )
+        if (
+            shared_strategy
+            and method == "GET"
+            and rest_norm == "show_config"
+            and status == 200
+        ):
+            # Engine stake belongs to the admin wallet; tenants keep their own
+            # stake in user_settings and the UI must not overwrite it from here.
+            try:
+                shared_cfg = json.loads(body_out or b"{}")
+                if isinstance(shared_cfg, dict) and "stake_amount" in shared_cfg:
+                    shared_cfg.pop("stake_amount", None)
+                    body_out = json.dumps(shared_cfg).encode("utf-8")
+            except Exception:  # noqa: BLE001
+                pass
         # Manual UI reload — optional Telegram notify (prefs default off).
         if (
             method == "POST"
@@ -7495,6 +7542,11 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Connection", "keep-alive")
         self.send_header("X-Accel-Buffering", "no")
         self.end_headers()
+        # A stalled client must not park this thread forever on wfile.write.
+        try:
+            self.connection.settimeout(60.0)
+        except OSError:
+            pass
 
         queue: list[dict[str, Any]] = []
         qlock = threading.Lock()
@@ -7547,7 +7599,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.wfile.flush()
                     last_ping = now
                 time.sleep(0.35)
-        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, TimeoutError):
             pass
         finally:
             control_plane.remove_listener(_on_event)

@@ -4,7 +4,6 @@
 -r requirements-hyperopt.txt
 -r requirements-mltrain.txt
 -r requirements-mltrain-rl.txt
--r docs/requirements-docs.txt
 
 ruff==0.15.13
 mypy==2.1.0
