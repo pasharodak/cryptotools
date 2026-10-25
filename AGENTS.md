@@ -72,10 +72,13 @@ cryptotools/
 | `trade-executor` | `trade_executor.py` | сигналы → Bybit по юзеру | — |
 | `cryptotools-grid` | `config_grid.json` | VolatilityGridStrategy | `:8082` |
 | `cryptotools-finder` | `config.json` | TradeFinderStrategy | `:8080` |
+| `cryptotools-price-action` | `price_action_bot.py` | Price Action (public data, отдельный) | — |
 | `pair-config` | `pair_config_server.py` | UI API, control-plane | `:8090` |
 | `cryptotools-telegram-bot` | `telegram_bot.py` | Mini App + уведомления | — |
 
 Продовый путь Strategy: **signal-engine → signal_bus → trade-executor**.  
+Price Action — отдельный scanner (`price_action_bot.py`, теги `PaTrendPullback`/`PaLiquiditySweep`) → тот же `signal_bus` → `trade-executor`; по умолчанию OFF, Start из UI.  
+`cryptotools-llm` / `cryptotools-cursor` — retired (disabled, сигналы отклоняются executor).  
 Legacy `cryptotools-strategy` + `config_strategy.json` — не основной путь.
 
 ### Guard / reconcile

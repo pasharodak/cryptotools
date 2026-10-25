@@ -21,8 +21,9 @@
 1. **Strategy** — shared `signal-engine` (`MultiStrategyRouter`) пишет сигналы → `trade-executor` исполняет на ключах пользователя.
 2. **Grid** — `VolatilityGridStrategy`.
 3. **ML Finder** — `TradeFinderStrategy` (barrier Transformer).
-4. **pair-config** — whitelist, лимиты, Start/Stop (control-plane), JWT/auth, reconcile vs Bybit.
-5. **custom-ui** — панель за nginx `:8443`.
+4. **Price Action** — отдельный scanner (Trend Pullback / Liquidity Sweep) → shared `signal_bus` → executor; по умолчанию OFF.
+5. **pair-config** — whitelist, лимиты, Start/Stop (control-plane), JWT/auth, reconcile vs Bybit.
+6. **custom-ui** — панель за nginx `:8443`.
 
 ```
 Browser → HTTPS :8443 (nginx)
@@ -39,8 +40,11 @@ Browser → HTTPS :8443 (nginx)
 | `trade-executor` | `scripts/trade_executor.py` | — |
 | `cryptotools-grid` | `config_grid.json` | 8082 |
 | `cryptotools-finder` | `config.json` | 8080 |
+| `cryptotools-price-action` | `scripts/price_action_bot.py` | — |
 | `pair-config` | `pair_config_server.py` | 8090 |
 | `cryptotools-telegram-bot` | `telegram_bot.py` | — |
+
+`cryptotools-llm` / `cryptotools-cursor` retired: units disabled, сигналы отклоняются `trade-executor`.
 
 Секреты на VPS: `/home/cryptotools/.cryptotools.env`. SSH: `site/deploy/id_rsa/id_rsa`, user `root`.  
 Если SSH/SCP таймаутится — **выключите VPN**. Скрипты деплоя в репозитории не публикуются (см. раздел «Деплой»).
