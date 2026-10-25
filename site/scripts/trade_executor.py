@@ -801,6 +801,15 @@ def _price_action_skip_reason(user_id: str, ev: dict[str, Any]) -> str | None:
     settings = price_action_settings.load(user_id)
     if pair not in set(settings["pairs"]):
         return f"Price Action не торгует {pair or '?'}"
+    setup = str(ev.get("setup") or "")
+    if not setup:
+        tag = str(ev.get("strategy_id") or ev.get("enter_tag") or "")
+        setup = price_action_settings.setup_for_tag(tag)
+    if setup in price_action_settings.SETUP_FLAGS and not price_action_settings.setup_enabled(
+        settings, setup
+    ):
+        label = price_action_settings.SETUP_LABELS.get(setup, setup)
+        return f"Price Action: сетап {label} выключен"
     raw_score = ev.get("score")
     if raw_score is None:
         ind = ev.get("indicators") if isinstance(ev.get("indicators"), dict) else {}

@@ -882,6 +882,8 @@ def analyze_pair(
     frames: dict[str, pd.DataFrame | None],
     metrics: dict[str, Any] | None = None,
     *,
+    enable_trend_pullback: bool = True,
+    enable_liquidity_sweep: bool = True,
     min_score: int = DEFAULT_MIN_SCORE,
     min_rr: float = DEFAULT_MIN_RR,
     max_spread_pct: float = DEFAULT_MAX_SPREAD_PCT,
@@ -998,18 +1000,27 @@ def analyze_pair(
     }
     ctx["regime"] = _regime(ctx)
     ctx["timeframes"] = _timeframes(ctx)
-    cards = [
-        card
-        for card in (
-            _trend_pullback(ctx),
-            _liquidity_sweep(ctx, "long"),
-            _liquidity_sweep(ctx, "short"),
-        )
-        if card is not None
-    ]
+    if not enable_trend_pullback and not enable_liquidity_sweep:
+        return _empty_card(ctx, "оба сетапа выключены")
+    cards: list[dict[str, Any]] = []
+    if enable_trend_pullback:
+        pullback = _trend_pullback(ctx)
+        if pullback is not None:
+            cards.append(pullback)
+    if enable_liquidity_sweep:
+        for side in ("long", "short"):
+            sweep = _liquidity_sweep(ctx, side)
+            if sweep is not None:
+                cards.append(sweep)
     chosen = _choose(cards)
     if chosen is None:
-        return _empty_card(ctx, "нет сетапа: нет тренда с откатом и нет прострела уровня")
+        if enable_trend_pullback and enable_liquidity_sweep:
+            reason = "нет сетапа: нет тренда с откатом и нет прострела уровня"
+        elif enable_trend_pullback:
+            reason = "нет сетапа Trend Pullback"
+        else:
+            reason = "нет сетапа Liquidity Sweep"
+        return _empty_card(ctx, reason)
     chosen["alternatives"] = [
         {
             "setup": card.get("setup"),

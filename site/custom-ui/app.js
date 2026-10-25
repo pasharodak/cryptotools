@@ -8924,7 +8924,7 @@ function paCardHtml(card) {
       }
       ${
         notes.length
-          ? `<p class="pa-user-notes">Не проходит ваши лимиты: ${notes.map((n) => escapeHtml(n)).join(" · ")}</p>`
+          ? `<p class="pa-user-notes">Не проходит ваши настройки: ${notes.map((n) => escapeHtml(n)).join(" · ")}</p>`
           : ""
       }
     </article>`;
@@ -8991,6 +8991,15 @@ function paintPriceAction(view) {
     if (el && active !== el) el.value = String(value);
     if (el) el.disabled = !!settingsReadonly;
   }
+  const setupFields = [
+    ["pa-enable-pullback", settings.enable_trend_pullback !== false],
+    ["pa-enable-sweep", settings.enable_liquidity_sweep !== false],
+  ];
+  for (const [id, value] of setupFields) {
+    const el = $(id);
+    if (el && active !== el) el.checked = value;
+    if (el) el.disabled = !!settingsReadonly;
+  }
   for (const id of ["pa-save", "pa-pair-add", "pa-pair-input"]) {
     const el = $(id);
     if (el) el.disabled = !!settingsReadonly;
@@ -9004,9 +9013,13 @@ function paintPriceAction(view) {
   }
   const pairs = Array.isArray(settings.pairs) ? settings.pairs : view?.pairs || [];
   renderPaPairs(pairs);
+  const setups = [];
+  if (settings.enable_trend_pullback !== false) setups.push("Trend Pullback");
+  if (settings.enable_liquidity_sweep !== false) setups.push("Liquidity Sweep");
+  const setupText = setups.length ? setups.join(" · ") : "Сетапы выключены";
   const subtitle = $("pa-subtitle");
   if (subtitle) {
-    subtitle.textContent = `Trend Pullback · Liquidity Sweep · ${pairs.length} пар · скор ≥ ${settings.min_score ?? 6}/8 · R/R ≥ ${settings.min_rr ?? 1.5} · стейк ${settings.stake_amount ?? 5} USDT · плечо ${settings.leverage ?? 3}x`;
+    subtitle.textContent = `${setupText} · ${pairs.length} пар · скор ≥ ${settings.min_score ?? 6}/8 · R/R ≥ ${settings.min_rr ?? 1.5} · стейк ${settings.stake_amount ?? 5} USDT · плечо ${settings.leverage ?? 3}x`;
   }
   const decision = $("pa-decision");
   if (decision) decision.textContent = paDecisionText(view);
@@ -9022,6 +9035,8 @@ async function refreshPriceAction() {
 
 async function savePriceActionSettings(extra = {}) {
   const body = {
+    enable_trend_pullback: !!$("pa-enable-pullback")?.checked,
+    enable_liquidity_sweep: !!$("pa-enable-sweep")?.checked,
     stake_amount: Number($("pa-stake")?.value),
     leverage: Number($("pa-leverage")?.value),
     max_open_trades: Number($("pa-max")?.value),

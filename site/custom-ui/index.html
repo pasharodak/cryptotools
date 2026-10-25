@@ -9,7 +9,7 @@
   <title>CriptoTools — панель управления</title>
   <link rel="icon" type="image/png" href="bitcoin-icon.png?v=20260801" />
   <link rel="apple-touch-icon" href="bitcoin-icon.png?v=20260801" />
-  <link rel="stylesheet" href="styles.css?v=20261025pa4" />
+  <link rel="stylesheet" href="styles.css?v=20261025pa5" />
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script>
     (function () {
@@ -474,7 +474,7 @@
               <details class="ui-hint">
                 <summary class="ui-hint-btn" aria-label="Подсказка">i</summary>
                 <div class="ui-hint-body">
-                  Отдельный бот без ML-гейта. Trend Pullback: тренд 1h/15m, откат к VWAP или пробитому уровню, триггер 5m/1m. Liquidity Sweep: вынос экстремума и возврат в диапазон, стоп за экстремумом. Скор 0–8: HTF 0–2, уровень/VWAP 0–2, триггер 0–2, объём 0–1, поток 0–1. Вход только при скоре не ниже порога и прохождении фильтров спреда, глубины, оборота, риска и R/R после комиссий. Скор — не вероятность.
+                  Отдельный бот без ML-гейта. Trend Pullback: тренд 1h/15m, откат к VWAP или пробитому уровню, триггер 5m/1m. Liquidity Sweep: вынос экстремума и возврат в диапазон, стоп за экстремумом. Сетапы можно включать отдельно. Скор 0–8: HTF 0–2, уровень/VWAP 0–2, триггер 0–2, объём 0–1, поток 0–1. Вход только при скоре не ниже порога и прохождении фильтров спреда, глубины, оборота, риска и R/R после комиссий. Скор — не вероятность.
                 </div>
               </details>
             </div>
@@ -497,6 +497,14 @@
           <label class="llm-field">
             <span>Макс. открытых</span>
             <input id="pa-max" class="numeric-setting-input" type="number" min="0" max="10" step="1" value="1" />
+          </label>
+          <label class="llm-toggle" title="Тренд 1h/15m, откат к VWAP или пробитому уровню">
+            <input id="pa-enable-pullback" type="checkbox" checked />
+            <span>Trend Pullback</span>
+          </label>
+          <label class="llm-toggle" title="Вынос экстремума и возврат в диапазон">
+            <input id="pa-enable-sweep" type="checkbox" checked />
+            <span>Liquidity Sweep</span>
           </label>
           <label class="llm-field">
             <span>Мин. скор, /8</span>
@@ -1899,6 +1907,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=20261025pa4" defer></script>
+  <script src="app.js?v=20261025pa5" defer></script>
 </body>
 </html>

@@ -12,7 +12,9 @@ import json
 import logging
 import os
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -41,9 +43,11 @@ from user_exchange import (  # noqa: E402
 log = logging.getLogger("price_action")
 INTERVAL_SEC = 60
 REQUEST_PAUSE_SEC = 0.12
+SCAN_WORKERS = 6
 STATUS_PATH = BASE / "user_data" / "price_action_status.json"
 DEPTH_BAND = 0.005
 RECENT_SIGNALS: dict[str, float] = {}
+_SIGNAL_LOCK = threading.Lock()
 _FRAMES = (("5m", "5", 260, 5), ("15m", "15", 200, 15), ("1h", "60", 160, 60), ("1m", "1", 120, 1))
 
 
@@ -154,13 +158,16 @@ def _dedupe_ok(pair: str, tag: str, side: str) -> bool:
     bucket = int(time.time()) // signal_bus.SIGNAL_DEDUPE_SEC
     key = f"{pair}|{tag}|{side}|{bucket}"
     now = time.time()
-    stale = [k for k, ts in RECENT_SIGNALS.items() if now - ts > signal_bus.SIGNAL_DEDUPE_SEC * 2]
-    for k in stale:
-        RECENT_SIGNALS.pop(k, None)
-    if key in RECENT_SIGNALS:
-        return False
-    RECENT_SIGNALS[key] = now
-    return True
+    with _SIGNAL_LOCK:
+        stale = [
+            k for k, ts in RECENT_SIGNALS.items() if now - ts > signal_bus.SIGNAL_DEDUPE_SEC * 2
+        ]
+        for k in stale:
+            RECENT_SIGNALS.pop(k, None)
+        if key in RECENT_SIGNALS:
+            return False
+        RECENT_SIGNALS[key] = now
+        return True
 
 
 def _publish(card: dict[str, Any], leverage: float) -> dict[str, Any] | None:
@@ -237,7 +244,7 @@ def _scan_pair(
     dry_run: bool,
     leverage: float,
     preview: bool = False,
-) -> tuple[dict[str, Any], dict[str, Any] | None]:
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     symbol = ft_pair_to_symbol(pair)
     frames: dict[str, pd.DataFrame | None] = {}
     for name, interval, limit, minutes in _FRAMES:
@@ -252,25 +259,69 @@ def _scan_pair(
     time.sleep(REQUEST_PAUSE_SEC)
     book = fetch_public_orderbook(symbol, limit=50)
     metrics = _metrics(symbol, ticker, book, fallback)
-    card = analyze_pair(pair, frames, metrics, **settings.analyze_kwargs(params))
-    card["bar_time"] = (
-        df5["dt"].iloc[-1].isoformat() if df5 is not None and not df5.empty else None
-    )
-    card["symbol"] = symbol
-    event = None
-    if card.get("decision") in ("LONG", "SHORT") and not preview:
+    base_kwargs = settings.analyze_kwargs(params)
+    cards: list[dict[str, Any]] = []
+    for setup, enabled in (
+        ("trend_pullback", bool(params["enable_trend_pullback"])),
+        ("liquidity_sweep", bool(params["enable_liquidity_sweep"])),
+    ):
+        if not enabled:
+            continue
+        kwargs = dict(base_kwargs)
+        kwargs["enable_trend_pullback"] = setup == "trend_pullback"
+        kwargs["enable_liquidity_sweep"] = setup == "liquidity_sweep"
+        cards.append(analyze_pair(pair, frames, metrics, **kwargs))
+    if not cards:
+        kwargs = dict(base_kwargs)
+        kwargs["enable_trend_pullback"] = False
+        kwargs["enable_liquidity_sweep"] = False
+        cards.append(analyze_pair(pair, frames, metrics, **kwargs))
+    for card in cards:
+        card["bar_time"] = (
+            df5["dt"].iloc[-1].isoformat() if df5 is not None and not df5.empty else None
+        )
+        card["symbol"] = symbol
+
+    def rank(card: dict[str, Any]) -> tuple[int, int, float]:
+        return (
+            1 if card.get("decision") in ("LONG", "SHORT") else 0,
+            int(card.get("score") or 0),
+            float(card.get("rr_net") or 0.0),
+        )
+
+    cards.sort(key=rank, reverse=True)
+    card = cards[0]
+    if len(cards) > 1:
+        card["alternatives"] = [
+            {
+                "setup": other.get("setup"),
+                "setup_label": other.get("setup_label"),
+                "decision": other.get("decision"),
+                "side": other.get("side"),
+                "score": other.get("score"),
+                "reason": other.get("reason"),
+            }
+            for other in cards[1:]
+        ]
+    events: list[dict[str, Any]] = []
+    for candidate in cards:
+        if candidate.get("decision") not in ("LONG", "SHORT") or preview:
+            continue
         if dry_run:
             log.info(
-                "DRY %s %s score=%s rr=%.2f",
-                card.get("side"),
+                "DRY %s %s setup=%s score=%s rr=%.2f",
+                candidate.get("side"),
                 pair,
-                card.get("score"),
-                float(card.get("rr_net") or 0),
+                candidate.get("setup"),
+                candidate.get("score"),
+                float(candidate.get("rr_net") or 0),
             )
-            card["dry_run"] = True
+            candidate["dry_run"] = True
         else:
-            event = _publish(card, leverage)
-    return card, event
+            event = _publish(candidate, leverage)
+            if event:
+                events.append(event)
+    return card, events
 
 
 def _tick(
@@ -295,6 +346,24 @@ def _tick(
         return
     users_for_params = traders or ["preview"]
     params = settings.floor_params(users_for_params)
+    if (
+        not preview
+        and not pairs_override
+        and not params["enable_trend_pullback"]
+        and not params["enable_liquidity_sweep"]
+    ):
+        _status(
+            {
+                "state": "idle",
+                "reason": "у активных пользователей оба сетапа выключены",
+                "traders": traders,
+                "pairs": [],
+                "cards": [],
+                "signals": [],
+            }
+        )
+        log.info("idle: both setups disabled")
+        return
     pairs = _universe(traders, pairs_override)
     started = time.monotonic()
     if not pairs:
@@ -313,32 +382,49 @@ def _tick(
     cards: list[dict[str, Any]] = []
     signals: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
-    for pair in pairs:
-        try:
-            card, event = _scan_pair(
+    results: dict[str, tuple[dict[str, Any], list[dict[str, Any]]]] = {}
+    workers = max(1, min(SCAN_WORKERS, len(pairs)))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {
+            pool.submit(
+                _scan_pair,
                 pair,
                 params=params,
                 dry_run=dry_run,
                 leverage=float(params["leverage"]),
                 preview=preview,
+            ): pair
+            for pair in pairs
+        }
+        for future in as_completed(futures):
+            pair = futures[future]
+            try:
+                results[pair] = future.result()
+            except Exception as exc:  # noqa: BLE001
+                log.warning("scan %s failed: %s", pair, exc)
+                errors.append({"pair": pair, "error": str(exc)[:200]})
+    for pair in pairs:
+        result = results.get(pair)
+        if result is None:
+            continue
+        card, events = result
+        cards.append(card)
+        for event in events:
+            if event.get("event") != "entry_signal":
+                continue
+            signals.append(
+                {
+                    "pair": pair,
+                    "tag": event.get("strategy_id"),
+                    "side": event.get("side"),
+                    "setup": event.get("setup"),
+                    "score": event.get("score"),
+                    "rr_net": event.get("rr_net"),
+                    "event_id": event.get("id"),
+                    "seq": event.get("seq"),
+                }
             )
-            cards.append(card)
-            if event and event.get("event") == "entry_signal":
-                signals.append(
-                    {
-                        "pair": pair,
-                        "tag": card.get("tag"),
-                        "side": card.get("side"),
-                        "setup": card.get("setup"),
-                        "score": card.get("score"),
-                        "rr_net": card.get("rr_net"),
-                        "event_id": event.get("id"),
-                        "seq": event.get("seq"),
-                    }
-                )
-        except Exception as exc:  # noqa: BLE001
-            log.warning("scan %s failed: %s", pair, exc)
-            errors.append({"pair": pair, "error": str(exc)[:200]})
+    errors.sort(key=lambda row: row["pair"])
     elapsed = time.monotonic() - started
     _status(
         {
@@ -350,6 +436,8 @@ def _tick(
             "signals": signals,
             "errors": errors,
             "params": {
+                "enable_trend_pullback": params["enable_trend_pullback"],
+                "enable_liquidity_sweep": params["enable_liquidity_sweep"],
                 "min_score": params["min_score"],
                 "min_rr": params["min_rr"],
                 "max_spread_pct": params["max_spread_pct"],
@@ -362,8 +450,9 @@ def _tick(
         }
     )
     log.info(
-        "cycle done pairs=%s signals=%s errors=%s elapsed=%.1fs",
+        "cycle done pairs=%s workers=%s signals=%s errors=%s elapsed=%.1fs",
         len(pairs),
+        workers,
         len(signals),
         len(errors),
         elapsed,

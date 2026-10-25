@@ -595,6 +595,30 @@ body {
 .llm-field input {
   width: 7.5rem;
 }
+.llm-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-height: 2.4rem;
+  padding: 0.45rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 0.82rem;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+.llm-toggle input[type="checkbox"] {
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+  flex: 0 0 auto;
+  accent-color: var(--pa);
+}
+.llm-toggle:has(input:checked) {
+  border-color: color-mix(in srgb, var(--pa) 55%, var(--border));
+  background: color-mix(in srgb, var(--pa) 8%, transparent);
+}
 @media (max-width: 640px) {
   .llm-settings {
     display: grid;

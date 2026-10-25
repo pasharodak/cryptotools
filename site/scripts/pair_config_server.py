@@ -6883,6 +6883,12 @@ def _price_action_view(user_id: str) -> dict[str, Any]:
             continue
         item = dict(card)
         notes: list[str] = []
+        setup = str(card.get("setup") or "")
+        if setup in price_action_settings.SETUP_FLAGS and not price_action_settings.setup_enabled(
+            settings, setup
+        ):
+            label = price_action_settings.SETUP_LABELS.get(setup, setup)
+            notes.append(f"сетап {label} выключен")
         try:
             score = int(card.get("score") or 0)
         except (TypeError, ValueError):
@@ -6948,6 +6954,8 @@ def _price_action_update(user_id: str, data: dict[str, Any]) -> dict[str, Any]:
     patch = {
         key: data[key]
         for key in (
+            "enable_trend_pullback",
+            "enable_liquidity_sweep",
             "stake_amount",
             "leverage",
             "max_open_trades",
@@ -6965,6 +6973,8 @@ def _price_action_update(user_id: str, data: dict[str, Any]) -> dict[str, Any]:
     saved = price_action_settings.save(user_id, patch) if patch else price_action_settings.load(user_id)
     if "enabled" in data:
         enabled = bool(data.get("enabled"))
+        if enabled and not saved["enable_trend_pullback"] and not saved["enable_liquidity_sweep"]:
+            raise ValueError("включите хотя бы один сетап: Trend Pullback или Liquidity Sweep")
         if enabled and int(saved["max_open_trades"]) <= 0:
             raise ValueError("макс. открытых = 0 — поставьте хотя бы 1")
         if enabled and not saved["pairs"]:
