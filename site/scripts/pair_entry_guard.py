@@ -252,6 +252,8 @@ _OPEN_BY_BOT_TTL_SEC = 20.0
 
 def _trade_bot(db_bot: str, enter_tag: str, strategy: str) -> str:
     tag = enter_tag or strategy or ""
+    if tag.startswith("PaTrendPullback") or tag.startswith("PaLiquiditySweep"):
+        return "price_action"
     if tag.startswith("Deepseek50") or strategy == "Deepseek50":
         return "llm50"
     if tag.startswith("DeepseekLlmStrategy") or strategy == "DeepseekLlmStrategy":

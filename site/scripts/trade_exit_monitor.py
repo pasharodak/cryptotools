@@ -39,6 +39,7 @@ def _price_move_off(exchange_price: str, open_rate: float, expect_move: float) -
 
 HEDGE_SUFFIX = ":hedge"
 INV_SUFFIX = ":inv"
+PA_TAGS = frozenset({"PaTrendPullback", "PaLiquiditySweep"})
 
 
 def base_enter_tag(tag: str | None) -> str:
@@ -191,6 +192,8 @@ class TradeRow:
     enter_tag: str
     strategy: str
     leverage: float
+    stop_loss_ratio: float | None = None
+    take_profit_ratio: float | None = None
 
 
 def load_open_trades(db_path) -> list[TradeRow]:
@@ -200,13 +203,35 @@ def load_open_trades(db_path) -> list[TradeRow]:
     try:
         with sqlite3.connect(db_path) as conn:
             conn.row_factory = sqlite3.Row
-            for r in conn.execute(
-                """
-                SELECT id, pair, is_short, amount, open_rate, stake_amount,
-                       enter_tag, strategy, leverage
-                FROM trades WHERE is_open = 1 ORDER BY id
-                """
-            ):
+            rows = list(
+                conn.execute(
+                    """
+                    SELECT id, pair, is_short, amount, open_rate, stake_amount,
+                           enter_tag, strategy, leverage, stop_loss_pct
+                    FROM trades WHERE is_open = 1 ORDER BY id
+                    """
+                )
+            )
+            custom: dict[int, dict[str, float]] = {}
+            try:
+                for r in conn.execute(
+                    """
+                    SELECT ft_trade_id, cd_key, cd_value FROM trade_custom_data
+                    WHERE cd_key IN ('stop_loss_ratio', 'take_profit_ratio')
+                    """
+                ):
+                    try:
+                        value = float(r["cd_value"])
+                    except (TypeError, ValueError):
+                        continue
+                    custom.setdefault(int(r["ft_trade_id"]), {})[str(r["cd_key"])] = value
+            except sqlite3.Error:
+                custom = {}
+            for r in rows:
+                meta = custom.get(int(r["id"]), {})
+                sl_ratio = meta.get("stop_loss_ratio")
+                if sl_ratio is None and r["stop_loss_pct"] is not None:
+                    sl_ratio = float(r["stop_loss_pct"])
                 out.append(
                     TradeRow(
                         id=int(r["id"]),
@@ -218,6 +243,8 @@ def load_open_trades(db_path) -> list[TradeRow]:
                         enter_tag=str(r["enter_tag"] or ""),
                         strategy=str(r["strategy"] or ""),
                         leverage=float(r["leverage"] or 1),
+                        stop_loss_ratio=sl_ratio,
+                        take_profit_ratio=meta.get("take_profit_ratio"),
                     )
                 )
     except sqlite3.Error as exc:
@@ -532,9 +559,17 @@ def monitor_user_exits(user_id: str, ctx: dict[str, Any]) -> None:
             continue
 
         tag = base_enter_tag(trade.enter_tag or trade.strategy)
-        sl, tp = risk_thresholds(
-            user_id, tag, tenant_dir=tenant_dir, load_json=load_json, load_user_config=load_user_config
-        )
+        if (
+            tag in PA_TAGS
+            and trade.stop_loss_ratio is not None
+            and trade.take_profit_ratio is not None
+        ):
+            sl = float(trade.stop_loss_ratio)
+            tp = abs(float(trade.take_profit_ratio))
+        else:
+            sl, tp = risk_thresholds(
+                user_id, tag, tenant_dir=tenant_dir, load_json=load_json, load_user_config=load_user_config
+            )
         # Ensure Bybit position has exchange SL/TP matching stake-PnL risk (backup to soft exits).
         try:
             from user_exchange import UserBybitExchange
@@ -582,7 +617,7 @@ def monitor_user_exits(user_id: str, ctx: dict[str, Any]) -> None:
         elif sl < 0 and ratio <= sl:
             exit_reason = "stop_loss"
 
-        if not exit_reason:
+        if not exit_reason and tag not in PA_TAGS:
             try:
                 rows = fetch_public_klines(sym, interval="5", limit=250)
                 df = klines_to_df(rows)

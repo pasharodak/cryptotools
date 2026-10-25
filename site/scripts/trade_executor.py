@@ -772,12 +772,120 @@ def _cursor50_skip_reason(user_id: str, ev: dict[str, Any]) -> str | None:
     return None
 
 
+def _price_action_open_count(user_id: str) -> int:
+    path = db_path(user_id)
+    if not path.is_file():
+        return 0
+    try:
+        with sqlite3.connect(path) as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) FROM trades
+                WHERE is_open=1 AND (
+                    enter_tag LIKE 'PaTrendPullback%'
+                    OR enter_tag LIKE 'PaLiquiditySweep%'
+                    OR strategy IN ('PaTrendPullback', 'PaLiquiditySweep')
+                )
+                """
+            ).fetchone()
+    except sqlite3.Error:
+        return 0
+    return int(row[0] if row else 0)
+
+
+def _price_action_skip_reason(user_id: str, ev: dict[str, Any]) -> str | None:
+    import price_action_settings
+
+    pair = str(ev.get("pair") or "")
+    side = str(ev.get("side") or "long")
+    settings = price_action_settings.load(user_id)
+    if pair not in set(settings["pairs"]):
+        return f"Price Action не торгует {pair or '?'}"
+    raw_score = ev.get("score")
+    if raw_score is None:
+        ind = ev.get("indicators") if isinstance(ev.get("indicators"), dict) else {}
+        raw_score = str(ind.get("pa_score") or "").split("/", 1)[0]
+    try:
+        score = int(float(raw_score))
+    except (TypeError, ValueError):
+        return "Price Action: в сигнале нет скора"
+    if score < int(settings["min_score"]):
+        return f"Price Action скор {score}/8 ниже порога {settings['min_score']}/8"
+    try:
+        rr_net = float(ev.get("rr_net"))
+    except (TypeError, ValueError):
+        return "Price Action: в сигнале нет R/R"
+    if rr_net < float(settings["min_rr"]):
+        return f"Price Action R/R {rr_net:.2f} ниже порога {settings['min_rr']:.2f}"
+    try:
+        spread = float(ev.get("spread_pct"))
+    except (TypeError, ValueError):
+        return "Price Action: в сигнале нет спреда"
+    if spread > float(settings["max_spread_pct"]):
+        return f"Price Action спред {spread:.3f}% выше {settings['max_spread_pct']:.3f}%"
+    try:
+        depth = float(ev.get("depth_usdt"))
+    except (TypeError, ValueError):
+        depth = 0.0
+    if depth < float(settings["min_depth_usdt"]):
+        return (
+            f"Price Action глубина ${depth:,.0f} ниже "
+            f"${float(settings['min_depth_usdt']):,.0f}"
+        )
+    try:
+        risk_pct = float(ev.get("risk_pct"))
+    except (TypeError, ValueError):
+        risk_pct = 999.0
+    if risk_pct > float(settings["max_risk_pct"]):
+        return f"Price Action риск {risk_pct:.2f}% выше {settings['max_risk_pct']:.2f}%"
+    try:
+        entry = float(ev.get("rate") or ev.get("entry") or 0)
+        sl_price = float(ev.get("sl_price") or 0)
+        tp_price = float(ev.get("tp1_price") or 0)
+    except (TypeError, ValueError):
+        return "Price Action: нет цен входа/стопа/тейка"
+    if entry <= 0 or sl_price <= 0 or tp_price <= 0:
+        return "Price Action: нет цен входа/стопа/тейка"
+    if price_action_settings.trade_ratios(
+        entry, sl_price, tp_price, float(settings["leverage"])
+    ) is None:
+        return "Price Action: некорректные стоп/тейк"
+    cap = int(settings["max_open_trades"])
+    if cap <= 0:
+        return "Price Action: макс. сделок = 0"
+    open_n = _price_action_open_count(user_id)
+    if open_n >= cap:
+        return f"Price Action лимит открытых сделок {open_n}/{cap}"
+    if count_open_on_pair(user_id, pair) > 0:
+        return f"уже есть открытая сделка по {pair} в БД"
+    try:
+        if exchange_has_position(user_id, pair, side):
+            return f"на бирже уже есть позиция {side} по {pair}"
+    except Exception as exc:
+        return f"не удалось проверить позиции на бирже: {exc}"
+    busy = pair_entry_guard.busy_reason(
+        pair,
+        side,
+        bot="price_action",
+        tenant_id=user_id,
+        check_bybit=(user_id == "admin"),
+    )
+    if busy:
+        return busy
+    return None
+
+
 def skip_reason(user_id: str, ev: dict[str, Any]) -> str | None:
     """Human-readable why this signal will not open a trade (None = allowed)."""
     sid = str(ev.get("strategy_id") or "")
     pair = str(ev.get("pair") or "")
     side = str(ev.get("side") or "long")
-    if str(ev.get("bot") or "") == "llm":
+    bot = str(ev.get("bot") or "")
+    if bot in user_trading.RETIRED_BOTS:
+        return f"{bot} выведен из торговли"
+    if bot == "price_action":
+        return _price_action_skip_reason(user_id, ev)
+    if bot == "llm":
         return _llm_skip_reason(user_id, ev)
     if str(ev.get("bot") or "") == "llm50":
         return _llm50_skip_reason(user_id, ev)
@@ -908,6 +1016,8 @@ def execute_for_user(user_id: str, ev: dict[str, Any]) -> None:
             claim_bot = "cursor"
         elif bot_name == "cursor50":
             claim_bot = "cursor50"
+        elif bot_name == "price_action":
+            claim_bot = "price_action"
         else:
             claim_bot = "strategy"
         ok_claim, claim_reason = pair_entry_guard.claim_pair(
@@ -929,25 +1039,43 @@ def execute_for_user(user_id: str, ev: dict[str, Any]) -> None:
             )
             return
         cfg = load_user_config(user_id)
-        if str(ev.get("bot") or "") == "llm":
+        tag = str(ev.get("entry_tag") or ev.get("strategy_id") or "")
+        leverage = 3.0
+        if bot_name == "llm":
             import llm_settings
 
             stake = float(llm_settings.load(user_id)["stake_amount"])
-        elif str(ev.get("bot") or "") == "llm50":
+        elif bot_name == "llm50":
             stake = float(ev.get("stake_usdt") or 0)
-        elif str(ev.get("bot") or "") == "cursor":
+        elif bot_name == "cursor":
             import cursor_settings
 
             stake = float(cursor_settings.load(user_id)["stake_amount"])
-        elif str(ev.get("bot") or "") == "cursor50":
+        elif bot_name == "cursor50":
             stake = float(ev.get("stake_usdt") or 0)
+        elif bot_name == "price_action":
+            import price_action_settings
+
+            pa = price_action_settings.load(user_id)
+            stake = float(pa["stake_amount"])
+            leverage = float(pa["leverage"])
         else:
-            stake = _strategy_stake(user_id, str(ev.get("entry_tag") or ev.get("strategy_id") or ""), cfg)
-        leverage = 3.0
-        tag = str(ev.get("entry_tag") or ev.get("strategy_id") or "")
-        if str(ev.get("bot") or "") in {"llm50", "cursor50"}:
+            stake = _strategy_stake(user_id, tag, cfg)
+        if bot_name in {"llm50", "cursor50"}:
             sl = float(ev.get("stop_loss_ratio"))
             tp = float(ev.get("take_profit_ratio"))
+        elif bot_name == "price_action":
+            ratios = price_action_settings.trade_ratios(
+                float(ev.get("rate") or 0),
+                float(ev.get("sl_price") or 0),
+                float(ev.get("tp1_price") or 0),
+                leverage,
+            )
+            if ratios is None:
+                pair_entry_guard.release_pair(claim_bot, pair, side, tenant_id=user_id)
+                _record_skip("Price Action: некорректные стоп/тейк")
+                return
+            sl, tp = ratios
         else:
             sl, tp = trade_exit_monitor.risk_thresholds(
                 user_id,
@@ -1650,7 +1778,7 @@ def process_event(ev: dict[str, Any]) -> None:
         _processed.add(eid)
         return
     bot = str(ev.get("bot") or "strategy")
-    if bot not in ("strategy", "llm", "llm50", "cursor", "cursor50"):
+    if bot not in ("strategy", "llm", "llm50", "cursor", "cursor50", "price_action"):
         bot = "strategy"
     users = user_trading.list_active_traders(bot)
     target = str(ev.get("user_id") or "")

@@ -578,3 +578,27 @@ def fetch_public_klines(symbol: str, *, interval: str = "5", limit: int = 250) -
     # Bybit returns newest first — reverse to oldest-first OHLCV
     rows.reverse()
     return rows
+
+
+def _public_get(path: str, params: dict[str, Any], *, timeout: float = 20.0) -> dict[str, Any]:
+    qs = urllib.parse.urlencode(params)
+    url = f"{BYBIT_API}{path}?{qs}"
+    with urllib.request.urlopen(url, timeout=timeout) as resp:
+        data = json.loads(resp.read().decode())
+    if int(data.get("retCode", -1)) != 0:
+        raise RuntimeError(data.get("retMsg") or data)
+    result = data.get("result")
+    return result if isinstance(result, dict) else {}
+
+
+def fetch_public_ticker(symbol: str) -> dict[str, Any]:
+    result = _public_get("/v5/market/tickers", {"category": "linear", "symbol": symbol})
+    rows = result.get("list") or []
+    return rows[0] if rows and isinstance(rows[0], dict) else {}
+
+
+def fetch_public_orderbook(symbol: str, *, limit: int = 50) -> dict[str, Any]:
+    return _public_get(
+        "/v5/market/orderbook",
+        {"category": "linear", "symbol": symbol, "limit": int(limit)},
+    )

@@ -59,6 +59,8 @@ const LLM_STATS_LABEL = "DeepSeek";
 const LLM50_STATS_LABEL = "DeepSeek 50";
 const CURSOR_STATS_LABEL = "Cursor";
 const CURSOR50_STATS_LABEL = "Cursor 50";
+const PRICE_ACTION_STATS_KEY = "PriceAction";
+const PRICE_ACTION_STATS_LABEL = "Price Action";
 const ML_GATE_STRATEGY = "XGBoost · profit ≥60%";
 const ML_GATE_BLOCK_LOSS = "XGBoost · block loss";
 const BYBIT_GRID_MAX_LIMIT = 5;
@@ -655,7 +657,7 @@ function applyAuthMeState(me) {
   if (sessionToken && !botsEventsAbort) startBotsEventsStream();
 }
 
-const RETIRED_BLOCKS = new Set(["finder", "grid", "bybitgrid"]);
+const RETIRED_BLOCKS = new Set(["finder", "grid", "bybitgrid", "llm"]);
 
 function userMayUseBlock(blockId) {
   if (RETIRED_BLOCKS.has(blockId)) return false;
@@ -1086,6 +1088,34 @@ function isDeepseekStatsRow(row) {
   return isLlmStatsRow(row) || isBookStatsRow(row) || isCursorStatsRow(row) || isCursorBookStatsRow(row);
 }
 
+function isPriceActionTrade(trade) {
+  const tag = String(trade?.enter_tag || "");
+  const strat = String(trade?.strategy || "");
+  return (
+    tag.startsWith("PaTrendPullback") ||
+    tag.startsWith("PaLiquiditySweep") ||
+    strat === "PaTrendPullback" ||
+    strat === "PaLiquiditySweep"
+  );
+}
+
+function isPriceActionStatsRow(row) {
+  if (!row) return false;
+  return (
+    String(row.key || "") === PRICE_ACTION_STATS_KEY ||
+    String(row.name || "") === PRICE_ACTION_STATS_LABEL ||
+    isPriceActionTrade({ enter_tag: row.key, strategy: row.name })
+  );
+}
+
+function isRetiredTrade(trade) {
+  return isLlmTrade(trade) || isBookTrade(trade) || isCursorTrade(trade) || isCursorBookTrade(trade);
+}
+
+function isRetiredStatsRow(row) {
+  return isDeepseekStatsRow(row);
+}
+
 function tradeSourceLabel(trade, bot) {
   if (bot === "finder") return FINDER_STATS_LABEL;
   if (bot === "grid") return GRID_STATS_LABEL;
@@ -1093,6 +1123,7 @@ function tradeSourceLabel(trade, bot) {
   if (isBookTrade(trade)) return LLM50_STATS_LABEL;
   if (isCursorTrade(trade)) return CURSOR_STATS_LABEL;
   if (isCursorBookTrade(trade)) return CURSOR50_STATS_LABEL;
+  if (isPriceActionTrade(trade)) return PRICE_ACTION_STATS_LABEL;
   if (trade.enter_tag) {
     const raw = String(trade.enter_tag);
     let tag = raw.replace(/:hedge$/i, "").replace(/:inv$/i, "");
@@ -1322,7 +1353,11 @@ const STATS_SCOPE_META = {
   finder: { title: "Статистика — ML Finder", note: "Сделки TradeFinderStrategy (XGBoost scanner + pnl gate), даже если Finder сейчас выключен." },
   strategy: {
     title: "Статистика — стратегии + ML gate",
-    note: "Закрытые сделки основных стратегий по enter_tag (без тестового блока и без 1-часовых). Входы с ML gate.",
+    note: "Закрытые сделки основных стратегий по enter_tag (без тестового блока, 1-часовых и Price Action). Входы с ML gate.",
+  },
+  price_action: {
+    title: "Статистика — Price Action",
+    note: "Закрытые сделки Price Action: Trend Pullback и Liquidity Sweep. Вход по скору 0–8 и фильтрам, без ML-гейта.",
   },
   htf1h: {
     title: "Статистика — 1-часовые",
@@ -1337,22 +1372,6 @@ const STATS_SCOPE_META = {
     note: "Закрытые сделки Grid (VolatilityGridStrategy, ML gate live_grid), даже если бот остановлен.",
   },
   bybitgrid: { title: "Статистика — Bybit Grid", note: "Закрытые нативные grid-боты на бирже Bybit." },
-  llm: {
-    title: "Статистика — DeepSeek",
-    note: "Закрытые сделки бота DeepSeek. Стоп −2% от маржи, тейк с карточки. Результат за вычетом комиссии 0.1%×2.",
-  },
-  llm50: {
-    title: "Статистика — DeepSeek 50",
-    note: "Закрытые сделки DeepSeek 50 (бюджет 50 USDT). Результат за вычетом комиссии 0.1%×2.",
-  },
-  cursor: {
-    title: "Статистика — Cursor",
-    note: "Закрытые сделки бота Cursor. Стоп −2% от маржи, тейк с карточки. Результат за вычетом комиссии 0.1%×2.",
-  },
-  cursor50: {
-    title: "Статистика — Cursor 50",
-    note: "Закрытые сделки Cursor 50 (бюджет 50 USDT). Результат за вычетом комиссии 0.1%×2.",
-  },
 };
 
 let pairlistMode = "scanner";
@@ -1798,38 +1817,42 @@ function isHtfStatsRow(row, catalog = strategyCatalog) {
 }
 
 function filterStatsRows(rows, scope, catalog = strategyCatalog) {
-  if (scope === "all") return rows;
-  if (scope === "finder") return rows.filter((r) => r.name === FINDER_STATS_LABEL);
-  if (scope === "grid") return rows.filter((r) => r.name === GRID_STATS_LABEL);
-  if (scope === "bybitgrid") return rows.filter((r) => r.name === BYBIT_GRID_STATS_LABEL);
+  const visible = rows.filter((r) => !isRetiredStatsRow(r));
+  if (scope === "all") return visible;
+  if (scope === "finder") return visible.filter((r) => r.name === FINDER_STATS_LABEL);
+  if (scope === "grid") return visible.filter((r) => r.name === GRID_STATS_LABEL);
+  if (scope === "bybitgrid") return visible.filter((r) => r.name === BYBIT_GRID_STATS_LABEL);
   if (scope === "strategy") {
-    return rows.filter(
+    return visible.filter(
       (r) =>
         !isBotStatsLabel(r.name) &&
         !isTestStatsRow(r, catalog) &&
         !isHtfStatsRow(r, catalog) &&
-        !isDeepseekStatsRow(r)
+        !isPriceActionStatsRow(r)
     );
   }
+  if (scope === "price_action") {
+    return visible.filter((r) => isPriceActionStatsRow(r));
+  }
   if (scope === "htf1h") {
-    return rows.filter((r) => isHtfStatsRow(r, catalog));
+    return visible.filter((r) => isHtfStatsRow(r, catalog));
   }
   if (scope === "test_strategy") {
-    return rows.filter((r) => isTestStatsRow(r, catalog) && !isHtfStatsRow(r, catalog));
+    return visible.filter((r) => isTestStatsRow(r, catalog) && !isHtfStatsRow(r, catalog));
   }
   if (scope === "llm") {
-    return rows.filter((r) => isLlmStatsRow(r));
+    return visible.filter((r) => isLlmStatsRow(r));
   }
   if (scope === "llm50") {
-    return rows.filter((r) => isBookStatsRow(r));
+    return visible.filter((r) => isBookStatsRow(r));
   }
   if (scope === "cursor") {
-    return rows.filter((r) => isCursorStatsRow(r));
+    return visible.filter((r) => isCursorStatsRow(r));
   }
   if (scope === "cursor50") {
-    return rows.filter((r) => isCursorBookStatsRow(r));
+    return visible.filter((r) => isCursorBookStatsRow(r));
   }
-  return rows;
+  return visible;
 }
 
 function buildStatsRows(finderTrades, stratTrades, gridTrades, bybitHistory, catalog) {
@@ -1856,10 +1879,7 @@ function buildStatsRows(finderTrades, stratTrades, gridTrades, bybitHistory, cat
   ensure(FINDER_STATS_LABEL, FINDER_STATS_LABEL);
   ensure(GRID_STATS_LABEL, GRID_STATS_LABEL);
   ensure(BYBIT_GRID_STATS_LABEL, BYBIT_GRID_STATS_LABEL);
-  ensure("DeepseekLlmStrategy", LLM_STATS_LABEL);
-  ensure("Deepseek50", LLM50_STATS_LABEL);
-  ensure("CursorLlmStrategy", CURSOR_STATS_LABEL);
-  ensure("Cursor50", CURSOR50_STATS_LABEL);
+  ensure(PRICE_ACTION_STATS_KEY, PRICE_ACTION_STATS_LABEL);
   // Keep every catalog strategy row (incl. disabled) so add/remove toggles never drop history labels.
   for (const s of catalog) ensure(s.id, strategyCatalogLabel(s));
 
@@ -1877,10 +1897,7 @@ function buildStatsRows(finderTrades, stratTrades, gridTrades, bybitHistory, cat
     FINDER_STATS_LABEL,
     GRID_STATS_LABEL,
     BYBIT_GRID_STATS_LABEL,
-    "DeepseekLlmStrategy",
-    "Deepseek50",
-    "CursorLlmStrategy",
-    "Cursor50",
+    PRICE_ACTION_STATS_KEY,
     ...catalog.map((s) => s.id),
   ];
   const result = [];
@@ -1906,7 +1923,7 @@ function buildHistoryEntries(
   pairFilter = ""
 ) {
   const entries = [];
-  const modelScopes = new Set(["llm", "llm50", "cursor", "cursor50"]);
+  const modelScopes = new Set(["llm", "llm50", "cursor", "cursor50", "price_action"]);
   const ftBots =
     scope === "all"
       ? ["finder", "strategy", "grid"]
@@ -1946,10 +1963,13 @@ function buildHistoryEntries(
       const htf = isHtfTrade(entry.trade) || isHtfStrategyId(sid);
       if (scope === "htf1h") return htf;
       if (htf) return false;
-      if (scope === "strategy" && (isBookTrade(entry.trade) || isLlmTrade(entry.trade) || isCursorTrade(entry.trade) || isCursorBookTrade(entry.trade))) return false;
+      if (scope === "strategy" && (isRetiredTrade(entry.trade) || isPriceActionTrade(entry.trade))) return false;
       const isTest = testIds.has(sid);
       return scope === "test_strategy" ? isTest : !isTest;
     });
+  }
+  if (scope === "all") {
+    filtered = filtered.filter((entry) => entry.kind !== "trade" || !isRetiredTrade(entry.trade));
   }
   if (modelScopes.has(scope)) {
     filtered = filtered.filter((entry) => {
@@ -1957,7 +1977,8 @@ function buildHistoryEntries(
       if (scope === "llm") return isLlmTrade(entry.trade);
       if (scope === "llm50") return isBookTrade(entry.trade);
       if (scope === "cursor") return isCursorTrade(entry.trade);
-      return isCursorBookTrade(entry.trade);
+      if (scope === "cursor50") return isCursorBookTrade(entry.trade);
+      return isPriceActionTrade(entry.trade);
     });
   }
   if (strategyFilter && strategyFilter !== "all") {
@@ -2002,6 +2023,7 @@ function historyBotLabel(entry) {
   if (entry.kind === "bybit") return BYBIT_GRID_STATS_LABEL;
   if (entry.bot === "finder") return FINDER_STATS_LABEL;
   if (entry.bot === "grid") return GRID_STATS_LABEL;
+  if (entry.bot === "strategy" && entry.trade && isPriceActionTrade(entry.trade)) return PRICE_ACTION_STATS_LABEL;
   if (entry.bot === "strategy" && entry.trade && isHtfTrade(entry.trade)) return "1-часовые";
   return BOTS[entry.bot]?.label || entry.bot;
 }
@@ -2010,6 +2032,7 @@ function historyBotClass(entry) {
   if (entry.kind === "bybit") return "bot-bybitgrid";
   if (entry.bot === "finder") return "bot-finder";
   if (entry.bot === "grid") return "bot-grid";
+  if (entry.bot === "strategy" && entry.trade && isPriceActionTrade(entry.trade)) return "bot-priceaction";
   if (entry.bot === "strategy" && entry.trade && isHtfTrade(entry.trade)) return "bot-htf";
   if (entry.bot === "strategy" && isTestTrade(entry.trade, "strategy")) return "bot-test";
   return "bot-strategy";
@@ -2966,7 +2989,7 @@ function bindPnlDashboardControls() {
 let ratingPeriod = "all";
 let ratingTf = "5m";
 let ratingScope = "strategies"; // strategies | pairs | days | matrix
-let ratingBot = "all"; // all | llm | llm50
+let ratingBot = "all"; // all | price_action
 let ratingSide = "all"; // all | long | short
 let ratingUserFilter = ""; // "" = all accounts (admin only)
 let ratingDataCache = {}; // key: `${scope}:${user||"all"}:${tf}:${bot}:${side}`
@@ -2999,10 +3022,7 @@ function ratingCacheKey(scope = ratingScope, user = ratingUserFilter) {
 }
 
 function ratingBotLabel() {
-  if (ratingBot === "llm") return "DeepSeek";
-  if (ratingBot === "llm50") return "DeepSeek 50";
-  if (ratingBot === "cursor") return "Cursor";
-  if (ratingBot === "cursor50") return "Cursor 50";
+  if (ratingBot === "price_action") return PRICE_ACTION_STATS_LABEL;
   return "";
 }
 
@@ -3140,7 +3160,7 @@ function setRatingScope(scope) {
 }
 
 function setRatingBot(bot) {
-  const next = bot === "llm" || bot === "llm50" || bot === "cursor" || bot === "cursor50" ? bot : "all";
+  const next = bot === "price_action" ? bot : "all";
   if (ratingBot === next) return;
   ratingBot = next;
   ratingExpandedPairs.clear();
@@ -4085,6 +4105,7 @@ function strategyLabel(id) {
 function tradeStatsRowKey(trade, bot) {
   if (bot === "finder") return FINDER_STATS_LABEL;
   if (bot === "grid") return GRID_STATS_LABEL;
+  if (isPriceActionTrade(trade)) return PRICE_ACTION_STATS_KEY;
   const base = tradeSourceId(trade, bot);
   if (!trade?.enter_tag) return base;
   const raw = String(trade.enter_tag);
@@ -6214,7 +6235,7 @@ function updateMaxTradesHint() {
       ? ` · ≤${BOTS.strategy.maxPerStrategy}/стратегия`
       : "";
   const testBit = testMax > 0 ? ` · тест ≤${testMax}` : "";
-  el.textContent = `Стратегии — ${mainSlots}+${testMax}${per}${testBit} · DeepSeek`;
+  el.textContent = `Стратегии — ${mainSlots}+${testMax}${per}${testBit} · Price Action`;
 }
 
 async function setMaxTrades(bot, value) {
@@ -6666,7 +6687,7 @@ function splitStrategyTrades(trades) {
   const test = [];
   const htf = [];
   for (const t of list) {
-    if (isLlmTrade(t) || isBookTrade(t) || isCursorTrade(t) || isCursorBookTrade(t)) continue;
+    if (isRetiredTrade(t) || isPriceActionTrade(t)) continue;
     if (isHtfTrade(t)) htf.push(t);
     else if (isTestTrade(t, "strategy")) test.push(t);
     else main.push(t);
@@ -6863,7 +6884,9 @@ function renderTradesInto(el, bot, trades) {
             ? "finder-trades-summary"
             : el.id === "llm-trades"
               ? "llm-trades-summary"
-              : null;
+              : el.id === "pa-trades"
+                ? "pa-trades-summary"
+                : null;
   if (summaryId) updateTradesSectionSummary(summaryId, open);
 
   const tradeSig = tradeListSignature(bot, open);
@@ -6988,6 +7011,7 @@ function bindTradeLists() {
   bindTradeListEl($("llm50-trades"));
   bindTradeListEl($("cursor-trades"));
   bindTradeListEl($("cursor50-trades"));
+  bindTradeListEl($("pa-trades"));
 }
 
 function strategyActionTargets() {
@@ -8353,12 +8377,14 @@ function openBybitGridModal() {
   if ($("bg-tp")) $("bg-tp").value = tp;
   if ($("bg-sl")) $("bg-sl").value = sl;
   $("bybitgrid-modal")?.classList.remove("hidden");
+  $("bybitgrid-modal")?.setAttribute("aria-hidden", "false");
   $("bybitgrid-form-msg")?.classList.add("hidden");
   if (!$("bg-pair").value) $("bg-pair").value = "SOL/USDT:USDT";
 }
 
 function closeBybitGridModal() {
   $("bybitgrid-modal")?.classList.add("hidden");
+  $("bybitgrid-modal")?.setAttribute("aria-hidden", "true");
 }
 
 function collectBybitGridForm() {
@@ -8489,6 +8515,7 @@ function closeLlmTickersPanel() {
   }
   if (cursorBtn) cursorBtn.setAttribute("aria-expanded", "false");
   cursorWrap?.classList.remove("is-open");
+  closePaTickersPanel();
 }
 
 function renderLlmPairs(pairs) {
@@ -8766,6 +8793,343 @@ function bindLlmControls() {
     } catch (e) {
       if (e.message === "auth") logout();
       else showLlmMsg(formatApiError(e.message), true);
+    }
+  });
+}
+
+let paPairs = [];
+let paRenderSig = "";
+
+function closePaTickersPanel() {
+  const wrap = $("pa-tickers");
+  const panel = $("pa-tickers-panel");
+  const btn = $("pa-tickers-btn");
+  if (panel) {
+    panel.hidden = true;
+    resetStrategyTickersPanelPosition(panel);
+  }
+  if (btn) btn.setAttribute("aria-expanded", "false");
+  wrap?.classList.remove("is-open");
+}
+
+function renderPaPairs(pairs) {
+  const el = $("pa-pairs");
+  if (!el) return;
+  paPairs = Array.isArray(pairs) ? pairs.slice() : [];
+  const count = $("pa-tickers-count");
+  if (count) count.textContent = String(paPairs.length);
+  const key = paPairs.join("|");
+  if (el.dataset.pairsKey === key) return;
+  el.dataset.pairsKey = key;
+  el.innerHTML = paPairs.length
+    ? paPairs
+        .map(
+          (pair) => `
+      <li class="strategy-tickers-item">
+        <span class="strategy-tickers-pair" title="${escapeHtml(pair)}">${escapeHtml(pairBaseLabel(pair))}</span>
+        <button type="button" class="strategy-tickers-remove" data-pair="${escapeHtml(pair)}" title="Убрать ${escapeHtml(pairBaseLabel(pair))}" ${settingsReadonly ? "disabled" : ""}>×</button>
+      </li>`
+        )
+        .join("")
+    : `<li class="strategy-tickers-empty muted">Нет тикеров — бот не торгует</li>`;
+  const panel = $("pa-tickers-panel");
+  const wrap = $("pa-tickers");
+  if (panel && wrap && !panel.hidden) positionStrategyTickersPanel(wrap, panel);
+}
+
+function paDecisionText(view) {
+  if (!view) return "—";
+  const st = view.status || {};
+  const cards = Array.isArray(st.cards) ? st.cards : [];
+  const signals = Array.isArray(st.signals) ? st.signals : [];
+  const confirmed = cards.filter((c) => c.decision === "LONG" || c.decision === "SHORT");
+  if (!view.enabled) return "Бот выключен — нажмите Старт";
+  if (st.stale) {
+    const at = st.updated_at ? ` · последние данные ${fmtHistoryDateRaw(st.updated_at)}` : "";
+    return `Нет свежих данных бота${at} — проверьте systemd-юнит price_action`;
+  }
+  if (signals.length) {
+    return signals
+      .map((row) => {
+        const side = String(row.side || "").toUpperCase();
+        const score = Number(row.score);
+        const scoreText = Number.isFinite(score) ? ` · ${score}/8` : "";
+        const setup = row.setup === "liquidity_sweep" ? "Liquidity Sweep" : row.setup === "trend_pullback" ? "Trend Pullback" : "";
+        return `${pairBaseLabel(row.pair)} ${side}${scoreText}${setup ? ` · ${setup}` : ""}`;
+      })
+      .join(" · ");
+  }
+  if (st.state === "idle") return String(st.reason || "Нет активных пар");
+  if (st.state === "error") return String(st.reason || "Ошибка цикла — смотрите лог Price Action");
+  if (confirmed.length) return `Подтверждённых карточек: ${confirmed.length} · новых сигналов в этом цикле нет`;
+  if (cards.length) return `Скан ${cards.length} пар: подтверждённых входов нет`;
+  return String(st.reason || "Ожидание первого цикла");
+}
+
+function paPrice(value) {
+  if (value == null || value === "") return "—";
+  return fmtRate(value);
+}
+
+function paCardHtml(card) {
+  const decision = String(card.decision || "");
+  const sideClass = decision === "LONG" ? "is-long" : "is-short";
+  const regime = card.regime && typeof card.regime === "object" ? card.regime : {};
+  const tf = card.timeframes && typeof card.timeframes === "object" ? card.timeframes : {};
+  const parts = Array.isArray(card.score_parts) ? card.score_parts : [];
+  const reasons = Array.isArray(card.reasons) ? card.reasons.slice(0, 4) : [];
+  const notes = Array.isArray(card.user_notes) ? card.user_notes : [];
+  const score = Number(card.score);
+  const scoreText = Number.isFinite(score) ? `${score}/8` : "—";
+  const rr = Number(card.rr_net);
+  const risk = Number(card.risk_pct);
+  const spread = Number(card.spread_pct);
+  const depth = Number(card.depth_usdt);
+  const turnover = Number(card.turnover24h);
+  return `
+    <article class="pa-card ${sideClass}">
+      <div class="pa-card-head">
+        <span class="pa-pair" title="${escapeHtml(card.pair || "")}">${escapeHtml(pairBaseLabel(card.pair))}</span>
+        <span class="pa-side">${escapeHtml(decision)}</span>
+        <span class="pa-setup">${escapeHtml(card.setup_label || "—")}</span>
+        <span class="pa-score" title="Скор качества 0–8, не вероятность">${escapeHtml(scoreText)}</span>
+      </div>
+      <p class="pa-regime">${escapeHtml(regime.label || "Режим: —")} · 1h ${escapeHtml(tf["1h"] || "—")} · 15m ${escapeHtml(tf["15m"] || "—")} · 5m ${escapeHtml(tf["5m"] || "—")}</p>
+      <div class="pa-grid">
+        <div><span>Вход</span><strong>${paPrice(card.entry)}</strong></div>
+        <div><span>Стоп</span><strong class="neg">${paPrice(card.sl)}</strong></div>
+        <div><span>TP1</span><strong class="pos">${paPrice(card.tp1)}</strong></div>
+        <div><span>TP2</span><strong class="pos">${paPrice(card.tp2)}</strong></div>
+      </div>
+      <p class="pa-meta">
+        R/R ${Number.isFinite(rr) ? rr.toFixed(2) : "—"} · риск ${Number.isFinite(risk) ? `${risk.toFixed(2)}%` : "—"}
+        · спред ${Number.isFinite(spread) ? `${spread.toFixed(3)}%` : "—"}
+        · глубина $${Number.isFinite(depth) ? fmtUsdCompact(depth) : "—"}
+        · оборот $${Number.isFinite(turnover) ? fmtUsdCompact(turnover) : "—"}
+      </p>
+      ${
+        parts.length
+          ? `<div class="pa-score-parts">${parts
+              .map(
+                (p) =>
+                  `<span class="pa-score-part" title="${escapeHtml(p.label || "")}">${escapeHtml(p.label || "")} ${escapeHtml(String(p.score ?? 0))}/${escapeHtml(String(p.max ?? 0))}</span>`
+              )
+              .join("")}</div>`
+          : ""
+      }
+      ${
+        reasons.length
+          ? `<ul class="pa-reasons">${reasons.map((r) => `<li>${escapeHtml(r)}</li>`).join("")}</ul>`
+          : ""
+      }
+      ${
+        notes.length
+          ? `<p class="pa-user-notes">Не проходит ваши лимиты: ${notes.map((n) => escapeHtml(n)).join(" · ")}</p>`
+          : ""
+      }
+    </article>`;
+}
+
+function renderPaCards(view) {
+  const el = $("pa-cards");
+  if (!el) return;
+  const cards = Array.isArray(view?.status?.cards) ? view.status.cards : [];
+  const sig = JSON.stringify(cards);
+  if (sig === paRenderSig) return;
+  paRenderSig = sig;
+  const confirmed = cards
+    .filter((c) => c.decision === "LONG" || c.decision === "SHORT")
+    .sort((a, b) => Number(b.score || 0) - Number(a.score || 0) || Number(b.rr_net || 0) - Number(a.rr_net || 0));
+  const skipped = cards
+    .filter((c) => c.decision !== "LONG" && c.decision !== "SHORT")
+    .sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
+  let html = confirmed.map(paCardHtml).join("");
+  if (skipped.length) {
+    html += `
+      <details class="pa-skipped">
+        <summary>Без входа · ${skipped.length} пар</summary>
+        <ul class="pa-skipped-list">
+          ${skipped
+            .map((card) => {
+              const reason = card.reason || (Array.isArray(card.filters) ? card.filters.find((f) => !f.ok)?.reason : "") || "нет подтверждения";
+              const score = Number(card.score);
+              return `<li><strong>${escapeHtml(pairBaseLabel(card.pair))}</strong> · ${escapeHtml(card.setup_label || "—")} · ${escapeHtml(reason)} · ${Number.isFinite(score) ? score : 0}/8</li>`;
+            })
+            .join("")}
+        </ul>
+      </details>`;
+  }
+  el.innerHTML = html;
+}
+
+function paintPriceAction(view) {
+  const badge = $("pa-state");
+  const st = view?.status || {};
+  if (badge) {
+    const on = !!view?.enabled;
+    if (on && st.stale) {
+      badge.textContent = "STALE";
+      badge.className = "badge stale";
+    } else {
+      badge.textContent = on ? "RUNNING" : "STOPPED";
+      badge.className = on ? "badge running" : "badge stopped";
+    }
+  }
+  const active = document.activeElement;
+  const settings = view?.settings || {};
+  const fields = [
+    ["pa-stake", settings.stake_amount ?? 5],
+    ["pa-leverage", settings.leverage ?? 3],
+    ["pa-max", settings.max_open_trades ?? 1],
+    ["pa-min-score", settings.min_score ?? 6],
+    ["pa-min-rr", settings.min_rr ?? 1.5],
+    ["pa-max-spread", settings.max_spread_pct ?? 0.08],
+    ["pa-min-depth", settings.min_depth_usdt ?? 20000],
+  ];
+  for (const [id, value] of fields) {
+    const el = $(id);
+    if (el && active !== el) el.value = String(value);
+    if (el) el.disabled = !!settingsReadonly;
+  }
+  for (const id of ["pa-save", "pa-pair-add", "pa-pair-input"]) {
+    const el = $(id);
+    if (el) el.disabled = !!settingsReadonly;
+  }
+  const toggle = $("pa-toggle");
+  if (toggle) {
+    toggle.textContent = view?.enabled ? "Стоп" : "Старт";
+    toggle.classList.toggle("danger", !!view?.enabled);
+    toggle.classList.toggle("primary", !view?.enabled);
+    toggle.disabled = !!settingsReadonly;
+  }
+  const pairs = Array.isArray(settings.pairs) ? settings.pairs : view?.pairs || [];
+  renderPaPairs(pairs);
+  const subtitle = $("pa-subtitle");
+  if (subtitle) {
+    subtitle.textContent = `Trend Pullback · Liquidity Sweep · ${pairs.length} пар · скор ≥ ${settings.min_score ?? 6}/8 · R/R ≥ ${settings.min_rr ?? 1.5} · стейк ${settings.stake_amount ?? 5} USDT · плечо ${settings.leverage ?? 3}x`;
+  }
+  const decision = $("pa-decision");
+  if (decision) decision.textContent = paDecisionText(view);
+  renderPaCards(view);
+  renderTradesInto($("pa-trades"), "strategy", view?.trades || []);
+}
+
+async function refreshPriceAction() {
+  if (!userMayUseBlock("price_action")) return;
+  const view = await pairConfigApi("/price-action");
+  paintPriceAction(view);
+}
+
+async function savePriceActionSettings(extra = {}) {
+  const body = {
+    stake_amount: Number($("pa-stake")?.value),
+    leverage: Number($("pa-leverage")?.value),
+    max_open_trades: Number($("pa-max")?.value),
+    min_score: Number($("pa-min-score")?.value),
+    min_rr: Number($("pa-min-rr")?.value),
+    max_spread_pct: Number($("pa-max-spread")?.value),
+    min_depth_usdt: Number($("pa-min-depth")?.value),
+    ...extra,
+  };
+  const view = await pairConfigApi("/price-action", "POST", body);
+  paintPriceAction(view);
+  return view;
+}
+
+function showPaMsg(text, isError = false) {
+  const el = $("pa-msg");
+  if (!el) return;
+  el.textContent = text;
+  el.className = `pair-msg ${isError ? "error" : "ok"}`;
+  el.classList.remove("hidden");
+}
+
+function bindPriceActionControls() {
+  $("pa-save")?.addEventListener("click", async () => {
+    const btn = $("pa-save");
+    if (!btn || btn.disabled) return;
+    btn.disabled = true;
+    try {
+      await savePriceActionSettings();
+      showPaMsg("Сохранено");
+    } catch (e) {
+      if (e.message === "auth") logout();
+      else showPaMsg(formatApiError(e.message), true);
+    } finally {
+      btn.disabled = !!settingsReadonly;
+    }
+  });
+  $("pa-toggle")?.addEventListener("click", async () => {
+    const btn = $("pa-toggle");
+    if (!btn || btn.disabled) return;
+    const enable = btn.textContent.trim() !== "Стоп";
+    btn.disabled = true;
+    try {
+      await savePriceActionSettings({ enabled: enable });
+      showPaMsg(enable ? "Бот запущен" : "Новые входы остановлены");
+    } catch (e) {
+      if (e.message === "auth") logout();
+      else showPaMsg(formatApiError(e.message), true);
+    } finally {
+      btn.disabled = !!settingsReadonly;
+    }
+  });
+  $("pa-tickers-btn")?.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    const wrap = $("pa-tickers");
+    const panel = $("pa-tickers-panel");
+    const btn = $("pa-tickers-btn");
+    if (!wrap || !panel || !btn) return;
+    const willOpen = panel.hidden;
+    closeAllStrategyTickersPanels();
+    closeLlmTickersPanel();
+    closeAllMlConfidenceMenus();
+    if (!willOpen) {
+      closePaTickersPanel();
+      return;
+    }
+    panel.hidden = false;
+    btn.setAttribute("aria-expanded", "true");
+    wrap.classList.add("is-open");
+    requestAnimationFrame(() => {
+      positionStrategyTickersPanel(wrap, panel);
+      const input = $("pa-pair-input");
+      if (input && !input.disabled) input.focus();
+    });
+  });
+  $("pa-pair-form")?.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const input = $("pa-pair-input");
+    const raw = String(input?.value || "").trim();
+    if (!raw || settingsReadonly) return;
+    const btn = $("pa-pair-add");
+    if (btn) btn.disabled = true;
+    try {
+      await savePriceActionSettings({ pairs: [...paPairs, raw] });
+      if (input) input.value = "";
+      showPaMsg("Пара добавлена");
+    } catch (e) {
+      if (e.message === "auth") logout();
+      else showPaMsg(formatApiError(e.message), true);
+    } finally {
+      if (btn) btn.disabled = !!settingsReadonly;
+    }
+  });
+  $("pa-pairs")?.addEventListener("click", async (ev) => {
+    const btn = ev.target.closest(".strategy-tickers-remove");
+    if (!btn || btn.disabled) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const pair = btn.getAttribute("data-pair");
+    if (!pair) return;
+    btn.disabled = true;
+    try {
+      await savePriceActionSettings({ pairs: paPairs.filter((item) => item !== pair) });
+      showPaMsg(`${pairBaseLabel(pair)} убрана`);
+    } catch (e) {
+      if (e.message === "auth") logout();
+      else showPaMsg(formatApiError(e.message), true);
     }
   });
 }
@@ -9156,16 +9520,7 @@ async function refreshPanelHeavy() {
       refreshServerStats().catch(() => {}),
       refreshReconcileBanner().catch(() => {}),
       loadStrategyScanInfo().catch(() => {}),
-      refreshLlm50().catch((e) => {
-        if (e.message === "auth") throw e;
-      }),
-      refreshLlmBot().catch((e) => {
-        if (e.message === "auth") logout();
-      }),
-      refreshCursor50().catch((e) => {
-        if (e.message === "auth") throw e;
-      }),
-      refreshCursorBot().catch((e) => {
+      refreshPriceAction().catch((e) => {
         if (e.message === "auth") logout();
       }),
     ];
@@ -10770,6 +11125,7 @@ bindTradeLists();
 bindLlmControls();
 bindLlm50Controls();
 bindCursorControls();
+bindPriceActionControls();
 bindStrategyRunScanButton();
 bindPanelStatsButtons();
 bindStatsPeriodButtons();

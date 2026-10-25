@@ -19,7 +19,10 @@ DEFAULT_FLAGS = {
     "llm50": False,
     "cursor": False,
     "cursor50": False,
+    "price_action": False,
 }
+
+RETIRED_BOTS = frozenset({"llm", "llm50", "cursor", "cursor50"})
 
 _ACTIVE_CACHE_LOCK = threading.Lock()
 _ACTIVE_CACHE: dict[str, Any] = {}
@@ -46,6 +49,8 @@ def load_trading_flags(user_id: str) -> dict[str, bool]:
     for key in DEFAULT_FLAGS:
         if key in data:
             out[key] = bool(data[key])
+    for bot in RETIRED_BOTS:
+        out[bot] = False
     return out
 
 
@@ -56,6 +61,8 @@ def save_trading_flags(user_id: str, flags: dict[str, Any]) -> dict[str, bool]:
     for key in DEFAULT_FLAGS:
         if key in flags:
             current[key] = bool(flags[key])
+    for bot in RETIRED_BOTS:
+        current[bot] = False
     path.write_text(json.dumps(current, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     try:
         os.chmod(path, 0o600)
@@ -79,11 +86,15 @@ def save_trading_flags(user_id: str, flags: dict[str, Any]) -> dict[str, bool]:
 
 
 def is_trading_enabled(user_id: str, bot: str = "strategy") -> bool:
+    if bot in RETIRED_BOTS:
+        return False
     return bool(load_trading_flags(user_id).get(bot, False))
 
 
 def list_active_traders(bot: str = "strategy") -> list[str]:
     """Users with secrets + trading flag for the given bot."""
+    if bot in RETIRED_BOTS:
+        return []
     now = time.monotonic()
     with _ACTIVE_CACHE_LOCK:
         hit = _ACTIVE_CACHE.get(bot)

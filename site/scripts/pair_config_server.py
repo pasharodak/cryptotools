@@ -1101,12 +1101,23 @@ def _trade_is_cursor_book(enter_tag: Any, strategy: Any) -> bool:
     return tag.startswith("Cursor50") or strat == "Cursor50"
 
 
+def _trade_is_price_action(enter_tag: Any, strategy: Any) -> bool:
+    tag = str(enter_tag or "")
+    strat = str(strategy or "")
+    return (
+        tag.startswith("PaTrendPullback")
+        or tag.startswith("PaLiquiditySweep")
+        or strat in ("PaTrendPullback", "PaLiquiditySweep")
+    )
+
+
 def _trade_is_model_bot(enter_tag: Any, strategy: Any) -> bool:
     return (
         _trade_is_llm(enter_tag, strategy)
         or _trade_is_book(enter_tag, strategy)
         or _trade_is_cursor(enter_tag, strategy)
         or _trade_is_cursor_book(enter_tag, strategy)
+        or _trade_is_price_action(enter_tag, strategy)
     )
 
 
@@ -1448,8 +1459,9 @@ def load_open_trades_from_db(bot: str, *, llm_mode: str = "exclude") -> list[dic
             is_book = _trade_is_book(r["enter_tag"], r["strategy"])
             is_cursor = _trade_is_cursor(r["enter_tag"], r["strategy"])
             is_cursor_book = _trade_is_cursor_book(r["enter_tag"], r["strategy"])
+            is_price_action = _trade_is_price_action(r["enter_tag"], r["strategy"])
             if bot == "strategy" and llm_mode == "exclude" and (
-                is_llm or is_book or is_cursor or is_cursor_book
+                is_llm or is_book or is_cursor or is_cursor_book or is_price_action
             ):
                 continue
             if bot == "strategy" and llm_mode == "only" and not is_llm:
@@ -1459,6 +1471,8 @@ def load_open_trades_from_db(bot: str, *, llm_mode: str = "exclude") -> list[dic
             if bot == "strategy" and llm_mode == "cursor" and not is_cursor:
                 continue
             if bot == "strategy" and llm_mode == "cursor50" and not is_cursor_book:
+                continue
+            if bot == "strategy" and llm_mode == "price_action" and not is_price_action:
                 continue
 
             out.append(
@@ -2108,6 +2122,8 @@ def _normalize_rating_bot(bot: str | None) -> str:
         return "cursor"
     if raw in {"cursor50"}:
         return "cursor50"
+    if raw in {"price_action", "pa", "priceaction"}:
+        return "price_action"
     return "all"
 
 
@@ -2121,14 +2137,22 @@ def _rating_trade_bot(enter_tag: str | None) -> str:
         return "cursor50"
     if base == "CursorLlmStrategy" or base.startswith("CursorLlmStrategy"):
         return "cursor"
+    if base.startswith("PaTrendPullback") or base.startswith("PaLiquiditySweep"):
+        return "price_action"
     return ""
+
+
+_RETIRED_RATING_BOTS = frozenset({"llm", "llm50", "cursor", "cursor50"})
 
 
 def _rating_include_bot(enter_tag: str | None, bot_filter: str) -> bool:
     wanted = _normalize_rating_bot(bot_filter)
+    if wanted in _RETIRED_RATING_BOTS:
+        return False
+    bot = _rating_trade_bot(enter_tag)
     if wanted == "all":
-        return True
-    return _rating_trade_bot(enter_tag) == wanted
+        return bot not in _RETIRED_RATING_BOTS
+    return bot == wanted
 
 
 def _normalize_rating_side(side: str | None) -> str:
@@ -2347,6 +2371,8 @@ def _strategy_label_map() -> dict[str, str]:
     out.setdefault("Deepseek50", "DeepSeek 50")
     out.setdefault("CursorLlmStrategy", "Cursor")
     out.setdefault("Cursor50", "Cursor 50")
+    out.setdefault("PaTrendPullback", "Price Action · Trend Pullback")
+    out.setdefault("PaLiquiditySweep", "Price Action · Liquidity Sweep")
     return out
 
 
@@ -5947,6 +5973,10 @@ LOG_SOURCES: dict[str, tuple[str, tuple[Path, ...]]] = {
         "Исполнитель",
         (BASE / "user_data" / "logs" / "trade-executor.log",),
     ),
+    "price_action": (
+        "Price Action",
+        (BASE / "user_data" / "logs" / "price_action.log",),
+    ),
     "llm": (
         "DeepSeek",
         (BASE / "user_data" / "logs" / "deepseek.log",),
@@ -6000,8 +6030,10 @@ LOG_SOURCES: dict[str, tuple[str, tuple[Path, ...]]] = {
 }
 
 
-# Finder, Grid and the Grid scanner are retired: keep the files, omit them from the tab.
-RETIRED_LOG_BOTS = frozenset({"finder", "grid", "scanner", "strategy_scanner"})
+# Retired bots keep their files on disk but are hidden from the tabs and the "all" feed.
+RETIRED_LOG_BOTS = frozenset(
+    {"finder", "grid", "scanner", "strategy_scanner", "llm", "llm50", "cursor", "cursor50"}
+)
 
 
 def _resolve_log_bots(requested: str) -> list[str]:
@@ -6820,6 +6852,125 @@ def _cursor50_bot_update(user_id: str, data: dict[str, Any]) -> dict[str, Any]:
     if "enabled" in data:
         user_trading.save_trading_flags(user_id, {"cursor50": bool(data.get("enabled"))})
     return _cursor50_bot_view(user_id)
+
+
+def _price_action_view(user_id: str) -> dict[str, Any]:
+    import price_action_settings
+    import user_trading
+
+    settings = price_action_settings.load(user_id)
+    pairs = set(settings["pairs"])
+    status: dict[str, Any] = {
+        "state": "idle",
+        "reason": "бот ещё не запускался",
+        "cards": [],
+        "signals": [],
+        "errors": [],
+    }
+    status_path = BASE / "user_data" / "price_action_status.json"
+    updated_at = None
+    if status_path.is_file():
+        try:
+            raw = json.loads(status_path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                status = {**status, **raw}
+            updated_at = status_path.stat().st_mtime
+        except (OSError, json.JSONDecodeError):
+            pass
+    cards: list[dict[str, Any]] = []
+    for card in status.get("cards") or []:
+        if not isinstance(card, dict) or str(card.get("pair") or "") not in pairs:
+            continue
+        item = dict(card)
+        notes: list[str] = []
+        try:
+            score = int(card.get("score") or 0)
+        except (TypeError, ValueError):
+            score = 0
+        if score < int(settings["min_score"]):
+            notes.append(f"скор {score}/8 < {settings['min_score']}/8")
+        try:
+            rr_net = float(card.get("rr_net") or 0)
+        except (TypeError, ValueError):
+            rr_net = 0.0
+        if rr_net < float(settings["min_rr"]):
+            notes.append(f"R/R {rr_net:.2f} < {settings['min_rr']:.2f}")
+        try:
+            spread = float(card.get("spread_pct") or 0)
+        except (TypeError, ValueError):
+            spread = 0.0
+        if spread > float(settings["max_spread_pct"]):
+            notes.append(f"спред {spread:.3f}% > {settings['max_spread_pct']:.3f}%")
+        try:
+            risk = float(card.get("risk_pct") or 0)
+        except (TypeError, ValueError):
+            risk = 0.0
+        if risk > float(settings["max_risk_pct"]):
+            notes.append(f"риск {risk:.2f}% > {settings['max_risk_pct']:.2f}%")
+        item["user_takeable"] = not notes
+        item["user_notes"] = notes
+        cards.append(item)
+    signals = [
+        row
+        for row in (status.get("signals") or [])
+        if isinstance(row, dict) and str(row.get("pair") or "") in pairs
+    ]
+    errors = [
+        row
+        for row in (status.get("errors") or [])
+        if isinstance(row, dict) and str(row.get("pair") or "") in pairs
+    ]
+    traders = status.get("traders") if isinstance(status.get("traders"), list) else []
+    now = time.time()
+    return {
+        "enabled": user_trading.is_trading_enabled(user_id, "price_action"),
+        "settings": settings,
+        "pairs": settings["pairs"],
+        "status": {
+            "state": status.get("state") or "idle",
+            "reason": status.get("reason") or "",
+            "cards": cards,
+            "signals": signals,
+            "errors": errors,
+            "updated_at": status.get("updated_at"),
+            "stale": bool(updated_at and now - updated_at > 180),
+            "preview": bool(status.get("preview")),
+            "trader_count": len(traders),
+        },
+        "trades": load_open_trades_from_db("strategy", llm_mode="price_action"),
+    }
+
+
+def _price_action_update(user_id: str, data: dict[str, Any]) -> dict[str, Any]:
+    import price_action_settings
+    import user_trading
+
+    patch = {
+        key: data[key]
+        for key in (
+            "stake_amount",
+            "leverage",
+            "max_open_trades",
+            "min_score",
+            "min_rr",
+            "max_spread_pct",
+            "min_depth_usdt",
+            "min_turnover_usdt",
+            "max_risk_pct",
+            "funding_intervals",
+            "pairs",
+        )
+        if key in data
+    }
+    saved = price_action_settings.save(user_id, patch) if patch else price_action_settings.load(user_id)
+    if "enabled" in data:
+        enabled = bool(data.get("enabled"))
+        if enabled and int(saved["max_open_trades"]) <= 0:
+            raise ValueError("макс. открытых = 0 — поставьте хотя бы 1")
+        if enabled and not saved["pairs"]:
+            raise ValueError("добавьте хотя бы одну пару")
+        user_trading.save_trading_flags(user_id, {"price_action": enabled})
+    return _price_action_view(user_id)
 
 
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
@@ -7661,29 +7812,14 @@ class Handler(BaseHTTPRequestHandler):
                     flags[b] = bool(d)
             self._json(200, {"user_id": uid, "flags": flags})
             return
-        if path == "/llm":
-            if not tm.user_may_use_block(self.user, "llm"):
-                self._json(403, {"error": "block not allowed"})
-                return
-            self._json(200, _llm_bot_view(self._control_uid()))
+        if path in {"/llm", "/llm50", "/cursor", "/cursor50"}:
+            self._json(410, {"error": "bot retired"})
             return
-        if path == "/llm50":
-            if not tm.user_may_use_block(self.user, "llm"):
+        if path == "/price-action":
+            if not tm.user_may_use_block(self.user, "price_action"):
                 self._json(403, {"error": "block not allowed"})
                 return
-            self._json(200, _llm50_bot_view(self._control_uid()))
-            return
-        if path == "/cursor":
-            if not tm.user_may_use_block(self.user, "llm"):
-                self._json(403, {"error": "block not allowed"})
-                return
-            self._json(200, _cursor_bot_view(self._control_uid()))
-            return
-        if path == "/cursor50":
-            if not tm.user_may_use_block(self.user, "llm"):
-                self._json(403, {"error": "block not allowed"})
-                return
-            self._json(200, _cursor50_bot_view(self._control_uid()))
+            self._json(200, _price_action_view(self._control_uid()))
             return
         if path == "/telegram":
             import telegram_links as tg_links
@@ -7939,47 +8075,20 @@ class Handler(BaseHTTPRequestHandler):
 
     def _handle_post(self, path: str, parsed) -> None:
         data = self._read_json()
-        if path == "/llm":
-            if not tm.user_may_use_block(self.user, "llm"):
-                self._json(403, {"error": "block not allowed"})
-                return
-            if not self._require_writable():
-                return
-            try:
-                self._json(200, _llm_bot_update(self._control_uid(), data if isinstance(data, dict) else {}))
-            except (TypeError, ValueError) as exc:
-                self._json(400, {"error": str(exc)})
+        if path in {"/llm", "/llm50", "/cursor", "/cursor50"}:
+            self._json(410, {"error": "bot retired"})
             return
-        if path == "/llm50":
-            if not tm.user_may_use_block(self.user, "llm"):
+        if path == "/price-action":
+            if not tm.user_may_use_block(self.user, "price_action"):
                 self._json(403, {"error": "block not allowed"})
                 return
             if not self._require_writable():
                 return
             try:
-                self._json(200, _llm50_bot_update(self._control_uid(), data if isinstance(data, dict) else {}))
-            except (TypeError, ValueError) as exc:
-                self._json(400, {"error": str(exc)})
-            return
-        if path == "/cursor":
-            if not tm.user_may_use_block(self.user, "llm"):
-                self._json(403, {"error": "block not allowed"})
-                return
-            if not self._require_writable():
-                return
-            try:
-                self._json(200, _cursor_bot_update(self._control_uid(), data if isinstance(data, dict) else {}))
-            except (TypeError, ValueError) as exc:
-                self._json(400, {"error": str(exc)})
-            return
-        if path == "/cursor50":
-            if not tm.user_may_use_block(self.user, "llm"):
-                self._json(403, {"error": "block not allowed"})
-                return
-            if not self._require_writable():
-                return
-            try:
-                self._json(200, _cursor50_bot_update(self._control_uid(), data if isinstance(data, dict) else {}))
+                self._json(
+                    200,
+                    _price_action_update(self._control_uid(), data if isinstance(data, dict) else {}),
+                )
             except (TypeError, ValueError) as exc:
                 self._json(400, {"error": str(exc)})
             return

@@ -404,16 +404,21 @@ def account_switch_info(user: Optional[dict[str, Any]]) -> dict[str, Any]:
 UI_BLOCKS: list[dict[str, str]] = [
     {"id": "test_strategies", "name": "Тестовые стратегии"},
     {"id": "strategy", "name": "Стратегии"},
-    {"id": "llm", "name": "DeepSeek"},
+    {"id": "price_action", "name": "Price Action"},
+    {"id": "llm", "name": "DeepSeek (снят)"},
     {"id": "history", "name": "История сделок"},
     {"id": "dashboard", "name": "Дашборд PnL"},
     {"id": "rating", "name": "Рейтинг"},
 ]
 UI_BLOCK_IDS: frozenset[str] = frozenset(b["id"] for b in UI_BLOCKS)
+# Hidden from permission editor/defaults; kept in UI_BLOCK_IDS so saved allowlists stay valid.
+RETIRED_BLOCK_IDS: frozenset[str] = frozenset({"llm"})
 
-# Live users: all blocks except test strategies panel.
+# Live users: all active blocks except test strategies panel.
 LIVE_DEFAULT_ALLOWED_BLOCKS: list[str] = [
-    b["id"] for b in UI_BLOCKS if b["id"] != "test_strategies"
+    b["id"]
+    for b in UI_BLOCKS
+    if b["id"] != "test_strategies" and b["id"] not in RETIRED_BLOCK_IDS
 ]
 # Demo users: view house (admin) trades — strategy/finder/grid + history/rating.
 # Settings/TG are read-only in UI; no own test-trading panel required.
@@ -423,7 +428,7 @@ DEMO_DEFAULT_ALLOWED_BLOCKS: list[str] = [
     if b["id"]
     in {
         "strategy",
-        "llm",
+        "price_action",
         "history",
         "dashboard",
         "rating",
@@ -555,7 +560,10 @@ def permission_catalog(strategy_rows: list[dict[str, Any]]) -> dict[str, Any]:
         for s in strategy_rows
         if isinstance(s, dict) and s.get("id")
     ]
-    return {"blocks": list(UI_BLOCKS), "strategies": strategies}
+    return {
+        "blocks": [b for b in UI_BLOCKS if b["id"] not in RETIRED_BLOCK_IDS],
+        "strategies": strategies,
+    }
 
 
 def _allocate_ports(users: list[dict[str, Any]]) -> dict[str, int]:
