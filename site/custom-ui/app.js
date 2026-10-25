@@ -2130,11 +2130,11 @@ function csvEscapeCell(value) {
 function downloadHistoryCsv(entries) {
   const cols = HISTORY_EXPORT_COLUMNS.filter((c) => historyExportColumns[c.id]);
   if (!cols.length) {
-    alert("Выберите хотя бы одну колонку для экспорта");
+    showToast("Выберите хотя бы одну колонку для экспорта", "warn");
     return;
   }
   if (!entries.length) {
-    alert("Нет данных для экспорта с текущими фильтрами");
+    showToast("Нет данных для экспорта с текущими фильтрами", "warn");
     return;
   }
   const header = cols.map((c) => csvEscapeCell(c.label));
@@ -4472,7 +4472,7 @@ function renderDualHedgeControl() {
           x.checked = !next;
         });
         if (e.message === "auth") logout();
-        else alert(formatApiError(e.message));
+        else showToast(formatApiError(e.message), "error");
       } finally {
         document.querySelectorAll(".strategy-dual-hedge-cb").forEach((x) => {
           x.disabled = false;
@@ -4985,7 +4985,7 @@ function renderBulkEnableControlsFor(ids, { group = "main", label = "Страт�
           if (isSettingsOpen()) showPairMsg(msg);
         } catch (e) {
           if (e.message === "auth") logout();
-          else alert(formatApiError(e.message));
+          else showToast(formatApiError(e.message), "error");
         } finally {
           onBtn.disabled = false;
           if (offBtn) offBtn.disabled = false;
@@ -5015,7 +5015,7 @@ function renderBulkEnableControlsFor(ids, { group = "main", label = "Страт�
           if (isSettingsOpen()) showPairMsg(msg);
         } catch (e) {
           if (e.message === "auth") logout();
-          else alert(formatApiError(e.message));
+          else showToast(formatApiError(e.message), "error");
         } finally {
           onBtn.disabled = false;
           offBtn.disabled = false;
@@ -5131,7 +5131,7 @@ function renderBulkMlConfidenceControlsFor(ids, { group = "main" } = {}) {
           if (isSettingsOpen()) showPairMsg(msg);
         } catch (e) {
           if (e.message === "auth") logout();
-          else alert(formatApiError(e.message));
+          else showToast(formatApiError(e.message), "error");
         } finally {
           if (btn) btn.disabled = false;
           if (resetBtn) resetBtn.disabled = false;
@@ -5151,7 +5151,7 @@ function renderBulkMlConfidenceControlsFor(ids, { group = "main" } = {}) {
           if (isSettingsOpen()) showPairMsg(msg);
         } catch (e) {
           if (e.message === "auth") logout();
-          else alert(formatApiError(e.message));
+          else showToast(formatApiError(e.message), "error");
         } finally {
           if (btn) btn.disabled = false;
           resetBtn.disabled = false;
@@ -5689,7 +5689,7 @@ function renderStrategyTogglesInto(container, { testGroup = false, group = "" } 
         if (isSettingsOpen()) showPairMsg(msg);
       } catch (e) {
         if (e.message === "auth") logout();
-        else alert(formatApiError(e.message));
+        else showToast(formatApiError(e.message), "error");
       } finally {
         btn.disabled = false;
       }
@@ -5721,7 +5721,7 @@ function renderStrategyTogglesInto(container, { testGroup = false, group = "" } 
         if (isSettingsOpen()) showPairMsg(msg);
       } catch (e) {
         if (e.message === "auth") logout();
-        else alert(formatApiError(e.message));
+        else showToast(formatApiError(e.message), "error");
       } finally {
         if (submitBtn) submitBtn.disabled = false;
         if (input) input.disabled = false;
@@ -5753,7 +5753,7 @@ function renderStrategyTogglesInto(container, { testGroup = false, group = "" } 
           el.checked = !next;
         });
         if (e.message === "auth") logout();
-        else alert(formatApiError(e.message));
+        else showToast(formatApiError(e.message), "error");
       } finally {
         document.querySelectorAll(`input[data-strategy="${id}"]`).forEach((el) => {
           el.disabled = false;
@@ -5785,7 +5785,7 @@ function renderStrategyTogglesInto(container, { testGroup = false, group = "" } 
           el.checked = !next;
         });
         if (e.message === "auth") logout();
-        else alert(formatApiError(e.message));
+        else showToast(formatApiError(e.message), "error");
       } finally {
         document.querySelectorAll(`input[data-strategy-invert="${id}"]`).forEach((el) => {
           el.disabled = false;
@@ -5817,7 +5817,7 @@ function renderStrategyTogglesInto(container, { testGroup = false, group = "" } 
           el.checked = !next;
         });
         if (e.message === "auth") logout();
-        else alert(formatApiError(e.message));
+        else showToast(formatApiError(e.message), "error");
       } finally {
         document.querySelectorAll(`input[data-strategy-trained-risk="${id}"]`).forEach((el) => {
           el.disabled = false;
@@ -5876,7 +5876,7 @@ function renderStrategyTogglesInto(container, { testGroup = false, group = "" } 
       } catch (e) {
         entrySideStrategies[id] = prev;
         if (e.message === "auth") logout();
-        else alert(formatApiError(e.message));
+        else showToast(formatApiError(e.message), "error");
       } finally {
         document.querySelectorAll(`[data-strategy-entry-side-btn="${id}"]`).forEach((el) => {
           el.disabled = false;
@@ -5935,7 +5935,7 @@ function renderStrategyTogglesInto(container, { testGroup = false, group = "" } 
       } catch (e) {
         mlConfidenceStrategies[id] = prev;
         if (e.message === "auth") logout();
-        else alert(formatApiError(e.message));
+        else showToast(formatApiError(e.message), "error");
       }       finally {
         document.querySelectorAll(`[data-strategy-ml-confidence-btn="${id}"]`).forEach((el) => {
           el.disabled = false;
@@ -5993,7 +5993,7 @@ function renderStrategyTogglesInto(container, { testGroup = false, group = "" } 
         if (prev) htfSltp[id] = prev;
         else delete htfSltp[id];
         if (e.message === "auth") logout();
-        else alert(formatApiError(e.message));
+        else showToast(formatApiError(e.message), "error");
       }
     });
   });
@@ -6126,11 +6126,11 @@ function bindTestStrategyRiskInput(container) {
     const sl = Number(slInput.value);
     const tp = Number(tpInput.value);
     if (!Number.isFinite(sl) || sl < TEST_SL_MIN || sl > TEST_SL_MAX) {
-      alert(`Стоп-лосс: от ${TEST_SL_MIN}% до ${TEST_SL_MAX}%`);
+      showToast(`Стоп-лосс: от ${TEST_SL_MIN}% до ${TEST_SL_MAX}%`, "warn");
       return;
     }
     if (!Number.isFinite(tp) || tp < TEST_TP_MIN || tp > TEST_TP_MAX) {
-      alert(`Тейк-профит: от ${TEST_TP_MIN}% до ${TEST_TP_MAX}%`);
+      showToast(`Тейк-профит: от ${TEST_TP_MIN}% до ${TEST_TP_MAX}%`, "warn");
       return;
     }
     btn.disabled = true;
@@ -6139,7 +6139,7 @@ function bindTestStrategyRiskInput(container) {
       await refreshBotSafe("strategy");
     } catch (e) {
       if (e.message === "auth") logout();
-      else alert(formatApiError(e.message));
+      else showToast(formatApiError(e.message), "error");
     } finally {
       btn.disabled = false;
     }
@@ -6165,11 +6165,11 @@ function bindStrategyRiskInput(container) {
     const sl = Number(slInput.value);
     const tp = Number(tpInput.value);
     if (!Number.isFinite(sl) || sl < STRATEGY_SL_MIN || sl > STRATEGY_SL_MAX) {
-      alert(`Стоп-лосс: от ${STRATEGY_SL_MIN}% до ${STRATEGY_SL_MAX}%`);
+      showToast(`Стоп-лосс: от ${STRATEGY_SL_MIN}% до ${STRATEGY_SL_MAX}%`, "warn");
       return;
     }
     if (!Number.isFinite(tp) || tp < STRATEGY_TP_MIN || tp > STRATEGY_TP_MAX) {
-      alert(`Тейк-профит: от ${STRATEGY_TP_MIN}% до ${STRATEGY_TP_MAX}%`);
+      showToast(`Тейк-профит: от ${STRATEGY_TP_MIN}% до ${STRATEGY_TP_MAX}%`, "warn");
       return;
     }
     btn.disabled = true;
@@ -6181,7 +6181,7 @@ function bindStrategyRiskInput(container) {
       }
     } catch (e) {
       if (e.message === "auth") logout();
-      else alert(formatApiError(e.message));
+      else showToast(formatApiError(e.message), "error");
     } finally {
       btn.disabled = false;
     }
@@ -6316,12 +6316,12 @@ function bindNumericSetting(container, { validate, onSave }) {
   const save = async () => {
     const next = Number(input.value);
     if (!Number.isFinite(next)) {
-      alert("Введите число");
+      showToast("Введите число", "warn");
       return;
     }
     const validation = validate ? validate(next) : true;
     if (validation !== true) {
-      alert(typeof validation === "string" ? validation : "Некорректное значение");
+      showToast(typeof validation === "string" ? validation : "Некорректное значение", "warn");
       return;
     }
     btn.disabled = true;
@@ -6335,7 +6335,7 @@ function bindNumericSetting(container, { validate, onSave }) {
       refreshAll().catch(() => {});
     } catch (e) {
       if (e.message === "auth") logout();
-      else alert(formatApiError(e.message));
+      else showToast(formatApiError(e.message), "error");
     } finally {
       btn.disabled = false;
       btn.textContent = prevLabel || "Сохранить";
@@ -6965,12 +6965,12 @@ function bindTradeListEl(el) {
     try {
       const result = await closeTrade(tradeBot, tradeId);
       if (result?.result === "deleted") {
-        alert(`Сделка #${tradeId} удалена из базы бота (на бирже уже была закрыта).`);
+        showToast(`Сделка #${tradeId} удалена из базы бота (на бирже уже была закрыта).`, "ok");
       }
       await refreshAll();
     } catch (e) {
       if (e.message === "auth") logout();
-      else alert(formatApiError(e.message));
+      else showToast(formatApiError(e.message), "error");
     } finally {
       btn.disabled = false;
       btn.textContent = label;
@@ -7049,7 +7049,7 @@ function renderActions(bot, running) {
         await refreshAll();
       } catch (e) {
         if (e.message === "auth") logout();
-        else alert(formatApiError(e.message));
+        else showToast(formatApiError(e.message), "error");
       }
     });
     return;
@@ -7077,7 +7077,7 @@ function renderActions(bot, running) {
     try {
       if (act === "start") {
         if (Number(BOTS[bot].maxTrades) <= 0) {
-          alert("Макс. сделок = 0. Установите 1 или больше в Настройках.");
+          showToast("Макс. сделок = 0. Установите 1 или больше в Настройках.", "warn");
           return;
         }
         btn.disabled = true;
@@ -7114,7 +7114,7 @@ function renderActions(bot, running) {
       if (bot === "strategy") await loadStrategyScanInfo();
     } catch (e) {
       if (e.message === "auth") logout();
-      else alert(formatApiError(e.message));
+      else showToast(formatApiError(e.message), "error");
       try {
         const all = await pairConfigApi("/bots");
         if (all?.bots) applyBotControlSnapshot(all.bots);
@@ -7168,7 +7168,7 @@ const STRATEGY_SCAN_SHORT = {
 
 async function runStrategyScanAction(btn) {
   if (!isAdminUser() || isImpersonating) {
-    alert("Скан стратегий доступен только админу.");
+    showToast("Скан стратегий доступен только админу.", "warn");
     return;
   }
   if (
@@ -7217,7 +7217,7 @@ async function runStrategyScanAction(btn) {
     await refreshAll();
   } catch (e) {
     if (e.message === "auth") logout();
-    else alert(formatApiError(e.message));
+    else showToast(formatApiError(e.message), "error");
     await loadStrategyScanInfo();
   } finally {
     for (const b of allBtns) {
@@ -7895,15 +7895,16 @@ async function refreshReconcileBanner() {
         const exited = fixed.filter((x) => x.action === "forceexit").length;
         const deduped = fixed.filter((x) => x.action === "archive_duplicate").length;
         const after = result.after || {};
-        alert(
+        showToast(
           `Синхронизация: закрыто через биржу ${exited}, призраков в историю ${archived}, ` +
             `дублей убрано ${deduped}. ` +
             `Сейчас: боты ${after.ft_open_count ?? "—"} / биржа ${after.bybit_position_count ?? "—"}. ` +
-            (result.ok ? "Расхождений больше нет." : "Часть расхождений осталась — обновите страницу.")
+            (result.ok ? "Расхождений больше нет." : "Часть расхождений осталась — обновите страницу."),
+          result.ok ? "ok" : "warn"
         );
         await refreshAll();
       } catch (e) {
-        alert(formatApiError(e.message));
+        showToast(formatApiError(e.message), "error");
       } finally {
         btn.disabled = false;
         btn.textContent = "Синхронизировать";
@@ -8056,15 +8057,15 @@ function renderBybitGridSettings(data) {
     const tpVal = Number($("bg-cfg-tp")?.value || 0);
     const slVal = Number($("bg-cfg-sl")?.value || 0);
     if (maxBotsVal < 0 || maxBotsVal > BYBIT_GRID_MAX_LIMIT) {
-      alert(`Макс. активных ботов — от 0 до ${BYBIT_GRID_MAX_LIMIT} (0 = не создавать новые)`);
+      showToast(`Макс. активных ботов — от 0 до ${BYBIT_GRID_MAX_LIMIT} (0 = не создавать новые)`, "warn");
       return;
     }
     if (investVal < 5) {
-      alert("Минимальная инвестиция — 5 USDT");
+      showToast("Минимальная инвестиция — 5 USDT", "warn");
       return;
     }
     if (tpVal <= 0 || slVal <= 0) {
-      alert("TP и SL должны быть больше 0");
+      showToast("TP и SL должны быть больше 0", "warn");
       return;
     }
     btn.disabled = true;
@@ -8077,7 +8078,7 @@ function renderBybitGridSettings(data) {
       });
       await refreshBybitGrid();
     } catch (e) {
-      alert(formatApiError(e.message));
+      showToast(formatApiError(e.message), "error");
     } finally {
       btn.disabled = false;
     }
@@ -8184,7 +8185,7 @@ async function refreshBybitGrid({ scan = false } = {}) {
         await pairConfigApi("/bybit-grid/close", "POST", { bot_id: b.bot_id });
         await refreshBybitGrid();
       } catch (e) {
-        alert(formatApiError(e.message));
+        showToast(formatApiError(e.message), "error");
       } finally {
         btn.disabled = false;
       }
@@ -8197,20 +8198,21 @@ async function refreshBybitGrid({ scan = false } = {}) {
       try {
         const res = await pairConfigApi("/bybit-grid/auto", "POST", {});
         if (res.skipped) {
-          alert(res.message || "Достигнут лимит активных grid");
+          showToast(res.message || "Достигнут лимит активных grid", "warn");
         } else if (res.deployed === false) {
           const pair = res.params?.pair || res.scan?.best?.pair || "?";
-          alert(
-            `Скан: ${pair}\nНе удалось создать grid:\n${formatApiError(res.error || "ошибка")}\n\n${res.hint || ""}`
+          showToast(
+            `Скан: ${pair} · Не удалось создать grid: ${formatApiError(res.error || "ошибка")}${res.hint ? ` · ${res.hint}` : ""}`,
+            "error"
           );
         } else {
           const pair = res.params?.pair || res.scan?.best?.pair || "?";
-          alert(`Grid создан: ${pair} · ${bybitGridInvest} USDT`);
+          showToast(`Grid создан: ${pair} · ${bybitGridInvest} USDT`, "ok");
         }
         await refreshBybitGrid();
         await loadBybitGridScanInfo();
       } catch (e) {
-        alert(formatApiError(e.message));
+        showToast(formatApiError(e.message), "error");
       } finally {
         btn.disabled = false;
         btn.textContent = `Скан + запуск (${bybitGridInvest} USDT)`;
@@ -8234,11 +8236,11 @@ async function refreshBybitGrid({ scan = false } = {}) {
           if (overall?.pair && overall.pair !== best.pair) {
             msg = `Топ ${overall.pair} уже в активных ботах.\n\n${msg}`;
           }
-          alert(msg);
+          showToast(msg.replace(/\n+/g, " · "), "info");
         }
         await loadBybitGridScanInfo();
       } catch (e) {
-        alert(formatApiError(e.message));
+        showToast(formatApiError(e.message), "error");
       } finally {
         btn.disabled = false;
         btn.textContent = prev;
@@ -8292,7 +8294,7 @@ async function refreshBybitGrid({ scan = false } = {}) {
             await pairConfigApi("/bybit-grid/close", "POST", { bot_id: botId });
             await refreshBybitGrid();
           } catch (e) {
-            alert(formatApiError(e.message));
+            showToast(formatApiError(e.message), "error");
           } finally {
             btn.disabled = false;
           }
@@ -9213,6 +9215,32 @@ function showPairMsg(text, isError = false) {
   el.classList.remove("hidden");
 }
 
+function showToast(message, kind = "info", timeoutMs = 4500) {
+  let wrap = $("toast-wrap");
+  if (!wrap) {
+    wrap = document.createElement("div");
+    wrap.id = "toast-wrap";
+    wrap.className = "toast-wrap";
+    wrap.setAttribute("role", "status");
+    wrap.setAttribute("aria-live", "polite");
+    document.body.appendChild(wrap);
+  }
+  const t = document.createElement("div");
+  t.className = `toast toast-${kind}`;
+  t.textContent = String(message || "");
+  wrap.appendChild(t);
+  requestAnimationFrame(() => t.classList.add("is-shown"));
+  let gone = false;
+  const dismiss = () => {
+    if (gone) return;
+    gone = true;
+    t.classList.remove("is-shown");
+    setTimeout(() => t.remove(), 220);
+  };
+  t.addEventListener("click", dismiss);
+  setTimeout(dismiss, timeoutMs);
+}
+
 async function loadPairSettings() {
   await loadStrategySettings();
   const data = await pairConfigApi("/pairs");
@@ -9586,6 +9614,8 @@ function closeGuide() {
 }
 
 $("login-btn").addEventListener("click", async () => {
+  const loginBtn = $("login-btn");
+  if (loginBtn.classList.contains("is-busy")) return;
   creds.user = $("login-user").value.trim();
   creds.pass = $("login-pass").value;
   sessionToken = "";
@@ -9595,6 +9625,8 @@ $("login-btn").addEventListener("click", async () => {
     $("login-error").classList.remove("hidden");
     return;
   }
+  loginBtn.classList.add("is-busy");
+  loginBtn.disabled = true;
   try {
     await loginAll();
     $("login-screen").classList.add("hidden");
@@ -9606,6 +9638,9 @@ $("login-btn").addEventListener("click", async () => {
         ? "Неверный логин или пароль"
         : e.message || "Ошибка входа";
     $("login-error").classList.remove("hidden");
+  } finally {
+    loginBtn.classList.remove("is-busy");
+    loginBtn.disabled = false;
   }
 });
 
@@ -9889,7 +9924,7 @@ $("impersonate-return-btn")?.addEventListener("click", async () => {
   try {
     await stopImpersonation();
   } catch (e) {
-    alert(formatApiError(e.message));
+    showToast(formatApiError(e.message), "error");
   }
 });
 
@@ -9901,7 +9936,7 @@ $("account-switch-live")?.addEventListener("click", async () => {
   try {
     await switchAccount("live");
   } catch (e) {
-    alert(formatApiError(e.message) || "Не удалось переключить аккаунт");
+    showToast(formatApiError(e.message) || "Не удалось переключить аккаунт", "error");
   } finally {
     _accountSwitchInFlight = false;
   }
@@ -9913,7 +9948,7 @@ $("account-switch-demo")?.addEventListener("click", async () => {
   try {
     await switchAccount("demo");
   } catch (e) {
-    alert(formatApiError(e.message) || "Не удалось переключить аккаунт");
+    showToast(formatApiError(e.message) || "Не удалось переключить аккаунт", "error");
   } finally {
     _accountSwitchInFlight = false;
   }
