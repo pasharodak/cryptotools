@@ -726,7 +726,7 @@ function applyBlockVisibility() {
   }
   const gridVisible = userMayUseBlock("grid");
   document
-    .querySelectorAll('[data-history-scope="grid"], [data-pnl-dash-scope="grid"]')
+    .querySelectorAll('[data-history-scope="grid"], [data-pnl-dash-scope="grid"], [data-charts-bot="grid"]')
     .forEach((el) => {
       el.classList.toggle("hidden", !gridVisible);
     });
@@ -2773,6 +2773,7 @@ let chartsPeriod = "all";
 let chartsDateFrom = "";
 let chartsDateTo = "";
 let chartsSide = "all";
+let chartsBot = "all";
 let chartsStrategy = "all";
 let chartsPage = 1;
 let chartsClosed = [];
@@ -2782,6 +2783,7 @@ let chartsLoadToken = 0;
 const chartsExpanded = new Set();
 const chartsModelCache = new Map();
 const chartsPngCache = new Map();
+const chartsPhoneBlobs = new Map();
 const chartsJsonCache = new Map();
 const chartObjectUrls = new Map();
 const chartPaintGen = new Map();
@@ -2902,8 +2904,16 @@ function chartEntryTime(entry) {
   return tradeCloseMs(entry.trade);
 }
 
+function normalizeChartsBot(bot) {
+  const raw = String(bot || "all").toLowerCase();
+  if (raw === "strategy" || raw === "grid") return raw;
+  return "all";
+}
+
 function filterChartEntries(strategy) {
   let list = chartUniverse().filter(chartEntryInPeriod);
+  const bot = chartsBot === "grid" && !userMayUseBlock("grid") ? "all" : chartsBot;
+  if (bot === "strategy" || bot === "grid") list = list.filter((e) => e.bot === bot);
   if (chartsSide === "long") list = list.filter((e) => !e.trade.is_short);
   else if (chartsSide === "short") list = list.filter((e) => Boolean(e.trade.is_short));
   if (strategy && strategy !== "all") {
@@ -3014,17 +3024,21 @@ function renderChartsTable(entries) {
           const c = chartsCells(entry);
           const botClass = historyBotClass(entry);
           const panel = open ? chartPanelHtml(key) : "";
-          return `<article class="history-card ${c.pnlClassName} ${botClass}">
+          return `<article class="history-card charts-card ${c.pnlClassName} ${botClass}${entry.open ? " is-open" : ""}">
         <div class="history-card-top">
           <div class="history-card-main">
             <strong class="history-card-pair">${escapeHtml(c.t.pair || "—")}</strong>
             <span class="history-card-meta">${c.when} · ${c.botLabel} · ${escapeHtml(c.source)}</span>
           </div>
-          <div class="history-card-pnl ${c.pnlClassName}">${fmtUsdSigned(c.pnl.abs, 2)}</div>
+          <div class="history-card-pnl ${c.pnlClassName}">
+            <span>${fmtUsdSigned(c.pnl.abs, 2)}</span>
+            <span class="history-card-pct muted">${fmtPct(c.pnl.pct)}</span>
+          </div>
         </div>
         <div class="history-card-tags">
-          <span class="history-chip">${c.side}</span>
+          <span class="history-chip side-${c.t.is_short ? "short" : "long"}">${c.side}</span>
           <span class="history-chip">${escapeHtml(c.exit)}</span>
+          <span class="history-chip">${escapeHtml(historySltpCell(c.t))}</span>
         </div>
         <div class="trade-chart-actions">
           <button type="button" class="btn btn-sm ${open ? "ghost" : "primary"}" data-chart-toggle="${escapeHtml(key)}">${open ? "Скрыть" : "График"}</button>
@@ -3084,6 +3098,10 @@ function renderChartsView() {
   document.querySelectorAll("[data-charts-side]").forEach((btn) => {
     btn.classList.toggle("is-active", (btn.dataset.chartsSide || "all") === chartsSide);
   });
+  if (chartsBot === "grid" && !userMayUseBlock("grid")) chartsBot = "all";
+  document.querySelectorAll("[data-charts-bot]").forEach((btn) => {
+    btn.classList.toggle("is-active", (btn.dataset.chartsBot || "all") === chartsBot);
+  });
   const periodEntries = filterChartEntries("all");
   renderChartsStrategyPills(periodEntries);
   const entries = chartsStrategy === "all" ? periodEntries : filterChartEntries(chartsStrategy);
@@ -3104,11 +3122,17 @@ function renderChartsView() {
     status.textContent = `Всего ${entries.length} сделок${openNote}${pnlNote}${pageNote}`;
   }
   const start = (chartsPage - 1) * CHARTS_PAGE_SIZE;
+  const phone = isChartsPhone();
   for (const entry of entries.slice(start, start + CHARTS_PAGE_SIZE)) {
     const key = chartEntryKey(entry);
     if (!chartsExpanded.has(key)) continue;
-    const mem = chartsPngCache.get(chartPngMemKey(entry));
-    if (mem?.blob) showChartImage(key, mem.blob);
+    if (phone) {
+      const blob = chartsPhoneBlobs.get(phoneChartBlobKey(entry));
+      if (blob) showChartImage(key, blob);
+    } else {
+      const mem = chartsPngCache.get(chartPngMemKey(entry));
+      if (mem?.blob) showChartImage(key, mem.blob);
+    }
   }
 }
 
@@ -3258,50 +3282,63 @@ function fmtChartTime(ms) {
 
 function drawTradeChart(ctx, model, width, height) {
   const candles = model.candles || [];
+  const compact = width < 640;
+  const padX = compact ? 10 : 16;
+  const titlePx = compact ? 13 : 16;
+  const badgePx = compact ? 11 : 13;
+  const subPx = compact ? 11 : 12;
+  const axisPx = compact ? 10 : 11;
+  const axisW = compact ? 64 : 74;
+  const plotX = compact ? 8 : 12;
+  const plotY = compact ? 48 : 64;
+  const plotBottom = compact ? 20 : 28;
+  const titleY = compact ? 16 : 22;
+  const subY = compact ? 34 : 46;
+  const badgeH = compact ? 22 : 26;
+  const badgeY = compact ? 6 : 9;
+  const badgeTextY = compact ? 17 : 23;
+  const tickGap = compact ? 54 : 72;
   ctx.clearRect(0, 0, width, height);
   ctx.fillStyle = "#121a24";
   ctx.fillRect(0, 0, width, height);
   ctx.textBaseline = "middle";
   ctx.textAlign = "left";
-  ctx.font = "600 16px Segoe UI, system-ui, sans-serif";
+  ctx.font = `600 ${titlePx}px Segoe UI, system-ui, sans-serif`;
   ctx.fillStyle = "#e8eef7";
   const sideText = model.side === "SHORT" ? "ШОРТ" : "ЛОНГ";
-  ctx.font = "700 13px Segoe UI, system-ui, sans-serif";
-  const badgeW = ctx.measureText(sideText).width + 22;
-  ctx.font = "600 16px Segoe UI, system-ui, sans-serif";
-  ctx.fillText(chartFitText(ctx, model.strategy || "Стратегия", Math.max(80, width - badgeW - 40)), 16, 22);
+  ctx.font = `700 ${badgePx}px Segoe UI, system-ui, sans-serif`;
+  const badgeW = ctx.measureText(sideText).width + (compact ? 16 : 22);
+  ctx.font = `600 ${titlePx}px Segoe UI, system-ui, sans-serif`;
+  ctx.fillText(chartFitText(ctx, model.strategy || "Стратегия", Math.max(80, width - badgeW - padX * 2 - 8)), padX, titleY);
 
   const short = model.side === "SHORT";
   const loss = Number(model.pnlAbs) < 0;
   const profit = Number(model.pnlAbs) > 0;
   const ink = loss ? "#fca5a5" : profit ? "#6ee7b7" : "#cbd5e1";
-  const bx = width - 16 - badgeW;
-  ctx.font = "700 13px Segoe UI, system-ui, sans-serif";
+  const bx = width - padX - badgeW;
+  ctx.font = `700 ${badgePx}px Segoe UI, system-ui, sans-serif`;
   ctx.fillStyle = short ? "rgba(239,68,68,0.2)" : "rgba(16,185,129,0.2)";
-  chartRoundRect(ctx, bx, 9, badgeW, 26, 13);
+  chartRoundRect(ctx, bx, badgeY, badgeW, badgeH, 13);
   ctx.fill();
   ctx.strokeStyle = short ? "#f87171" : "#34d399";
   ctx.lineWidth = 1;
   ctx.stroke();
   ctx.fillStyle = short ? "#fca5a5" : "#6ee7b7";
   ctx.textAlign = "center";
-  ctx.fillText(sideText, bx + badgeW / 2, 23);
+  ctx.fillText(sideText, bx + badgeW / 2, badgeTextY);
   ctx.textAlign = "left";
 
   const pnlBit = `${fmtUsdSigned(model.pnlAbs, 2)} (${fmtPct(model.pnlPct)})`;
   let sub = `${model.pair} · ${model.tfLabel} · ${pnlBit}`;
   if (model.openTrade) sub += " · открыта";
   if (model.truncated) sub += " · середина скрыта";
-  ctx.font = "12px Segoe UI, system-ui, sans-serif";
+  ctx.font = `${subPx}px Segoe UI, system-ui, sans-serif`;
   ctx.fillStyle = ink;
-  ctx.fillText(chartFitText(ctx, sub, width - 32), 16, 46);
+  ctx.fillText(chartFitText(ctx, sub, width - padX * 2), padX, subY);
 
   if (!candles.length) return;
-  const axisW = 74;
-  const plotX = 12;
-  const plotW = Math.max(40, width - plotX - axisW - 8);
-  const plotY = 64;
-  const plotH = Math.max(80, height - plotY - 28);
+  const plotW = Math.max(40, width - plotX - axisW - (compact ? 6 : 8));
+  const plotH = Math.max(80, height - plotY - plotBottom);
   let lo = Infinity;
   let hi = -Infinity;
   for (const candle of candles) {
@@ -3340,7 +3377,7 @@ function drawTradeChart(ctx, model, width, height) {
 
   ctx.strokeStyle = "rgba(255,255,255,0.06)";
   ctx.lineWidth = 1;
-  ctx.font = "11px Segoe UI, system-ui, sans-serif";
+  ctx.font = `${axisPx}px Segoe UI, system-ui, sans-serif`;
   ctx.textAlign = "left";
   for (let i = 0; i <= 3; i += 1) {
     const price = max - ((max - min) * i) / 3;
@@ -3399,7 +3436,7 @@ function drawTradeChart(ctx, model, width, height) {
     ctx.lineTo(x, plotY + plotH);
     ctx.stroke();
     ctx.restore();
-    ctx.font = "600 11px Segoe UI, system-ui, sans-serif";
+    ctx.font = `600 ${axisPx}px Segoe UI, system-ui, sans-serif`;
     ctx.fillStyle = "#e8eef7";
     ctx.textBaseline = "top";
     const tw = ctx.measureText(text).width;
@@ -3411,7 +3448,7 @@ function drawTradeChart(ctx, model, width, height) {
   const endLabel = model.openTrade ? `сейчас ${fmtUsdSigned(model.pnlAbs, 2)}` : `выход ${fmtUsdSigned(model.pnlAbs, 2)}`;
   vMark(model.openTrade ? n - 1 : model.exitIdx, endLabel);
 
-  ctx.font = "11px Segoe UI, system-ui, sans-serif";
+  ctx.font = `${axisPx}px Segoe UI, system-ui, sans-serif`;
   ctx.textAlign = "left";
   ctx.textBaseline = "alphabetic";
   for (const tag of priceTags) {
@@ -3425,7 +3462,7 @@ function drawTradeChart(ctx, model, width, height) {
   }
 
   ctx.fillStyle = ink;
-  ctx.font = "11px Segoe UI, system-ui, sans-serif";
+  ctx.font = `${axisPx}px Segoe UI, system-ui, sans-serif`;
   ctx.textBaseline = "bottom";
   ctx.fillText("окно входа", xLeft(s0) + 4, plotY + plotH - 4);
 
@@ -3439,7 +3476,7 @@ function drawTradeChart(ctx, model, width, height) {
 
   ctx.strokeStyle = "rgba(255,255,255,0.12)";
   ctx.strokeRect(plotX + 0.5, plotY + 0.5, plotW, plotH);
-  ctx.font = "11px Segoe UI, system-ui, sans-serif";
+  ctx.font = `${axisPx}px Segoe UI, system-ui, sans-serif`;
   ctx.fillStyle = "#8b9cb3";
   ctx.textBaseline = "top";
   ctx.textAlign = "left";
@@ -3448,9 +3485,10 @@ function drawTradeChart(ctx, model, width, height) {
   for (const idx of ticks) {
     if (idx < 0 || idx >= n) continue;
     const x = xMid(idx);
-    if (x - lastX < 72) continue;
+    if (x - lastX < tickGap) continue;
     lastX = x;
-    ctx.fillText(fmtChartTime(candles[idx].t), Math.min(Math.max(plotX, x - 24), width - 78), plotY + plotH + 6);
+    const timeRight = compact ? 62 : 78;
+    ctx.fillText(fmtChartTime(candles[idx].t), Math.min(Math.max(plotX, x - 24), width - timeRight), plotY + plotH + 6);
   }
 }
 
@@ -3647,6 +3685,38 @@ async function ensureTradeChartPng(entry) {
   return { blob: rendered.blob, fromCache: false, saved, truncated: rendered.truncated };
 }
 
+function isChartsPhone() {
+  return window.matchMedia("(max-width: 720px)").matches;
+}
+
+function chartsPhoneBucket() {
+  const width = $("charts-cards")?.clientWidth || window.innerWidth || 360;
+  return Math.max(280, Math.round(width / 20) * 20);
+}
+
+function phoneChartBlobKey(entry) {
+  return `${chartEntryKey(entry)}|${chartsPhoneBucket()}`;
+}
+
+function chartPhonePaintSize(key) {
+  const img = chartNodes("data-chart-img", key).find((el) => el.clientWidth > 40);
+  const width = Math.max(280, Math.round(img?.clientWidth || chartsPhoneBucket()));
+  const height = Math.round(Math.max(260, Math.min(420, width * 0.82)));
+  return { width, height };
+}
+
+async function paintPhoneChart(entry) {
+  const key = chartEntryKey(entry);
+  const model = await loadChartModel(entry);
+  const { width, height } = chartPhonePaintSize(key);
+  const canvas = document.createElement("canvas");
+  paintTradeChart(canvas, model, width, height);
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+  if (!blob) throw new Error("не удалось собрать график");
+  chartsPhoneBlobs.set(phoneChartBlobKey(entry), blob);
+  return { blob, model };
+}
+
 function showChartImage(key, blob) {
   const prev = chartObjectUrls.get(key);
   if (prev) URL.revokeObjectURL(prev);
@@ -3664,6 +3734,15 @@ async function showChart(entry) {
   };
   try {
     setStatus("Загрузка графика…");
+    if (isChartsPhone()) {
+      const painted = await paintPhoneChart(entry);
+      if (chartPaintGen.get(key) !== gen || !chartsExpanded.has(key)) return;
+      showChartImage(key, painted.blob);
+      setStatus(
+        painted.model.truncated ? "Длинная сделка: на графике вход и выход, середина скрыта." : "",
+      );
+      return;
+    }
     const chart = await ensureTradeChartPng(entry);
     if (chartPaintGen.get(key) !== gen || !chartsExpanded.has(key)) return;
     showChartImage(key, chart.blob);
@@ -3903,6 +3982,16 @@ async function downloadAllChartPngs() {
 
 function redrawOpenCharts() {
   if ($("charts-view")?.classList.contains("hidden")) return;
+  if (isChartsPhone()) {
+    const bucket = chartsPhoneBucket();
+    if (redrawOpenCharts.bucket === bucket) return;
+    redrawOpenCharts.bucket = bucket;
+    for (const key of chartsExpanded) {
+      const entry = findChartEntry(key);
+      if (entry && !chartsPhoneBlobs.get(phoneChartBlobKey(entry))) showChart(entry);
+    }
+    return;
+  }
   for (const key of chartsExpanded) {
     const model = chartsModelCache.get(key);
     const canvas = pickVisibleChartCanvas(key);
@@ -3949,6 +4038,13 @@ function bindChartsControls() {
       renderChartsView();
       return;
     }
+    const botBtn = e.target.closest("[data-charts-bot]");
+    if (botBtn) {
+      chartsBot = normalizeChartsBot(botBtn.dataset.chartsBot || "all");
+      chartsPage = 1;
+      renderChartsView();
+      return;
+    }
     const stratBtn = e.target.closest("[data-charts-strategy]");
     if (stratBtn) {
       chartsStrategy = stratBtn.getAttribute("data-charts-strategy") || "all";
@@ -3965,7 +4061,12 @@ function bindChartsControls() {
       renderChartsView();
       if (!opening) return;
       const entry = findChartEntry(key);
-      if (entry && !chartsPngCache.get(chartPngMemKey(entry))) showChart(entry);
+      if (!entry) return;
+      if (isChartsPhone()) {
+        if (!chartsPhoneBlobs.get(phoneChartBlobKey(entry))) showChart(entry);
+        return;
+      }
+      if (!chartsPngCache.get(chartPngMemKey(entry))) showChart(entry);
       return;
     }
     const png = e.target.closest("[data-chart-png]");

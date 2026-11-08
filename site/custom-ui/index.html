@@ -9,7 +9,7 @@
   <title>CriptoTools — панель управления</title>
   <link rel="icon" type="image/png" href="bitcoin-icon.png?v=20260801" />
   <link rel="apple-touch-icon" href="bitcoin-icon.png?v=20260801" />
-  <link rel="stylesheet" href="styles.css?v=20261108statspage" />
+  <link rel="stylesheet" href="styles.css?v=20261108bot" />
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script>
     (function () {
@@ -1511,6 +1511,14 @@
             <button type="button" class="btn btn-sm charts-pill" data-charts-side="short">Шорт</button>
           </div>
         </div>
+        <div class="history-filter-group charts-bot-group">
+          <span class="history-filter-label">Бот</span>
+          <div class="logs-filters charts-bot-pills" role="group" aria-label="Бот">
+            <button type="button" class="btn btn-sm charts-pill is-active" data-charts-bot="all">Все</button>
+            <button type="button" class="btn btn-sm charts-pill" data-charts-bot="strategy">Стратегии</button>
+            <button type="button" class="btn btn-sm charts-pill" data-charts-bot="grid">Grid bot</button>
+          </div>
+        </div>
         <div class="history-filter-group">
           <span class="history-filter-label">Стратегия</span>
           <div class="logs-filters charts-strategy-pills" id="charts-strategy-pills" role="group" aria-label="Стратегия"></div>
@@ -2042,7 +2050,7 @@
               <strong>История</strong> — все закрытые сделки с фильтрами (бот, стратегия, период, пары) и экспортом CSV.
             </li>
             <li>
-              <strong>Графики</strong> — свечной график по каждой сделке: окно входа и сама сделка подсвечены зелёным при прибыли и красным при убытке. Можно скачать один PNG или все отфильтрованные графики архивом PNG и таким же архивом JSON.
+              <strong>Графики</strong> — свечной график по каждой сделке: окно входа и сама сделка подсвечены зелёным при прибыли и красным при убытке. Фильтры: период, бот (все, стратегии, Grid bot), сторона и стратегия. Можно скачать один PNG или все отфильтрованные графики архивом PNG и таким же архивом JSON.
             </li>
             <li>
               <strong>Логи</strong> — поток логов в реальном времени (если нужно разобраться, почему бот не входит или остановился).
@@ -2167,6 +2175,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=20261108statspage" defer></script>
+  <script src="app.js?v=20261108bot" defer></script>
 </body>
 </html>

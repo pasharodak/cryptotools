@@ -6979,6 +6979,7 @@ html.tg-webapp .screen {
 
 #charts-view .charts-period-pills,
 #charts-view .charts-side-pills,
+#charts-view .charts-bot-pills,
 #charts-view .charts-strategy-pills {
   display: flex;
   flex-wrap: wrap;
@@ -7073,20 +7074,172 @@ html.tg-webapp .screen {
 }
 
 @media (max-width: 720px) {
+  #charts-view.logs-view {
+    height: calc(100dvh - 3.5rem);
+    max-height: calc(100dvh - 3.5rem);
+    padding: 0 0.55rem calc(0.4rem + var(--safe-bottom));
+    overflow: hidden;
+    overscroll-behavior: contain;
+  }
+
+  #charts-view .history-toolbar {
+    position: relative;
+    z-index: 3;
+    flex: 0 0 auto;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 0.4rem 0.5rem;
+    padding: 0.4rem 0 0.45rem;
+    margin-bottom: 0;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+  }
+
+  #charts-view .rating-title-wrap {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  #charts-view .history-toolbar .logs-title {
+    font-size: 0.95rem;
+  }
+
+  #charts-view .rating-subtitle,
+  #charts-view .history-date-range,
+  #charts-view .charts-archive-group {
+    display: none !important;
+  }
+
+  #charts-view .history-toolbar .btn {
+    min-height: 2.4rem;
+    flex: 0 0 auto;
+    padding-left: 0.7rem;
+    padding-right: 0.7rem;
+  }
+
+  #charts-view .logs-actions {
+    margin-left: 0;
+    flex: 0 0 auto;
+  }
+
+  #charts-view .charts-filters {
+    flex: 0 0 auto;
+    max-height: 42%;
+    min-height: 0;
+    overflow: auto;
+    -webkit-overflow-scrolling: touch;
+    gap: 0.35rem;
+    padding: 0.4rem 0 0.45rem;
+    margin: 0;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+  }
+
+  #charts-view .history-filter-group {
+    gap: 0.3rem;
+    padding: 0.4rem 0.5rem;
+  }
+
+  #charts-view .history-filter-label {
+    display: none;
+  }
+
+  #charts-view .charts-bot-group .history-filter-label {
+    display: block;
+  }
+
+  #charts-view .charts-period-pills,
+  #charts-view .charts-side-pills,
+  #charts-view .charts-bot-pills,
+  #charts-view .charts-strategy-pills {
+    flex-wrap: nowrap;
+    max-height: none;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    padding-bottom: 0.1rem;
+  }
+
+  #charts-view .charts-period-pills::-webkit-scrollbar,
+  #charts-view .charts-side-pills::-webkit-scrollbar,
+  #charts-view .charts-bot-pills::-webkit-scrollbar,
+  #charts-view .charts-strategy-pills::-webkit-scrollbar {
+    display: none;
+  }
+
+  #charts-view .charts-pill {
+    flex: 0 0 auto;
+    max-width: 11rem;
+    min-height: 2.15rem;
+    white-space: nowrap;
+  }
+
   #charts-view .charts-desktop-table {
     display: none;
+  }
+
+  #charts-view .history-table-wrap {
+    flex: 1 1 auto;
+    min-height: 0;
+    border: none;
+    background: transparent;
+    box-shadow: none;
+    overflow-x: hidden;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+    margin-top: 0.35rem;
   }
 
   #charts-view .charts-cards {
     display: flex;
     flex-direction: column;
     gap: 0.65rem;
+    padding: 0.1rem 0 0.45rem;
   }
 
-  #charts-view .history-table-wrap {
-    border: none;
-    background: transparent;
-    box-shadow: none;
-    min-height: 0;
+  #charts-view .charts-card .trade-chart-actions {
+    margin-top: 0.55rem;
+  }
+
+  #charts-view .charts-card .trade-chart-actions .btn {
+    flex: 1 1 auto;
+    min-height: 2.5rem;
+  }
+
+  #charts-view .trade-chart-panel {
+    margin-top: 0.55rem;
+  }
+
+  #charts-view .trade-chart-canvas {
+    width: 100%;
+    height: auto;
+    max-width: 100%;
+    aspect-ratio: 100 / 82;
+    object-fit: contain;
+    background: #121a24;
+  }
+
+  #charts-view .history-pagination {
+    flex: 0 0 auto;
+    background: var(--bg);
+    margin-top: 0;
+    padding: 0.4rem 0 0.1rem;
+  }
+
+  #charts-view .history-pagination .btn {
+    min-height: 2.4rem;
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+
+  #charts-view .logs-footnote {
+    flex: 0 0 auto;
+    background: var(--bg);
+    padding: 0.3rem 0 0.05rem;
+    font-size: 0.75rem;
+    text-align: left;
   }
 }
