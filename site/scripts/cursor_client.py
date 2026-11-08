@@ -10,7 +10,9 @@ import os
 import threading
 from typing import Any
 
-DEFAULT_MODEL = "composer-2.5"
+# composer-2.5 currently returns empty cloud runs ("status=error") on Contabo;
+# "auto" / "default" finish successfully with the same CURSOR key.
+DEFAULT_MODEL = "auto"
 PAIR_TIMEOUT_SEC = 150.0
 BOOK_TIMEOUT_SEC = 240.0
 

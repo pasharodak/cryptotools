@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Import live Bybit positions into tenant strategy DB (exchange-only rows)."""
+"""Import open exchange positions into the tenant strategy DB."""
 from __future__ import annotations
 
 import argparse
@@ -19,29 +19,34 @@ import signal_bus  # noqa: E402
 import tenant_manager as tm  # noqa: E402
 import trade_exit_monitor  # noqa: E402
 from bybit_grid_manager import symbol_to_ft_pair  # noqa: E402
-from user_exchange import UserBybitExchange, ft_pair_to_symbol  # noqa: E402
+from user_exchange import UserBinanceExchange, UserBybitExchange, ft_pair_to_symbol, make_user_exchange  # noqa: E402
 
 
-def _load_exchange(user_id: str) -> UserBybitExchange:
+def _load_exchange(user_id: str) -> UserBybitExchange | UserBinanceExchange:
+    """Build the venue client for this trading context.
+
+    Secrets still store the key in ``bybit_api_*`` for both venues.
+    The context id (and the blob ``exchange`` field) picks Bybit vs Binance.
+    """
     if user_id == "admin":
         blob = tm._load_secrets_blob("admin")
-        key = str(blob.get("bybit_api_key") or "").strip()
-        secret = str(blob.get("bybit_api_secret") or "").strip()
+        key = str(blob.get("bybit_api_key") or blob.get("api_key") or "").strip()
+        secret = str(blob.get("bybit_api_secret") or blob.get("api_secret") or "").strip()
         demo = tm._as_bool(blob.get("bybit_demo_trading"))
+        exchange_id = str(blob.get("exchange") or "bybit")
         if not key or not secret:
             raise RuntimeError("no secrets for admin")
-        return UserBybitExchange(key, secret, demo_trading=demo)
+        return make_user_exchange(exchange_id, key, secret, demo_trading=demo)
     sec = tm.load_user_secrets(user_id)
     if not sec:
         raise RuntimeError(f"no secrets for {user_id}")
-    demo = bool(sec.get("bybit_demo_trading")) if isinstance(sec.get("bybit_demo_trading"), bool) else str(
-        sec.get("bybit_demo_trading") or ""
-    ).strip().lower() in ("1", "true", "t", "yes", "y", "on")
-    return UserBybitExchange(
-        sec["bybit_api_key"],
-        sec["bybit_api_secret"],
-        demo_trading=demo,
-    )
+    key = str(sec.get("bybit_api_key") or sec.get("api_key") or "").strip()
+    secret = str(sec.get("bybit_api_secret") or sec.get("api_secret") or "").strip()
+    if not key or not secret:
+        raise RuntimeError(f"no secrets for {user_id}")
+    demo = tm._as_bool(sec.get("bybit_demo_trading")) or tm.is_demo_context_id(user_id)
+    exchange_id = str(sec.get("exchange") or tm.context_exchange(user_id))
+    return make_user_exchange(exchange_id, key, secret, demo_trading=demo)
 
 
 def _db_path(user_id: str) -> Path:
@@ -298,7 +303,7 @@ def import_positions(
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Import Bybit positions into tenant DB")
+    ap = argparse.ArgumentParser(description="Import exchange positions into tenant DB")
     ap.add_argument("user_id")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--json", action="store_true")

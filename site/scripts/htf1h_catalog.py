@@ -1,8 +1,8 @@
-"""1-hour strategy ids, plus the stop/take percents the UI offers for every strategy.
+"""1-hour strategy ids (retired from live), plus SL/TP presets for every strategy.
 
-1h signals are the parent strategy on closed 1h candles. Their catalog defaults
-stay on the old 3/8/13 grid. Any strategy can store its own stop and take from
-the wider preset list (same kind of menu as ML confidence).
+Live HTF1H_SPECS is empty — 1h panel/signals are off. RETIRED_HTF1H_SPECS keeps
+ids/names so history, rating filters, and exit helpers still recognize old tags.
+Any strategy can store its own stop and take from the wider preset list.
 """
 
 from __future__ import annotations
@@ -14,8 +14,11 @@ SL_CHOICES: tuple[int, ...] = (2, 3, 5, 8, 10, 13, 15, 20)
 TP_CHOICES: tuple[int, ...] = (2, 3, 5, 8, 10, 13, 15, 20, 30, 50)
 SLTP_CHOICES: tuple[int, ...] = SL_CHOICES
 
-# Order matches the requested prod set.
-HTF1H_SPECS: tuple[dict, ...] = (
+# Live catalog — empty while 1h strategies are retired from prod.
+HTF1H_SPECS: tuple[dict, ...] = ()
+
+# Former prod 1h set (history labels / helpers only).
+RETIRED_HTF1H_SPECS: tuple[dict, ...] = (
     {"id": "AdxMomentum1hStrategy", "name": "Breakout-Retest", "num": 201, "sl": 13, "tp": 8, "scenario": "trend_breakout"},
     {"id": "MacdEma1hStrategy", "name": "MACD+EMA", "num": 202, "sl": 8, "tp": 3, "scenario": "trend_macd_ema"},
     {"id": "Supertrend1hStrategy", "name": "Supertrend", "num": 203, "sl": 8, "tp": 3, "scenario": "trend_supertrend"},
@@ -32,8 +35,8 @@ HTF1H_SPECS: tuple[dict, ...] = (
     {"id": "CmfZeroCross1hStrategy", "name": "CMF", "num": 214, "sl": 3, "tp": 3, "scenario": "chart2_cmf"},
 )
 
-HTF1H_IDS = frozenset(spec["id"] for spec in HTF1H_SPECS)
-HTF1H_BY_ID = {spec["id"]: spec for spec in HTF1H_SPECS}
+HTF1H_IDS = frozenset(spec["id"] for spec in RETIRED_HTF1H_SPECS)
+HTF1H_BY_ID = {spec["id"]: spec for spec in RETIRED_HTF1H_SPECS}
 
 
 def _snap_to(value, choices: tuple[int, ...]) -> int:

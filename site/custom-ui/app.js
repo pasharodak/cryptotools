@@ -27,7 +27,7 @@ const BOTS = {
   },
   grid: {
     prefix: "/api/grid",
-    label: "Grid + ML",
+    label: "Grid · Demo",
     maxTrades: 2,
     stakeAmount: 10,
     stakeEl: "grid-stake",
@@ -50,6 +50,8 @@ const TEST_SL_MIN = 1;
 const TEST_SL_MAX = 20;
 const TEST_TP_MIN = 0.5;
 const TEST_TP_MAX = 50;
+const TEST_TIME_CLOSE_MIN_MIN = 1;
+const TEST_TIME_CLOSE_MIN_MAX = 10080; // 7 суток
 const STAKE_EDITABLE_BOTS = new Set(["grid", "strategy"]);
 const FINDER_STATS_LABEL = "ML Finder (Transformer)";
 const GRID_STATS_LABEL = "Grid (BB+ADX) + ML gate";
@@ -59,14 +61,12 @@ const LLM_STATS_LABEL = "DeepSeek";
 const LLM50_STATS_LABEL = "DeepSeek 50";
 const CURSOR_STATS_LABEL = "Cursor";
 const CURSOR50_STATS_LABEL = "Cursor 50";
-const PRICE_ACTION_STATS_KEY = "PriceAction";
-const PRICE_ACTION_STATS_LABEL = "Price Action";
 const ML_GATE_STRATEGY = "XGBoost · profit ≥60%";
 const ML_GATE_BLOCK_LOSS = "XGBoost · block loss";
 const BYBIT_GRID_MAX_LIMIT = 5;
 let bybitGridMaxBots = 1;
 let bybitGridInvest = "10";
-const SESSION_DAYS = 7;
+const SESSION_DAYS = 0.5; // 12h — match server SESSION_TTL_SECONDS
 const SESSION_USER_KEY = "ct_user";
 const SESSION_TOKEN_KEY = "ct_token";
 const SESSION_UNTIL_KEY = "ct_session_until";
@@ -113,13 +113,28 @@ let sltpTpChoices = [2, 3, 5, 8, 10, 13, 15, 20, 30, 50];
 let htfStakeAmount = 5;
 let strategyPairsMap = {};
 let strategyPairsCascade = false;
-let strategyRisk = { stoploss_pct: 5, take_profit_pct: 10 };
+let strategyRisk = {
+  stoploss_pct: 5,
+  take_profit_pct: 10,
+  time_close_enabled: false,
+  time_close_minutes: 60,
+  time_close_tp_pct: 1.3,
+  time_close_loss_enabled: false,
+  time_close_loss_minutes: 60,
+  time_close_loss_tp_pct: 1.3,
+};
 let testSettings = {
   max_open_trades: 8,
   max_open_trades_per_strategy: 2,
   stake_amount: 5,
   stoploss_pct: 2,
   take_profit_pct: 2,
+  time_close_enabled: false,
+  time_close_minutes: 60,
+  time_close_tp_pct: 1.3,
+  time_close_loss_enabled: false,
+  time_close_loss_minutes: 60,
+  time_close_loss_tp_pct: 1.3,
 };
 let dualHedgeEnabled = false;
 let allowedBlocks = null; // null = all
@@ -127,12 +142,22 @@ let allowedStrategies = null; // null = all
 let permissionCatalog = { blocks: [], strategies: [] };
 let isImpersonating = false;
 let impersonatedBy = null;
-let accountKind = "live"; // live | demo | admin
+let accountKind = "live"; // live | admin (demo login removed)
 let demoMirrorAdmin = false;
 let settingsReadonly = false;
 let canSwitchDemo = false;
 let canSwitchLive = false;
 let linkedAccountUsername = null;
+let hasLiveSecrets = false;
+let hasDemoSecrets = false;
+let tradeOnPref = "bybit"; // legacy mirror (= main)
+let tradeOnMainPref = "bybit";
+let tradeOnTestPref = "bybit";
+let tradingFlagsLive = {};
+let tradingFlagsDemo = {};
+let pnlDashMode = "all";
+let ratingAccountMode = "all";
+let statsAccountMode = "all";
 
 let lastBybitGridRefresh = 0;
 const BYBIT_GRID_REFRESH_MS = 30000;
@@ -630,11 +655,19 @@ function applyAuthMeState(me) {
     currentUser?.account_kind ||
     null;
   if (nextKind) accountKind = String(nextKind);
-  demoMirrorAdmin = !!(me?.demo_mirror_admin || accountKind === "demo");
-  settingsReadonly = !!(me?.settings_readonly || demoMirrorAdmin);
-  canSwitchDemo = !!me?.can_switch_demo;
-  canSwitchLive = !!me?.can_switch_live;
-  linkedAccountUsername = me?.linked_username || null;
+  demoMirrorAdmin = false;
+  settingsReadonly = !!(me?.settings_readonly);
+  canSwitchDemo = false;
+  canSwitchLive = false;
+  linkedAccountUsername = null;
+  hasLiveSecrets = !!(me?.has_live_secrets ?? me?.secrets_dual?.has_live_secrets ?? me?.secrets?.has_secrets);
+  hasDemoSecrets = !!(me?.has_demo_secrets ?? me?.secrets_dual?.has_demo_secrets);
+  if (me?.trade_on_main) tradeOnMainPref = String(me.trade_on_main);
+  if (me?.trade_on_test) tradeOnTestPref = String(me.trade_on_test);
+  if (me?.trade_on) tradeOnPref = String(me.trade_on);
+  else tradeOnPref = tradeOnMainPref;
+  tradingFlagsLive = me?.trading_flags_live || me?.trading_flags || tradingFlagsLive;
+  tradingFlagsDemo = me?.trading_flags_demo || tradingFlagsDemo;
   // null = unrestricted; [] = none. Only update when the field is present.
   if (me && "allowed_blocks" in me) {
     allowedBlocks = me.allowed_blocks;
@@ -657,9 +690,11 @@ function applyAuthMeState(me) {
   if (sessionToken && !botsEventsAbort) startBotsEventsStream();
 }
 
-const RETIRED_BLOCKS = new Set(["finder", "grid", "bybitgrid", "llm"]);
+const RETIRED_BLOCKS = new Set(["finder", "grid", "bybitgrid", "llm", "cursor50", "htf1h"]);
+// cursor50 / 1h / plain cursor / llm panels stay retired via RETIRED_BLOCKS.
 
 function userMayUseBlock(blockId) {
+  if (blockId === "grid" && isAdminUser()) return true;
   if (RETIRED_BLOCKS.has(blockId)) return false;
   if (allowedBlocks == null) return true;
   return allowedBlocks.includes(blockId);
@@ -672,13 +707,29 @@ function applyBlockVisibility() {
     el.classList.toggle("hidden", !userMayUseBlock(block));
   });
   const adminHome = isAdminUser();
-  const liveUser = accountKind === "live" && !adminHome;
+  // Test + Main panels stay visible whenever the block is allowed
+  // (Demo keys still required to actually trade test strategies).
   const testPanel = $("panel-test-strategies");
-  const mainPanel = $("panel-strategy");
-  const htf = $("panel-htf1h");
-  if (testPanel && liveUser) testPanel.classList.add("hidden");
-  if (mainPanel && (adminHome || accountKind === "demo")) mainPanel.classList.add("hidden");
-  if (htf && userMayUseBlock("strategy")) htf.classList.remove("hidden");
+  if (testPanel) {
+    testPanel.classList.toggle("hidden", !userMayUseBlock("test_strategies"));
+  }
+  const strategyPanel = $("panel-strategy");
+  if (strategyPanel) {
+    strategyPanel.classList.toggle("hidden", !userMayUseBlock("strategy"));
+  }
+  const demoWrap = $("strategy-demo-wrap");
+  if (demoWrap) demoWrap.classList.toggle("hidden", !(hasDemoSecrets || adminHome));
+  const liveWrap = $("strategy-live-wrap");
+  if (liveWrap) {
+    // Always show Live list when main panel is allowed; empty-keys banner covers missing keys.
+    liveWrap.classList.toggle("hidden", false);
+  }
+  const gridVisible = userMayUseBlock("grid");
+  document
+    .querySelectorAll('[data-history-scope="grid"], [data-pnl-dash-scope="grid"]')
+    .forEach((el) => {
+      el.classList.toggle("hidden", !gridVisible);
+    });
 }
 
 function updateMultiUserUi(me) {
@@ -692,11 +743,13 @@ function updateMultiUserUi(me) {
     const uid = String(me?.user?.id || currentUser?.id || "");
     const profiles = Array.isArray(secrets?.profiles) ? secrets.profiles : [];
     const keysPresent =
-      !!secrets &&
-      (secrets.has_secrets === true ||
-        profiles.length > 0 ||
-        !!secrets.has_bybit_api_key ||
-        !!secrets.has_bybit_api_secret);
+      hasLiveSecrets ||
+      hasDemoSecrets ||
+      (!!secrets &&
+        (secrets.has_secrets === true ||
+          profiles.length > 0 ||
+          !!secrets.has_bybit_api_key ||
+          !!secrets.has_bybit_api_secret));
     if (uid && keysPresent) {
       window.__ctSecretsOk = window.__ctSecretsOk || new Set();
       window.__ctSecretsOk.add(uid);
@@ -720,32 +773,15 @@ function updateMultiUserUi(me) {
       impText.textContent = `Сессия: ${uname} (вход от ${by})`;
     }
   }
-  const accBanner = $("account-switch-banner");
-  const accText = $("account-switch-banner-text");
-  const showAccSwitch = accountKind === "live" || accountKind === "demo";
-  if (accBanner) {
-    accBanner.classList.toggle("hidden", !showAccSwitch);
-    if (accText && showAccSwitch) {
-      const label = accountKind === "demo" ? "Demo" : "Live";
-      const link = linkedAccountUsername ? ` · пара: ${linkedAccountUsername}` : "";
-      const mirror =
-        accountKind === "demo" && demoMirrorAdmin
-          ? " · сделки демо-аккаунта администратора (просмотр)"
-          : "";
-      accText.textContent = `Аккаунт: ${label}${link}${mirror}`;
-    }
-    $("account-switch-live")?.classList.toggle("is-active", accountKind === "live");
-    $("account-switch-demo")?.classList.toggle("is-active", accountKind === "demo");
-    if ($("account-switch-live")) $("account-switch-live").disabled = accountKind === "live" || !canSwitchLive;
-    if ($("account-switch-demo")) $("account-switch-demo").disabled = accountKind === "demo" || !canSwitchDemo;
-  }
+  // Live↔Demo account switch removed — dual API keys on one login.
+
   document.querySelectorAll("[data-admin-only]").forEach((el) => {
     el.classList.toggle("hidden", !isAdminUser());
   });
   paintTestStrategyScanActions();
-  // Placement: Live (+ admin). Demo is view-only (house trades).
+  // Placement lives under main strategies settings.
   document.querySelectorAll("[data-placement-manage]").forEach((el) => {
-    const show = isAdminUser() || accountKind === "live";
+    const show = isAdminUser() || userMayUseBlock("strategy");
     el.classList.toggle("hidden", !show);
   });
   // Demo mirror: hide secrets / telegram / trading toggles (read-only view).
@@ -757,48 +793,71 @@ function updateMultiUserUi(me) {
   const tradingSection = $("trading-toggle-section");
   if (tradingSection) tradingSection.classList.toggle("hidden", settingsReadonly);
   document.body.classList.toggle("demo-readonly", settingsReadonly);
+  const dual = me?.secrets_dual;
   const statusEl = $("secrets-status");
-  if (statusEl && secrets) {
-    const profiles = Array.isArray(secrets.profiles) ? secrets.profiles : [];
-    const active = profiles.find((p) => p.active);
-    let base = "Ключи Bybit не заданы — добавьте API Key / Secret ниже";
-    if (profiles.length) {
-      base = active
-        ? `Торгуем на: ${active.name} (${active.mode_label || (active.demo_trading ? "Demo" : "Live")})`
-        : `Сохранено профилей: ${profiles.length} — выберите аккаунт ниже`;
-    }
-    if (accountKind === "demo") base = `${base} · режим Demo API`;
-    else if (accountKind === "live" && role !== "admin") base = `${base} · режим Live API`;
-    if (secrets.can_trade === false && secrets.trade_block_reason) {
-      statusEl.textContent = `${base}. ⚠ ${secrets.trade_block_reason}`;
-      statusEl.classList.add("secrets-status-warn");
-    } else if (secrets.can_trade === true) {
-      statusEl.textContent = `${base}. Торговля разрешена ключом.`;
-      statusEl.classList.remove("secrets-status-warn");
-    } else {
-      statusEl.textContent = base;
-      statusEl.classList.remove("secrets-status-warn");
-    }
+  if (statusEl) {
+    const fmt = (v) => (v === "all" ? "все" : v === "binance" ? "Binance" : "Bybit");
+    const bybitOk = !!(dual?.exchanges?.bybit?.has_live_secrets || dual?.has_live_secrets);
+    const binanceOk = !!dual?.exchanges?.binance?.has_live_secrets;
+    const parts = [];
+    if (bybitOk) parts.push("Bybit");
+    if (binanceOk) parts.push("Binance");
+    const keysLabel = parts.length ? `ключи: ${parts.join(", ")}` : "ключи не заданы";
+    statusEl.textContent = `Тест: ${fmt(tradeOnTestPref)} · Основные: ${fmt(tradeOnMainPref)} · ${keysLabel}`;
+    statusEl.classList.remove("secrets-status-warn");
   }
-  const liveRadio = $("secrets-mode-live");
-  const demoRadio = $("secrets-mode-demo");
-  if (liveRadio && demoRadio) {
-    if (accountKind === "demo") {
-      liveRadio.checked = false;
-      demoRadio.checked = true;
-      liveRadio.disabled = true;
-      demoRadio.disabled = true;
-    } else if (accountKind === "live" && role !== "admin") {
-      liveRadio.checked = true;
-      demoRadio.checked = false;
-      liveRadio.disabled = true;
-      demoRadio.disabled = true;
-    } else if (secrets && typeof secrets.demo_trading === "boolean") {
-      liveRadio.disabled = false;
-      demoRadio.disabled = false;
-      liveRadio.checked = !secrets.demo_trading;
-      demoRadio.checked = !!secrets.demo_trading;
+  const mainSel = $("trade-on-main-select");
+  if (mainSel) mainSel.value = tradeOnMainPref || "bybit";
+  const testSel = $("trade-on-test-select");
+  if (testSel) testSel.value = tradeOnTestPref || "bybit";
+  const paintSlot = (exchange, mode, st) => {
+    const el = $(`secrets-${exchange}-${mode}-status`);
+    const chip = $(`secrets-${exchange}-${mode}-chip`);
+    const has = !!st?.has_secrets;
+    const warn = has && st.can_trade === false && st.trade_block_reason;
+    const stateClass = warn ? "is-warn" : has ? "is-ok" : "is-missing";
+    if (el) {
+      el.textContent = warn
+        ? `⚠ ${st.trade_block_reason}`
+        : has
+          ? "Заданы"
+          : "Не заданы";
+      el.classList.remove("is-ok", "is-warn", "is-missing");
+      el.classList.add(stateClass);
     }
+    if (chip) {
+      chip.classList.remove("is-ok", "is-warn", "is-missing");
+      chip.classList.add(stateClass);
+      chip.title = warn
+        ? String(st.trade_block_reason || "")
+        : has
+          ? `${mode === "demo" ? "Demo" : "Live"}: ключи заданы`
+          : `${mode === "demo" ? "Demo" : "Live"}: ключи не заданы`;
+    }
+  };
+  for (const ex of ["bybit", "binance"]) {
+    const block = dual?.exchanges?.[ex] || (ex === "bybit" ? dual : null);
+    paintSlot(ex, "live", block?.live || (ex === "bybit" ? dual?.live : null));
+    paintSlot(ex, "demo", block?.demo || (ex === "bybit" ? dual?.demo : null));
+  }
+  // Auto-open exchange card that already has any keys (keeps empty Binance collapsed).
+  document.querySelectorAll(".secrets-ex-card[data-exchange]").forEach((card) => {
+    const ex = card.getAttribute("data-exchange");
+    const block = dual?.exchanges?.[ex] || (ex === "bybit" ? dual : null);
+    const hasAny = !!(block?.has_live_secrets || block?.has_demo_secrets
+      || (ex === "bybit" && (dual?.has_live_secrets || dual?.has_demo_secrets)));
+    if (hasAny && !card.dataset.userToggled) card.open = true;
+  });
+  // Legacy single-slot status elements (hidden)
+  const liveSt = dual?.live || (secrets?.demo_trading ? null : secrets);
+  const demoSt = dual?.demo;
+  const liveStatusEl = $("secrets-live-status");
+  if (liveStatusEl) {
+    liveStatusEl.textContent = liveSt?.has_secrets ? "Ключи заданы" : "Ключи не заданы";
+  }
+  const demoStatusEl = $("secrets-demo-status");
+  if (demoStatusEl) {
+    demoStatusEl.textContent = demoSt?.has_secrets ? "Ключи заданы" : "Ключи не заданы";
   }
   renderSecretsProfiles(secrets);
   applyBlockVisibility();
@@ -1089,8 +1148,9 @@ function isDeepseekStatsRow(row) {
 }
 
 function isPriceActionTrade(trade) {
-  const tag = String(trade?.enter_tag || "");
-  const strat = String(trade?.strategy || "");
+  if (!trade) return false;
+  const tag = String(trade.enter_tag || "");
+  const strat = String(trade.strategy || "");
   return (
     tag.startsWith("PaTrendPullback") ||
     tag.startsWith("PaLiquiditySweep") ||
@@ -1101,19 +1161,21 @@ function isPriceActionTrade(trade) {
 
 function isPriceActionStatsRow(row) {
   if (!row) return false;
-  return (
-    String(row.key || "") === PRICE_ACTION_STATS_KEY ||
-    String(row.name || "") === PRICE_ACTION_STATS_LABEL ||
-    isPriceActionTrade({ enter_tag: row.key, strategy: row.name })
-  );
+  return isPriceActionTrade({ enter_tag: row.enter_tag || row.source_id || row.id, strategy: row.strategy });
 }
 
 function isRetiredTrade(trade) {
-  return isLlmTrade(trade) || isBookTrade(trade) || isCursorTrade(trade) || isCursorBookTrade(trade);
+  return (
+    isLlmTrade(trade) ||
+    isBookTrade(trade) ||
+    isCursorTrade(trade) ||
+    isCursorBookTrade(trade) ||
+    isPriceActionTrade(trade)
+  );
 }
 
 function isRetiredStatsRow(row) {
-  return isDeepseekStatsRow(row);
+  return isDeepseekStatsRow(row) || isPriceActionStatsRow(row);
 }
 
 function tradeSourceLabel(trade, bot) {
@@ -1123,7 +1185,7 @@ function tradeSourceLabel(trade, bot) {
   if (isBookTrade(trade)) return LLM50_STATS_LABEL;
   if (isCursorTrade(trade)) return CURSOR_STATS_LABEL;
   if (isCursorBookTrade(trade)) return CURSOR50_STATS_LABEL;
-  if (isPriceActionTrade(trade)) return PRICE_ACTION_STATS_LABEL;
+  if (isPriceActionTrade(trade)) return "Price Action";
   if (trade.enter_tag) {
     const raw = String(trade.enter_tag);
     let tag = raw.replace(/:hedge$/i, "").replace(/:inv$/i, "");
@@ -1152,6 +1214,8 @@ function exitReasonLabel(reason) {
     sold_on_exchange: "На бирже",
     stoploss_on_exchange: "Стоп (биржа)",
     custom_exit: "Кастом",
+    time_exit: "По времени (прибыль)",
+    time_exit_loss: "По времени (убыток)",
   };
   return map[reason] || reason || "—";
 }
@@ -1353,11 +1417,7 @@ const STATS_SCOPE_META = {
   finder: { title: "Статистика — ML Finder", note: "Сделки TradeFinderStrategy (XGBoost scanner + pnl gate), даже если Finder сейчас выключен." },
   strategy: {
     title: "Статистика — стратегии + ML gate",
-    note: "Закрытые сделки основных стратегий по enter_tag (без тестового блока, 1-часовых и Price Action). Входы с ML gate.",
-  },
-  price_action: {
-    title: "Статистика — Price Action",
-    note: "Закрытые сделки Price Action: Trend Pullback и Liquidity Sweep. Вход по скору 0–8 и фильтрам, без ML-гейта.",
+    note: "Закрытые сделки основных стратегий по enter_tag (без тестового блока и 1-часовых). Входы с ML gate.",
   },
   htf1h: {
     title: "Статистика — 1-часовые",
@@ -1365,11 +1425,11 @@ const STATS_SCOPE_META = {
   },
   test_strategy: {
     title: "Статистика — тестовые стратегии",
-    note: "Только тестовый блок (#101–115: top-10 + #31/#32–35 клоны). Тот же strategy-бот.",
+    note: "Сделки стратегий из панели «Тестовые» (перенос в Настройках). Тот же strategy-бот; инв/хедж считаются отдельно.",
   },
   grid: {
-    title: "Статистика — Grid + ML gate",
-    note: "Закрытые сделки Grid (VolatilityGridStrategy, ML gate live_grid), даже если бот остановлен.",
+    title: "Статистика — Grid · Demo",
+    note: "Закрытые сделки Grid на Demo-счёте администратора, даже если бот остановлен.",
   },
   bybitgrid: { title: "Статистика — Bybit Grid", note: "Закрытые нативные grid-боты на бирже Bybit." },
 };
@@ -1506,7 +1566,7 @@ async function startBotsEventsStream() {
   }, 2500);
 }
 
-async function setBotEnabled(bot, enabled) {
+async function setBotEnabled(bot, enabled, accountMode = "live") {
   // Optimistic
   botsControl[bot] = {
     ...(botsControl[bot] || {}),
@@ -1516,10 +1576,18 @@ async function setBotEnabled(bot, enabled) {
     status: enabled ? "STARTING" : "STOPPING",
   };
   tradingFlags = { ...tradingFlags, [bot]: !!enabled };
+  if (accountMode === "demo") {
+    tradingFlagsDemo = { ...tradingFlagsDemo, [bot]: !!enabled };
+  } else {
+    tradingFlagsLive = { ...tradingFlagsLive, [bot]: !!enabled };
+  }
   paintControlState(bot);
-  const snap = await pairConfigApi(`/bots/${bot}`, "PATCH", { enabled: !!enabled });
-  if (snap?.bot) {
-    botsControl[bot] = snap;
+  const snap = await pairConfigApi(`/bots/${bot}`, "PATCH", {
+    enabled: !!enabled,
+    account_mode: accountMode === "demo" ? "demo" : "live",
+  });
+  if (snap?.bot || snap?.desired != null) {
+    botsControl[bot] = { ...(botsControl[bot] || {}), ...snap, bot };
     paintControlState(bot);
   }
   return snap;
@@ -1574,6 +1642,8 @@ async function refreshPairlistMode() {
 
 let statsScope = "all";
 let statsPeriod = "all";
+let statsDateFrom = "";
+let statsDateTo = "";
 let statsDataCache = null;
 
 let historyScope = "all";
@@ -1591,6 +1661,8 @@ const CLOSED_TRADES_FETCH_LIMIT = 0;
 let pnlDashScope = "all";
 let pnlDashTf = "5m";
 let pnlDashPeriod = "all";
+let pnlDashDateFrom = "";
+let pnlDashDateTo = "";
 let pnlDashSide = "all"; // all | long | short
 let pnlDashDataCache = null;
 
@@ -1634,6 +1706,10 @@ const HISTORY_EXPORT_COLUMNS = [
   { id: "pnl_pct", label: "PnL %", default: true },
   { id: "pnl_net_usdt", label: "С комиссией USDT", default: true },
   { id: "pnl_net_pct", label: "С комиссией %", default: false },
+  { id: "max_profit_usdt", label: "Макс. прибыль USDT", default: true },
+  { id: "max_profit_pct", label: "Макс. прибыль %", default: false },
+  { id: "max_loss_usdt", label: "Макс. убыток USDT", default: true },
+  { id: "max_loss_pct", label: "Макс. убыток %", default: false },
   { id: "stake", label: "Стейк USDT", default: false },
   { id: "leverage", label: "Плечо", default: false },
   { id: "trade_id", label: "№ сделки", default: false },
@@ -1690,6 +1766,30 @@ const STATS_PERIOD_LABELS = {
 
 function normalizeStatsPeriod(period) {
   return STATS_PERIODS.has(period) ? period : "all";
+}
+
+function formatCustomPeriodLabel(dateFrom, dateTo) {
+  const fmt = (iso) => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ""));
+    return m ? `${m[3]}.${m[2]}.${m[1]}` : "";
+  };
+  const from = fmt(dateFrom);
+  const to = fmt(dateTo);
+  if (from && to) return `${from} — ${to}`;
+  if (from) return `с ${from}`;
+  if (to) return `по ${to}`;
+  return "";
+}
+
+function statsPeriodLabel(period, dateFrom = "", dateTo = "") {
+  return formatCustomPeriodLabel(dateFrom, dateTo) || STATS_PERIOD_LABELS[period] || STATS_PERIOD_LABELS.all;
+}
+
+function syncDateInputs(fromId, toId, fromValue, toValue) {
+  const from = $(fromId);
+  const to = $(toId);
+  if (from && from.value !== fromValue) from.value = fromValue;
+  if (to && to.value !== toValue) to.value = toValue;
 }
 
 function periodBounds(period, dateFrom, dateTo) {
@@ -1790,29 +1890,69 @@ function isBotStatsLabel(name) {
   );
 }
 
-function isTestCatalogEntry(s) {
+function isBirthTestStrategy(s) {
   if (!s) return false;
-  if (s.ui_panel) return s.ui_panel === "test";
-  return !!(s.test_group || s.testGroup);
+  if (s.catalog_test_group != null) return !!s.catalog_test_group;
+  // Birth test pack: *TestStrategy / explicit test_group / nums 101+
+  if (s.test_group || s.testGroup) return true;
+  const id = String(s.id || "");
+  if (/TestStrategy$/i.test(id)) return true;
+  if (id === "GruBarrierStrategy" || id === "OkalaRange8020Strategy") return true;
+  const num = Number(s.num);
+  return Number.isFinite(num) && num >= 101;
+}
+
+function isTestCatalogEntry(s) {
+  // Listed on Тестовые toggles (full catalog may show here).
+  if (!s) return false;
+  if (s.show_on_test === true) return true;
+  if (s.ui_panel && s.ui_panel === "hidden") return false;
+  return isBirthTestStrategy(s) || strategyUiPanel(s) === "test" || !s.in_main;
+}
+
+/** Demo/test lane for trades & stats: not copied into placement.main. */
+function isTestLaneStrategy(s) {
+  if (!s || isHtfStrategy(s)) return false;
+  if (s.in_main != null) return !s.in_main;
+  if (s.show_on_main === true) return false;
+  return strategyUiPanel(s) === "test" || isBirthTestStrategy(s);
 }
 
 function isHtfStrategyId(id) {
   return /1hStrategy(?::inv|:hedge)?$/i.test(String(id || ""));
 }
 
+/** Strip :inv / :hedge so panel filters match catalog ids. */
+function statsRowBaseId(key) {
+  let raw = String(key || "");
+  while (true) {
+    const low = raw.toLowerCase();
+    if (low.endsWith(":hedge")) raw = raw.slice(0, -":hedge".length);
+    else if (low.endsWith(":inv")) raw = raw.slice(0, -":inv".length);
+    else return raw;
+  }
+}
+
 function isTestStatsRow(row, catalog = strategyCatalog) {
   const list = catalog || strategyCatalog || [];
-  const ids = new Set(list.filter(isTestCatalogEntry).map((s) => s.id));
-  if (ids.has(row.key)) return true;
-  const fromCatalog = list.find((s) => strategyCatalogLabel(s) === row.name);
-  return !!(fromCatalog && isTestCatalogEntry(fromCatalog));
+  const base = statsRowBaseId(row?.key);
+  const fromCatalog = list.find(
+    (s) => s.id === base || s.id === row?.key || strategyCatalogLabel(s) === row?.name
+  );
+  if (fromCatalog) return isTestLaneStrategy(fromCatalog);
+  return /TestStrategy$/i.test(String(base || row?.key || ""));
 }
 
 function isHtfStatsRow(row, catalog = strategyCatalog) {
-  if (isHtfStrategyId(row?.key)) return true;
+  if (isHtfStrategyId(row?.key) || isHtfStrategyId(statsRowBaseId(row?.key))) return true;
   const list = catalog || strategyCatalog || [];
-  if (list.some((s) => s.id === row?.key && (isHtfStrategy(s) || isHtfStrategyId(s.id)))) return true;
-  const fromCatalog = list.find((s) => strategyCatalogLabel(s) === row?.name);
+  const base = statsRowBaseId(row?.key);
+  if (list.some((s) => (s.id === row?.key || s.id === base) && (isHtfStrategy(s) || isHtfStrategyId(s.id)))) {
+    return true;
+  }
+  const fromCatalog = list.find(
+    (s) => s.id === base || strategyCatalogLabel(s) === row?.name
+  );
   return !!(fromCatalog && (isHtfStrategy(fromCatalog) || isHtfStrategyId(fromCatalog.id)));
 }
 
@@ -1830,9 +1970,6 @@ function filterStatsRows(rows, scope, catalog = strategyCatalog) {
         !isHtfStatsRow(r, catalog) &&
         !isPriceActionStatsRow(r)
     );
-  }
-  if (scope === "price_action") {
-    return visible.filter((r) => isPriceActionStatsRow(r));
   }
   if (scope === "htf1h") {
     return visible.filter((r) => isHtfStatsRow(r, catalog));
@@ -1879,7 +2016,6 @@ function buildStatsRows(finderTrades, stratTrades, gridTrades, bybitHistory, cat
   ensure(FINDER_STATS_LABEL, FINDER_STATS_LABEL);
   ensure(GRID_STATS_LABEL, GRID_STATS_LABEL);
   ensure(BYBIT_GRID_STATS_LABEL, BYBIT_GRID_STATS_LABEL);
-  ensure(PRICE_ACTION_STATS_KEY, PRICE_ACTION_STATS_LABEL);
   // Keep every catalog strategy row (incl. disabled) so add/remove toggles never drop history labels.
   for (const s of catalog) ensure(s.id, strategyCatalogLabel(s));
 
@@ -1897,7 +2033,6 @@ function buildStatsRows(finderTrades, stratTrades, gridTrades, bybitHistory, cat
     FINDER_STATS_LABEL,
     GRID_STATS_LABEL,
     BYBIT_GRID_STATS_LABEL,
-    PRICE_ACTION_STATS_KEY,
     ...catalog.map((s) => s.id),
   ];
   const result = [];
@@ -1923,7 +2058,7 @@ function buildHistoryEntries(
   pairFilter = ""
 ) {
   const entries = [];
-  const modelScopes = new Set(["llm", "llm50", "cursor", "cursor50", "price_action"]);
+  const modelScopes = new Set(["llm", "llm50", "cursor", "cursor50"]);
   const ftBots =
     scope === "all"
       ? ["finder", "strategy", "grid"]
@@ -1955,7 +2090,7 @@ function buildHistoryEntries(
   let filtered = entries;
   if (scope === "test_strategy" || scope === "strategy" || scope === "htf1h") {
     const testIds = new Set(
-      (strategyCatalog || []).filter(isTestCatalogEntry).map((s) => s.id)
+      (strategyCatalog || []).filter(isTestLaneStrategy).map((s) => s.id)
     );
     filtered = filtered.filter((entry) => {
       if (entry.kind !== "trade" || entry.bot !== "strategy") return false;
@@ -1963,7 +2098,7 @@ function buildHistoryEntries(
       const htf = isHtfTrade(entry.trade) || isHtfStrategyId(sid);
       if (scope === "htf1h") return htf;
       if (htf) return false;
-      if (scope === "strategy" && (isRetiredTrade(entry.trade) || isPriceActionTrade(entry.trade))) return false;
+      if (scope === "strategy" && isRetiredTrade(entry.trade)) return false;
       const isTest = testIds.has(sid);
       return scope === "test_strategy" ? isTest : !isTest;
     });
@@ -1978,7 +2113,7 @@ function buildHistoryEntries(
       if (scope === "llm50") return isBookTrade(entry.trade);
       if (scope === "cursor") return isCursorTrade(entry.trade);
       if (scope === "cursor50") return isCursorBookTrade(entry.trade);
-      return isPriceActionTrade(entry.trade);
+      return false;
     });
   }
   if (strategyFilter && strategyFilter !== "all") {
@@ -2023,7 +2158,7 @@ function historyBotLabel(entry) {
   if (entry.kind === "bybit") return BYBIT_GRID_STATS_LABEL;
   if (entry.bot === "finder") return FINDER_STATS_LABEL;
   if (entry.bot === "grid") return GRID_STATS_LABEL;
-  if (entry.bot === "strategy" && entry.trade && isPriceActionTrade(entry.trade)) return PRICE_ACTION_STATS_LABEL;
+  if (entry.bot === "strategy" && entry.trade && isPriceActionTrade(entry.trade)) return "Price Action";
   if (entry.bot === "strategy" && entry.trade && isHtfTrade(entry.trade)) return "1-часовые";
   return BOTS[entry.bot]?.label || entry.bot;
 }
@@ -2113,6 +2248,10 @@ function historyEntryExportRow(entry) {
       pnl_pct: "",
       pnl_net_usdt: pnl.toFixed(4),
       pnl_net_pct: "",
+      max_profit_usdt: "",
+      max_profit_pct: "",
+      max_loss_usdt: "",
+      max_loss_pct: "",
       stake: item.total_investment != null ? String(item.total_investment) : "",
       leverage: item.leverage != null ? String(item.leverage) : "",
       trade_id: item.bot_id || "",
@@ -2137,6 +2276,7 @@ function historyEntryExportRow(entry) {
     pnl_pct: pct.toFixed(2),
     pnl_net_usdt: net.abs.toFixed(4),
     pnl_net_pct: net.pct.toFixed(2),
+    ...historyExtremeExportFields(t),
     stake: t.stake_amount != null ? String(t.stake_amount) : "",
     leverage: t.leverage != null ? String(t.leverage) : "",
     trade_id: t.trade_id != null ? String(t.trade_id) : "",
@@ -2209,6 +2349,15 @@ function historyCardHtml(entry) {
     mlConf && mlConf !== "—"
       ? `<span class="history-chip history-chip-ml" title="${escapeHtml(fmtMlConfidenceDetail(t))}">ML ${escapeHtml(mlConf)}</span>`
       : `<span class="history-chip history-chip-ml is-missing" title="Фактическая уверенность ML недоступна">ML —</span>`;
+  const { maxProfit, maxLoss } = tradeMaxProfitLoss(t, { requireTracked: true });
+  const extremeChips = [
+    maxProfit
+      ? `<span class="history-chip ${pnlClass(maxProfit.abs)}" title="Максимальная прибыль за время сделки">Макс+ ${fmtUsdSigned(maxProfit.abs, 2)}</span>`
+      : "",
+    maxLoss
+      ? `<span class="history-chip ${pnlClass(maxLoss.abs)}" title="Максимальный убыток за время сделки">Макс− ${fmtUsdSigned(maxLoss.abs, 2)}</span>`
+      : "",
+  ].join("");
   return `<article class="history-card ${pnlClass(net.abs)} ${botClass}">
     <div class="history-card-top">
       <div class="history-card-main">
@@ -2226,6 +2375,7 @@ function historyCardHtml(entry) {
       <span class="history-chip">${escapeHtml(source)}</span>
       ${mlChip}
       <span class="history-chip" title="Стоп и тейк, записанные на сделке">${escapeHtml(historySltpCell(t))}</span>
+      ${extremeChips}
       <span class="history-chip muted-chip">${escapeHtml(exitReasonLabel(t.exit_reason))}</span>
     </div>
   </article>`;
@@ -2274,7 +2424,7 @@ function renderHistoryTable(entries) {
   if (bodyEl) {
     if (!entries.length) {
       bodyEl.innerHTML =
-        '<tr class="stats-history-empty"><td colspan="10">Нет закрытых сделок по выбранным фильтрам</td></tr>';
+        '<tr class="stats-history-empty"><td colspan="12">Нет закрытых сделок по выбранным фильтрам</td></tr>';
     } else {
       bodyEl.innerHTML = pageEntries
         .map((entry) => {
@@ -2292,6 +2442,8 @@ function renderHistoryTable(entries) {
           <td>—</td>
           <td class="history-pnl-cell ${pnlClassName}">${fmtUsdSigned(pnl, 2)}</td>
           <td class="history-pnl-cell ${pnlClassName}">${fmtUsdSigned(pnl, 2)}</td>
+          <td class="history-pnl-cell">—</td>
+          <td class="history-pnl-cell">—</td>
           <td>${escapeHtml(bybitExitLabel(item))}</td>
         </tr>`;
           }
@@ -2309,6 +2461,7 @@ function renderHistoryTable(entries) {
             `Комиссия ${(BYBIT_TAKER_FEE_RATE * 100).toFixed(2)}% × 2 ≈ ${fmtUsd(net.fees, 4)}`
           );
           const botClass = historyBotClass(entry);
+          const { maxProfit, maxLoss } = tradeMaxProfitLoss(t, { requireTracked: true });
           return `<tr class="history-row ${botClass}">
         <td>${fmtTradeDate(t)}</td>
         <td><span class="history-bot-badge">${botLabel}</span></td>
@@ -2319,6 +2472,8 @@ function renderHistoryTable(entries) {
         <td title="${mlTitle}">${escapeHtml(mlConf)}</td>
         <td class="history-pnl-cell ${pnlClassName}">${fmtUsdSigned(abs, 2)}<br><span class="muted history-pnl-pct">${fmtPct(pct)}</span></td>
         <td class="history-pnl-cell ${netClassName}" title="${feeTitle}">${fmtUsdSigned(net.abs, 2)}<br><span class="muted history-pnl-pct">${fmtPct(net.pct)}</span></td>
+        <td class="history-pnl-cell ${maxProfit ? pnlClass(maxProfit.abs) : ""}" title="Максимальная прибыль за время сделки">${fmtHistoryExtremeCell(maxProfit)}</td>
+        <td class="history-pnl-cell ${maxLoss ? pnlClass(maxLoss.abs) : ""}" title="Максимальный убыток за время сделки">${fmtHistoryExtremeCell(maxLoss)}</td>
         <td>${escapeHtml(exitReasonLabel(t.exit_reason))}</td>
       </tr>`;
         })
@@ -2354,10 +2509,12 @@ function catalogForHistoryScope(catalog, scope) {
   const list = catalog || strategyCatalog || [];
   if (scope === "htf1h") return list.filter((s) => isHtfStrategy(s) || isHtfStrategyId(s.id));
   if (scope === "test_strategy") {
-    return list.filter((s) => isTestCatalogEntry(s) && !isHtfStrategy(s) && !isHtfStrategyId(s.id));
+    return list.filter((s) => isTestLaneStrategy(s) && !isHtfStrategyId(s.id));
   }
   if (scope === "strategy") {
-    return list.filter((s) => !isTestCatalogEntry(s) && !isHtfStrategy(s) && !isHtfStrategyId(s.id));
+    return list.filter(
+      (s) => !isTestLaneStrategy(s) && !isHtfStrategy(s) && !isHtfStrategyId(s.id)
+    );
   }
   return list;
 }
@@ -2606,6 +2763,1466 @@ function bindHistoryControls() {
   $("history-page-next")?.addEventListener("click", () => setHistoryPage(historyPage + 1));
 }
 
+/* --- Analytics: Графики сделок --- */
+const CHART_SETUP_BARS = 60;
+const CHART_TAIL_CONTEXT = 8;
+const CHARTS_PAGE_SIZE = 40;
+const CHARTS_ZIP_MAX = 2000;
+
+let chartsPeriod = "all";
+let chartsDateFrom = "";
+let chartsDateTo = "";
+let chartsSide = "all";
+let chartsStrategy = "all";
+let chartsPage = 1;
+let chartsClosed = [];
+let chartsOpen = [];
+let chartsZipBusy = false;
+let chartsLoadToken = 0;
+const chartsExpanded = new Set();
+const chartsModelCache = new Map();
+const chartsPngCache = new Map();
+const chartsJsonCache = new Map();
+const chartObjectUrls = new Map();
+const chartPaintGen = new Map();
+
+const ZIP_CRC_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let n = 0; n < 256; n += 1) {
+    let c = n;
+    for (let k = 0; k < 8; k += 1) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    table[n] = c >>> 0;
+  }
+  return table;
+})();
+
+function closeCharts() {
+  $("charts-view")?.classList.add("hidden");
+  $("charts-view")?.setAttribute("aria-hidden", "true");
+  $("dashboard-view")?.classList.remove("hidden");
+}
+
+function openCharts() {
+  if (!userMayUseBlock("history")) return;
+  closeMobileMenu();
+  hideMainViewsForOverlay();
+  const view = $("charts-view");
+  view?.classList.remove("hidden");
+  view?.setAttribute("aria-hidden", "false");
+  seedChartsFromKnownTrades();
+  loadCharts();
+}
+
+function chartErrorText(err) {
+  const raw = String(err?.message || err || "ошибка");
+  if (raw === "auth") return "нужен вход";
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed?.error) return String(parsed.error);
+  } catch {
+    /* plain text */
+  }
+  return raw.slice(0, 200);
+}
+
+function chartEntryKey(entry) {
+  const id = entry.trade.trade_id ?? entry.trade.id ?? entry.trade.open_date ?? "";
+  return `${entry.bot}:${id}:${entry.open ? "open" : "closed"}`;
+}
+
+function chartTradePnl(entry) {
+  const t = entry.trade;
+  if (entry.open) {
+    const abs = Number(t.profit_abs ?? t.total_profit_abs ?? 0);
+    let pct = Number(t.profit_pct ?? 0);
+    if (Math.abs(pct) <= 1 && pct !== 0) pct *= 100;
+    return { abs, pct };
+  }
+  return closedTradePnl(t);
+}
+
+function chartTimeframe(trade) {
+  if (isHtfTrade(trade)) return { interval: "60", tfMs: 60 * 60 * 1000, label: "1ч" };
+  return { interval: "5", tfMs: 5 * 60 * 1000, label: "5м" };
+}
+
+function ingestClosedChartTrades(data) {
+  const out = [];
+  const groups = [
+    ["finder", data?.finderTrades],
+    ["strategy", data?.stratTrades],
+    ["grid", data?.gridTrades],
+  ];
+  for (const [bot, list] of groups) {
+    for (const trade of list || []) {
+      if (!trade?.pair || trade.is_open || isRetiredTrade(trade)) continue;
+      out.push({ bot, trade, open: false });
+    }
+  }
+  return out;
+}
+
+function ingestOpenChartTrades(bundle) {
+  const out = [];
+  const bots = bundle?.bots || {};
+  for (const bot of Object.keys(bots)) {
+    for (const trade of bots[bot]?.trades || []) {
+      if (!trade?.pair || !trade.open_date || isRetiredTrade(trade)) continue;
+      out.push({ bot, trade, open: true });
+    }
+  }
+  return out;
+}
+
+function chartUniverse() {
+  const map = new Map();
+  for (const entry of chartsClosed) {
+    const id = entry.trade.trade_id ?? entry.trade.id ?? entry.trade.open_date;
+    map.set(`${entry.bot}:${id}`, entry);
+  }
+  for (const entry of chartsOpen) {
+    const id = entry.trade.trade_id ?? entry.trade.id ?? entry.trade.open_date;
+    const key = `${entry.bot}:${id}`;
+    if (!map.has(key)) map.set(key, entry);
+  }
+  return [...map.values()];
+}
+
+function chartEntryInPeriod(entry) {
+  const custom = Boolean(chartsDateFrom || chartsDateTo);
+  if (entry.open && !custom && chartsPeriod !== "yesterday") return true;
+  const ms = entry.open
+    ? parseAppInstant(entry.trade.open_date)?.getTime() || 0
+    : tradeCloseMs(entry.trade);
+  return isInPeriodMs(ms, chartsPeriod, chartsDateFrom, chartsDateTo);
+}
+
+function chartEntryTime(entry) {
+  if (entry.open) return parseAppInstant(entry.trade.open_date)?.getTime() || 0;
+  return tradeCloseMs(entry.trade);
+}
+
+function filterChartEntries(strategy) {
+  let list = chartUniverse().filter(chartEntryInPeriod);
+  if (chartsSide === "long") list = list.filter((e) => !e.trade.is_short);
+  else if (chartsSide === "short") list = list.filter((e) => Boolean(e.trade.is_short));
+  if (strategy && strategy !== "all") {
+    list = list.filter((e) => tradeSourceId(e.trade, e.bot) === strategy);
+  }
+  list.sort((a, b) => {
+    if (a.open !== b.open) return a.open ? -1 : 1;
+    return chartEntryTime(b) - chartEntryTime(a);
+  });
+  return list;
+}
+
+function getFilteredChartEntries() {
+  return filterChartEntries(chartsStrategy);
+}
+
+function findChartEntry(key) {
+  return chartUniverse().find((entry) => chartEntryKey(entry) === key) || null;
+}
+
+function renderChartsStrategyPills(entries) {
+  const el = $("charts-strategy-pills");
+  if (!el) return;
+  const map = new Map();
+  for (const entry of entries) {
+    const id = tradeSourceId(entry.trade, entry.bot);
+    if (!map.has(id)) map.set(id, tradeSourceLabel(entry.trade, entry.bot));
+  }
+  if (chartsStrategy !== "all" && !map.has(chartsStrategy)) chartsStrategy = "all";
+  const sig = `${chartsStrategy}|${[...map.keys()].sort().join("\n")}`;
+  if (el.dataset.sig === sig) return;
+  el.dataset.sig = sig;
+  const items = [...map.entries()].sort((a, b) => a[1].localeCompare(b[1], "ru"));
+  const allActive = chartsStrategy === "all" ? " is-active" : "";
+  el.innerHTML =
+    `<button type="button" class="btn btn-sm charts-pill${allActive}" data-charts-strategy="all">Все</button>` +
+    items
+      .map(([id, label]) => {
+        const active = chartsStrategy === id ? " is-active" : "";
+        return `<button type="button" class="btn btn-sm charts-pill${active}" data-charts-strategy="${escapeHtml(id)}">${escapeHtml(label)}</button>`;
+      })
+      .join("");
+}
+
+function chartsCells(entry) {
+  const t = entry.trade;
+  const pnl = chartTradePnl(entry);
+  const botLabel = historyBotLabel(entry);
+  const side = t.is_short ? "SHORT" : "LONG";
+  const source = tradeSourceLabel(t, entry.bot);
+  const pnlClassName = pnlClass(pnl.abs);
+  const when = entry.open ? fmtAppDateShort(t.open_date) : fmtTradeDate(t);
+  const exit = entry.open ? "Открыта" : exitReasonLabel(t.exit_reason);
+  return { when, botLabel, side, source, pnl, pnlClassName, exit, t };
+}
+
+function chartPanelHtml(key) {
+  return `<div class="trade-chart-panel">
+    <img class="trade-chart-canvas trade-chart-img" data-chart-img="${escapeHtml(key)}" alt="График сделки" />
+    <div class="trade-chart-actions">
+      <button type="button" class="btn btn-sm primary" data-chart-png="${escapeHtml(key)}">Скачать PNG</button>
+      <span class="muted trade-chart-status" data-chart-status="${escapeHtml(key)}"></span>
+    </div>
+  </div>`;
+}
+
+function renderChartsTable(entries) {
+  const body = $("charts-table-body");
+  const cards = $("charts-cards");
+  const start = (chartsPage - 1) * CHARTS_PAGE_SIZE;
+  const pageEntries = entries.slice(start, start + CHARTS_PAGE_SIZE);
+  if (body) {
+    if (!entries.length) {
+      body.innerHTML = '<tr class="stats-history-empty"><td colspan="9">Нет сделок по выбранным фильтрам</td></tr>';
+    } else {
+      body.innerHTML = pageEntries
+        .map((entry) => {
+          const key = chartEntryKey(entry);
+          const open = chartsExpanded.has(key);
+          const c = chartsCells(entry);
+          const botClass = historyBotClass(entry);
+          const detail = open
+            ? `<tr class="charts-detail"><td colspan="9">${chartPanelHtml(key)}</td></tr>`
+            : "";
+          return `<tr class="history-row charts-row ${botClass}${entry.open ? " charts-row-open" : ""}">
+        <td>${c.when}</td>
+        <td><span class="history-bot-badge">${c.botLabel}</span></td>
+        <td class="history-pair-cell">${escapeHtml(c.t.pair || "—")}</td>
+        <td><span class="history-side-badge side-${c.t.is_short ? "short" : "long"}">${c.side}</span></td>
+        <td>${escapeHtml(c.source)}</td>
+        <td class="history-sltp-cell">${escapeHtml(historySltpCell(c.t))}</td>
+        <td class="history-pnl-cell ${c.pnlClassName}">${fmtUsdSigned(c.pnl.abs, 2)}<br><span class="muted history-pnl-pct">${fmtPct(c.pnl.pct)}</span></td>
+        <td>${escapeHtml(c.exit)}</td>
+        <td class="charts-action-cell"><button type="button" class="btn btn-sm ${open ? "ghost" : "primary"}" data-chart-toggle="${escapeHtml(key)}">${open ? "Скрыть" : "График"}</button></td>
+      </tr>${detail}`;
+        })
+        .join("");
+    }
+  }
+  if (cards) {
+    if (!entries.length) {
+      cards.innerHTML = '<p class="history-cards-empty muted">Нет сделок по выбранным фильтрам</p>';
+    } else {
+      cards.innerHTML = pageEntries
+        .map((entry) => {
+          const key = chartEntryKey(entry);
+          const open = chartsExpanded.has(key);
+          const c = chartsCells(entry);
+          const botClass = historyBotClass(entry);
+          const panel = open ? chartPanelHtml(key) : "";
+          return `<article class="history-card ${c.pnlClassName} ${botClass}">
+        <div class="history-card-top">
+          <div class="history-card-main">
+            <strong class="history-card-pair">${escapeHtml(c.t.pair || "—")}</strong>
+            <span class="history-card-meta">${c.when} · ${c.botLabel} · ${escapeHtml(c.source)}</span>
+          </div>
+          <div class="history-card-pnl ${c.pnlClassName}">${fmtUsdSigned(c.pnl.abs, 2)}</div>
+        </div>
+        <div class="history-card-tags">
+          <span class="history-chip">${c.side}</span>
+          <span class="history-chip">${escapeHtml(c.exit)}</span>
+        </div>
+        <div class="trade-chart-actions">
+          <button type="button" class="btn btn-sm ${open ? "ghost" : "primary"}" data-chart-toggle="${escapeHtml(key)}">${open ? "Скрыть" : "График"}</button>
+        </div>
+        ${panel}
+      </article>`;
+        })
+        .join("");
+    }
+  }
+}
+
+function renderChartsPagination(total) {
+  const wrap = $("charts-pagination");
+  const info = $("charts-page-info");
+  const pages = Math.max(1, Math.ceil(total / CHARTS_PAGE_SIZE) || 1);
+  if (chartsPage > pages) chartsPage = pages;
+  const show = total > CHARTS_PAGE_SIZE;
+  if (wrap) {
+    wrap.classList.toggle("hidden", !show);
+    wrap.hidden = !show;
+  }
+  if (info) {
+    const from = total ? (chartsPage - 1) * CHARTS_PAGE_SIZE + 1 : 0;
+    const to = Math.min(chartsPage * CHARTS_PAGE_SIZE, total);
+    info.textContent = show ? `${from}–${to} из ${total}` : "";
+  }
+  const prev = $("charts-page-prev");
+  const next = $("charts-page-next");
+  if (prev) prev.disabled = chartsPage <= 1;
+  if (next) next.disabled = chartsPage >= pages;
+}
+
+function syncChartsDateInputs() {
+  const from = $("charts-date-from");
+  const to = $("charts-date-to");
+  if (from && from.value !== chartsDateFrom) from.value = chartsDateFrom;
+  if (to && to.value !== chartsDateTo) to.value = chartsDateTo;
+}
+
+function applyChartsDateRange() {
+  chartsDateFrom = $("charts-date-from")?.value || "";
+  chartsDateTo = $("charts-date-to")?.value || "";
+  chartsPage = 1;
+  renderChartsView();
+}
+
+function renderChartsView() {
+  const customRange = Boolean(chartsDateFrom || chartsDateTo);
+  document.querySelectorAll("[data-charts-period]").forEach((btn) => {
+    btn.classList.toggle(
+      "is-active",
+      !customRange && (btn.dataset.chartsPeriod || "all") === chartsPeriod,
+    );
+  });
+  syncChartsDateInputs();
+  document.querySelectorAll("[data-charts-side]").forEach((btn) => {
+    btn.classList.toggle("is-active", (btn.dataset.chartsSide || "all") === chartsSide);
+  });
+  const periodEntries = filterChartEntries("all");
+  renderChartsStrategyPills(periodEntries);
+  const entries = chartsStrategy === "all" ? periodEntries : filterChartEntries(chartsStrategy);
+  const pages = Math.max(1, Math.ceil(entries.length / CHARTS_PAGE_SIZE) || 1);
+  if (chartsPage > pages) chartsPage = pages;
+  renderChartsTable(entries);
+  renderChartsPagination(entries.length);
+  const status = $("charts-status");
+  if (status && !chartsZipBusy) {
+    const openN = entries.filter((e) => e.open).length;
+    let pnl = 0;
+    for (const entry of entries) {
+      if (!entry.open) pnl += chartTradePnl(entry).abs;
+    }
+    const pnlNote = entries.length ? ` · PnL закрытых ${fmtUsdSigned(pnl, 2)}` : "";
+    const openNote = openN ? ` · открытых ${openN}` : "";
+    const pageNote = entries.length > CHARTS_PAGE_SIZE ? ` · стр. ${chartsPage}/${pages}` : "";
+    status.textContent = `Всего ${entries.length} сделок${openNote}${pnlNote}${pageNote}`;
+  }
+  const start = (chartsPage - 1) * CHARTS_PAGE_SIZE;
+  for (const entry of entries.slice(start, start + CHARTS_PAGE_SIZE)) {
+    const key = chartEntryKey(entry);
+    if (!chartsExpanded.has(key)) continue;
+    const mem = chartsPngCache.get(chartPngMemKey(entry));
+    if (mem?.blob) showChartImage(key, mem.blob);
+  }
+}
+
+function seedChartsFromKnownTrades() {
+  const stats = historyDataCache || statsDataCache;
+  if (stats) chartsClosed = ingestClosedChartTrades(stats);
+  if (chartsClosed.length || chartsOpen.length) renderChartsView();
+}
+
+async function loadCharts() {
+  const token = ++chartsLoadToken;
+  const status = $("charts-status");
+  seedChartsFromKnownTrades();
+  if (!chartsClosed.length && !chartsOpen.length && status) status.textContent = "Загрузка сделок…";
+  const openPromise = pairConfigApi("/open-trades").catch(() => null);
+  try {
+    const stats = await prefetchStatsBundle();
+    if (token !== chartsLoadToken) return;
+    for (const key of [...chartsModelCache.keys()]) {
+      if (String(key).endsWith(":open")) chartsModelCache.delete(key);
+    }
+    chartsClosed = ingestClosedChartTrades(stats);
+    renderChartsView();
+  } catch (err) {
+    if (err?.message === "auth") {
+      logout();
+      return;
+    }
+    if (status && !chartsClosed.length && !chartsOpen.length) status.textContent = chartErrorText(err);
+  }
+  try {
+    const openBundle = await openPromise;
+    if (token !== chartsLoadToken || !openBundle) return;
+    chartsOpen = ingestOpenChartTrades(openBundle);
+    renderChartsView();
+  } catch {
+    /* открытые сделки не блокируют список */
+  }
+}
+
+function chartNodes(attr, key) {
+  return [...document.querySelectorAll(`[${attr}]`)].filter((node) => node.getAttribute(attr) === key);
+}
+
+function pickVisibleChartCanvas(key) {
+  return chartNodes("data-chart-canvas", key).find((el) => el.getClientRects().length > 0) || null;
+}
+
+function candleIndexAt(candles, ms) {
+  if (!candles.length) return -1;
+  if (!ms || ms < candles[0].t) return 0;
+  let best = 0;
+  for (let i = 0; i < candles.length; i += 1) {
+    if (candles[i].t <= ms) best = i;
+    else break;
+  }
+  return best;
+}
+
+function buildTradeChartModel(entry, payload, ctx) {
+  const head = Array.isArray(payload?.candles) ? payload.candles : [];
+  const tailRaw = Array.isArray(payload?.tail) ? payload.tail : [];
+  const headLast = head.length ? head[head.length - 1].t : 0;
+  const tail = tailRaw.filter((candle) => candle.t > headLast);
+  const gapAt = tail.length ? head.length : null;
+  const candles = tail.length ? head.concat(tail) : head.slice();
+  if (!candles.length) throw new Error("нет свечей по этой паре");
+  const entryIdx = candleIndexAt(candles, ctx.openMs);
+  let exitIdx = ctx.closeMs ? candleIndexAt(candles, ctx.closeMs) : candles.length - 1;
+  if (exitIdx < entryIdx) exitIdx = Math.max(entryIdx, candles.length - 1);
+  const t = entry.trade;
+  const pnl = chartTradePnl(entry);
+  return {
+    candles,
+    gapAt,
+    entryIdx,
+    exitIdx,
+    shadeFrom: Math.max(0, entryIdx - CHART_SETUP_BARS),
+    shadeTo: exitIdx,
+    strategy: tradeSourceLabel(t, entry.bot),
+    side: t.is_short ? "SHORT" : "LONG",
+    pair: t.pair || "—",
+    tfLabel: ctx.tfLabel,
+    pnlAbs: pnl.abs,
+    pnlPct: pnl.pct,
+    openRate: Number(t.open_rate) || null,
+    closeRate: entry.open ? Number(t.current_rate) || null : Number(t.close_rate) || null,
+    openTrade: !!entry.open,
+    truncated: !!payload?.truncated || gapAt != null,
+  };
+}
+
+async function loadChartModel(entry) {
+  const key = chartEntryKey(entry);
+  if (chartsModelCache.has(key)) return chartsModelCache.get(key);
+  const t = entry.trade;
+  const tf = chartTimeframe(t);
+  const openMs = parseAppInstant(t.open_date)?.getTime();
+  if (!openMs) throw new Error("нет времени входа");
+  const closeMs = entry.open ? null : tradeCloseMs(t);
+  if (!entry.open && !closeMs) throw new Error("нет времени выхода");
+  const endMs = (closeMs || Date.now()) + CHART_TAIL_CONTEXT * tf.tfMs;
+  const params = new URLSearchParams({
+    pair: t.pair || "",
+    interval: tf.interval,
+    start: String(Math.floor(openMs - (CHART_SETUP_BARS + 3) * tf.tfMs)),
+    end: String(Math.floor(endMs)),
+  });
+  const data = await pairConfigApi(`/market-klines?${params}`);
+  const model = buildTradeChartModel(entry, data, {
+    tfLabel: tf.label,
+    openMs,
+    closeMs,
+  });
+  chartsModelCache.set(key, model);
+  return model;
+}
+
+function chartFitText(ctx, text, maxW) {
+  const raw = String(text || "");
+  if (ctx.measureText(raw).width <= maxW) return raw;
+  let s = raw;
+  while (s.length > 1 && ctx.measureText(`${s}…`).width > maxW) s = s.slice(0, -1);
+  return `${s}…`;
+}
+
+function chartRoundRect(ctx, x, y, w, h, r) {
+  const radius = Math.max(0, Math.min(r, w / 2, h / 2));
+  ctx.beginPath();
+  ctx.moveTo(x + radius, y);
+  ctx.arcTo(x + w, y, x + w, y + h, radius);
+  ctx.arcTo(x + w, y + h, x, y + h, radius);
+  ctx.arcTo(x, y + h, x, y, radius);
+  ctx.arcTo(x, y, x + w, y, radius);
+  ctx.closePath();
+}
+
+function fmtChartTime(ms) {
+  return new Date(ms).toLocaleString("ru-RU", {
+    timeZone: APP_TIMEZONE,
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function drawTradeChart(ctx, model, width, height) {
+  const candles = model.candles || [];
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = "#121a24";
+  ctx.fillRect(0, 0, width, height);
+  ctx.textBaseline = "middle";
+  ctx.textAlign = "left";
+  ctx.font = "600 16px Segoe UI, system-ui, sans-serif";
+  ctx.fillStyle = "#e8eef7";
+  const sideText = model.side === "SHORT" ? "ШОРТ" : "ЛОНГ";
+  ctx.font = "700 13px Segoe UI, system-ui, sans-serif";
+  const badgeW = ctx.measureText(sideText).width + 22;
+  ctx.font = "600 16px Segoe UI, system-ui, sans-serif";
+  ctx.fillText(chartFitText(ctx, model.strategy || "Стратегия", Math.max(80, width - badgeW - 40)), 16, 22);
+
+  const short = model.side === "SHORT";
+  const loss = Number(model.pnlAbs) < 0;
+  const profit = Number(model.pnlAbs) > 0;
+  const ink = loss ? "#fca5a5" : profit ? "#6ee7b7" : "#cbd5e1";
+  const bx = width - 16 - badgeW;
+  ctx.font = "700 13px Segoe UI, system-ui, sans-serif";
+  ctx.fillStyle = short ? "rgba(239,68,68,0.2)" : "rgba(16,185,129,0.2)";
+  chartRoundRect(ctx, bx, 9, badgeW, 26, 13);
+  ctx.fill();
+  ctx.strokeStyle = short ? "#f87171" : "#34d399";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.fillStyle = short ? "#fca5a5" : "#6ee7b7";
+  ctx.textAlign = "center";
+  ctx.fillText(sideText, bx + badgeW / 2, 23);
+  ctx.textAlign = "left";
+
+  const pnlBit = `${fmtUsdSigned(model.pnlAbs, 2)} (${fmtPct(model.pnlPct)})`;
+  let sub = `${model.pair} · ${model.tfLabel} · ${pnlBit}`;
+  if (model.openTrade) sub += " · открыта";
+  if (model.truncated) sub += " · середина скрыта";
+  ctx.font = "12px Segoe UI, system-ui, sans-serif";
+  ctx.fillStyle = ink;
+  ctx.fillText(chartFitText(ctx, sub, width - 32), 16, 46);
+
+  if (!candles.length) return;
+  const axisW = 74;
+  const plotX = 12;
+  const plotW = Math.max(40, width - plotX - axisW - 8);
+  const plotY = 64;
+  const plotH = Math.max(80, height - plotY - 28);
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (const candle of candles) {
+    lo = Math.min(lo, Number(candle.l));
+    hi = Math.max(hi, Number(candle.h));
+  }
+  for (const price of [model.openRate, model.closeRate]) {
+    if (price > 0) {
+      lo = Math.min(lo, price);
+      hi = Math.max(hi, price);
+    }
+  }
+  if (!Number.isFinite(lo) || !Number.isFinite(hi)) return;
+  const pad = (hi - lo) * 0.1 || Math.abs(hi) * 0.002 || 1;
+  const min = lo - pad;
+  const max = hi + pad;
+  const yPrice = (price) => plotY + ((max - price) / (max - min)) * plotH;
+  const n = candles.length;
+  const gapAt = model.gapAt;
+  const gapW = gapAt == null ? 0 : 28;
+  const slot = (plotW - gapW) / n;
+  const xMid = (i) => plotX + (gapAt != null && i >= gapAt ? gapW : 0) + i * slot + slot / 2;
+  const xLeft = (i) => xMid(i) - slot / 2;
+
+  const s0 = Math.max(0, Math.min(model.shadeFrom ?? 0, n - 1));
+  const s1 = Math.max(s0, Math.min(model.shadeTo ?? n - 1, n - 1));
+  const zone = loss ? "rgba(239,68,68,0.22)" : profit ? "rgba(16,185,129,0.20)" : "rgba(148,163,184,0.16)";
+  const zoneStrong = loss ? "rgba(239,68,68,0.42)" : profit ? "rgba(16,185,129,0.40)" : "rgba(148,163,184,0.30)";
+  ctx.fillStyle = zone;
+  ctx.fillRect(xLeft(s0), plotY, xMid(s1) + slot / 2 - xLeft(s0), plotH);
+  ctx.fillStyle = zoneStrong;
+  const strong = new Set([model.entryIdx, model.openTrade ? n - 1 : model.exitIdx]);
+  for (const idx of strong) {
+    if (idx >= 0 && idx < n) ctx.fillRect(xLeft(idx), plotY, Math.max(slot, 1), plotH);
+  }
+
+  ctx.strokeStyle = "rgba(255,255,255,0.06)";
+  ctx.lineWidth = 1;
+  ctx.font = "11px Segoe UI, system-ui, sans-serif";
+  ctx.textAlign = "left";
+  for (let i = 0; i <= 3; i += 1) {
+    const price = max - ((max - min) * i) / 3;
+    const y = yPrice(price);
+    ctx.beginPath();
+    ctx.moveTo(plotX, y);
+    ctx.lineTo(plotX + plotW, y);
+    ctx.stroke();
+    ctx.fillStyle = "#8b9cb3";
+    ctx.textBaseline = "middle";
+    ctx.fillText(fmtRate(price), plotX + plotW + 6, y);
+  }
+
+  const priceTags = [];
+  const hLine = (price, color, label) => {
+    if (!(price > 0)) return;
+    const y = yPrice(price);
+    ctx.save();
+    ctx.setLineDash([4, 3]);
+    ctx.strokeStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(plotX, y);
+    ctx.lineTo(plotX + plotW, y);
+    ctx.stroke();
+    ctx.restore();
+    priceTags.push({ y, color, label });
+  };
+  hLine(model.openRate, "#e8eef7", "вход");
+  hLine(model.closeRate, ink, model.openTrade ? "сейчас" : "выход");
+
+  for (let i = 0; i < n; i += 1) {
+    const candle = candles[i];
+    const x = xMid(i);
+    const up = Number(candle.c) >= Number(candle.o);
+    ctx.strokeStyle = up ? "#34d399" : "#f87171";
+    ctx.fillStyle = ctx.strokeStyle;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x, yPrice(candle.h));
+    ctx.lineTo(x, yPrice(candle.l));
+    ctx.stroke();
+    const top = yPrice(Math.max(candle.o, candle.c));
+    const bot = yPrice(Math.min(candle.o, candle.c));
+    const bw = Math.max(1, Math.min(slot * 0.64, Math.max(slot - 0.3, 1)));
+    ctx.fillRect(x - bw / 2, top, bw, Math.max(1, bot - top));
+  }
+
+  const vMark = (idx, text) => {
+    if (idx < 0 || idx >= n) return;
+    const x = xMid(idx);
+    ctx.save();
+    ctx.setLineDash([3, 3]);
+    ctx.strokeStyle = "rgba(232,238,247,0.7)";
+    ctx.beginPath();
+    ctx.moveTo(x, plotY);
+    ctx.lineTo(x, plotY + plotH);
+    ctx.stroke();
+    ctx.restore();
+    ctx.font = "600 11px Segoe UI, system-ui, sans-serif";
+    ctx.fillStyle = "#e8eef7";
+    ctx.textBaseline = "top";
+    const tw = ctx.measureText(text).width;
+    let tx = x + 4;
+    if (tx + tw > plotX + plotW - 2) tx = Math.max(plotX + 2, x - tw - 4);
+    ctx.fillText(text, tx, plotY + 4);
+  };
+  vMark(model.entryIdx, "вход");
+  const endLabel = model.openTrade ? `сейчас ${fmtUsdSigned(model.pnlAbs, 2)}` : `выход ${fmtUsdSigned(model.pnlAbs, 2)}`;
+  vMark(model.openTrade ? n - 1 : model.exitIdx, endLabel);
+
+  ctx.font = "11px Segoe UI, system-ui, sans-serif";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+  for (const tag of priceTags) {
+    const tw = ctx.measureText(tag.label).width;
+    const x = plotX + 6;
+    const y = tag.y < plotY + 16 ? tag.y + 14 : tag.y - 5;
+    ctx.fillStyle = "rgba(18,26,36,0.88)";
+    ctx.fillRect(x - 3, y - 11, tw + 8, 15);
+    ctx.fillStyle = tag.color;
+    ctx.fillText(tag.label, x, y);
+  }
+
+  ctx.fillStyle = ink;
+  ctx.font = "11px Segoe UI, system-ui, sans-serif";
+  ctx.textBaseline = "bottom";
+  ctx.fillText("окно входа", xLeft(s0) + 4, plotY + plotH - 4);
+
+  if (gapAt != null && gapAt > 0 && gapAt < n) {
+    ctx.fillStyle = "#8b9cb3";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("···", xMid(gapAt - 1) + slot / 2 + gapW / 2, plotY + plotH / 2);
+    ctx.textAlign = "left";
+  }
+
+  ctx.strokeStyle = "rgba(255,255,255,0.12)";
+  ctx.strokeRect(plotX + 0.5, plotY + 0.5, plotW, plotH);
+  ctx.font = "11px Segoe UI, system-ui, sans-serif";
+  ctx.fillStyle = "#8b9cb3";
+  ctx.textBaseline = "top";
+  ctx.textAlign = "left";
+  const ticks = [0, model.entryIdx, model.openTrade ? n - 1 : model.exitIdx, n - 1];
+  let lastX = -999;
+  for (const idx of ticks) {
+    if (idx < 0 || idx >= n) continue;
+    const x = xMid(idx);
+    if (x - lastX < 72) continue;
+    lastX = x;
+    ctx.fillText(fmtChartTime(candles[idx].t), Math.min(Math.max(plotX, x - 24), width - 78), plotY + plotH + 6);
+  }
+}
+
+function paintTradeChart(canvas, model, cssWidth, cssHeight) {
+  const width = cssWidth || Math.max(320, canvas.parentElement?.clientWidth || 960);
+  const height = cssHeight || (width < 640 ? 320 : 430);
+  const dpr = cssWidth ? 2 : Math.min(2, window.devicePixelRatio || 1);
+  canvas.width = Math.round(width * dpr);
+  canvas.height = Math.round(height * dpr);
+  canvas.style.width = `${width}px`;
+  canvas.style.height = `${height}px`;
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  drawTradeChart(ctx, model, width, height);
+}
+
+function chartTradeNumericId(entry) {
+  const id = Number(entry?.trade?.trade_id ?? entry?.trade?.id);
+  return Number.isFinite(id) && id > 0 ? Math.trunc(id) : 0;
+}
+
+function chartCacheStamp(entry) {
+  const t = entry.trade;
+  if (entry.open) {
+    const bucket = Math.floor(Date.now() / (15 * 60 * 1000));
+    return `open|${t.open_date || ""}|${bucket}`;
+  }
+  const close = t.close_date || t.close_fill_date || "";
+  const rate = Number(t.close_rate || 0).toFixed(6);
+  const pnl = Number(t.close_profit_abs ?? t.profit_abs ?? 0).toFixed(4);
+  return `closed|${close}|${rate}|${pnl}`;
+}
+
+function chartCacheQuery(entry) {
+  return new URLSearchParams({
+    bot: entry.bot,
+    trade_id: String(chartTradeNumericId(entry)),
+    stamp: chartCacheStamp(entry),
+  }).toString();
+}
+
+function chartPngMemKey(entry) {
+  return `${chartEntryKey(entry)}|${chartCacheStamp(entry)}`;
+}
+
+async function fetchTradeChartPng(entry) {
+  if (!chartTradeNumericId(entry)) return null;
+  const res = await fetch(`/api/pair-config/trade-chart?${chartCacheQuery(entry)}`, {
+    headers: sessionHeader(),
+  });
+  if (res.status === 404) return null;
+  if (res.status === 401) throw new Error("auth");
+  if (!res.ok) return null;
+  const blob = await res.blob();
+  return blob && blob.size > 64 ? blob : null;
+}
+
+async function saveTradeChartPng(entry, blob) {
+  if (!chartTradeNumericId(entry)) return false;
+  const res = await fetch(`/api/pair-config/trade-chart?${chartCacheQuery(entry)}`, {
+    method: "PUT",
+    headers: { ...sessionHeader(), "Content-Type": "image/png" },
+    body: blob,
+  });
+  if (res.status === 401) throw new Error("auth");
+  return res.ok;
+}
+
+async function renderTradeChartPng(entry) {
+  const model = await loadChartModel(entry);
+  const canvas = document.createElement("canvas");
+  paintTradeChart(canvas, model, 1280, 560);
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+  if (!blob) throw new Error("не удалось собрать PNG");
+  return { blob, truncated: !!model.truncated };
+}
+
+function chartJsonDocument(entry, model) {
+  const t = entry.trade;
+  const candles = (model.candles || []).map((candle) => ({
+    t: candle.t,
+    o: candle.o,
+    h: candle.h,
+    l: candle.l,
+    c: candle.c,
+    v: candle.v,
+  }));
+  return {
+    bot: entry.bot,
+    trade_id: chartTradeNumericId(entry) || null,
+    open: !!entry.open,
+    pair: model.pair,
+    strategy: model.strategy,
+    side: model.side,
+    timeframe: model.tfLabel,
+    pnl_abs: model.pnlAbs,
+    pnl_pct: model.pnlPct,
+    open_rate: model.openRate,
+    close_rate: model.closeRate,
+    open_date: t.open_date || null,
+    close_date: entry.open ? null : t.close_date || t.close_fill_date || null,
+    entry_index: model.entryIdx,
+    exit_index: model.exitIdx,
+    shade_from: model.shadeFrom,
+    shade_to: model.shadeTo,
+    setup_bars: CHART_SETUP_BARS,
+    truncated: !!model.truncated,
+    gap_at: model.gapAt,
+    candles,
+  };
+}
+
+async function fetchTradeChartJson(entry) {
+  if (!chartTradeNumericId(entry)) return null;
+  const res = await fetch(`/api/pair-config/trade-chart-json?${chartCacheQuery(entry)}`, {
+    headers: sessionHeader(),
+  });
+  if (res.status === 404) return null;
+  if (res.status === 401) throw new Error("auth");
+  if (!res.ok) return null;
+  const text = await res.text();
+  if (!text.startsWith("{")) return null;
+  return text;
+}
+
+async function saveTradeChartJson(entry, text) {
+  if (!chartTradeNumericId(entry)) return false;
+  const res = await fetch(`/api/pair-config/trade-chart-json?${chartCacheQuery(entry)}`, {
+    method: "PUT",
+    headers: { ...sessionHeader(), "Content-Type": "application/json" },
+    body: text,
+  });
+  if (res.status === 401) throw new Error("auth");
+  return res.ok;
+}
+
+async function ensureTradeChartJson(entry) {
+  const memKey = chartPngMemKey(entry);
+  const cachedMem = chartsJsonCache.get(memKey);
+  if (cachedMem) return { text: cachedMem, fromCache: true };
+  const fromDisk = await fetchTradeChartJson(entry);
+  if (fromDisk) {
+    chartsJsonCache.set(memKey, fromDisk);
+    return { text: fromDisk, fromCache: true };
+  }
+  const model = await loadChartModel(entry);
+  const text = JSON.stringify(chartJsonDocument(entry, model));
+  chartsJsonCache.set(memKey, text);
+  try {
+    await saveTradeChartJson(entry, text);
+  } catch (err) {
+    if (String(err?.message) === "auth") throw err;
+  }
+  return { text, fromCache: false };
+}
+
+function chartJsonName(entry) {
+  return chartPngName(entry).replace(/\.png$/, ".json");
+}
+
+function chartStrategyFolder(entry) {
+  const label = tradeSourceLabel(entry.trade, entry.bot) || "Стратегия";
+  const folder = String(label)
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[. ]+$/g, "")
+    .slice(0, 80);
+  return folder || "Стратегия";
+}
+
+function chartArchiveName(entry, fileName) {
+  return `${chartStrategyFolder(entry)}/${fileName}`;
+}
+
+async function ensureTradeChartPng(entry) {
+  const memKey = chartPngMemKey(entry);
+  const cachedMem = chartsPngCache.get(memKey);
+  if (cachedMem) return { blob: cachedMem.blob, fromCache: true, truncated: !!cachedMem.truncated };
+  const fromDisk = await fetchTradeChartPng(entry);
+  if (fromDisk) {
+    chartsPngCache.set(memKey, { blob: fromDisk, truncated: false });
+    return { blob: fromDisk, fromCache: true, truncated: false };
+  }
+  const rendered = await renderTradeChartPng(entry);
+  chartsPngCache.set(memKey, { blob: rendered.blob, truncated: rendered.truncated });
+  let saved = false;
+  try {
+    saved = await saveTradeChartPng(entry, rendered.blob);
+  } catch (err) {
+    if (String(err?.message) === "auth") throw err;
+    saved = false;
+  }
+  return { blob: rendered.blob, fromCache: false, saved, truncated: rendered.truncated };
+}
+
+function showChartImage(key, blob) {
+  const prev = chartObjectUrls.get(key);
+  if (prev) URL.revokeObjectURL(prev);
+  const url = URL.createObjectURL(blob);
+  chartObjectUrls.set(key, url);
+  for (const img of chartNodes("data-chart-img", key)) img.src = url;
+}
+
+async function showChart(entry) {
+  const key = chartEntryKey(entry);
+  const gen = (chartPaintGen.get(key) || 0) + 1;
+  chartPaintGen.set(key, gen);
+  const setStatus = (text) => {
+    for (const el of chartNodes("data-chart-status", key)) el.textContent = text;
+  };
+  try {
+    setStatus("Загрузка графика…");
+    const chart = await ensureTradeChartPng(entry);
+    if (chartPaintGen.get(key) !== gen || !chartsExpanded.has(key)) return;
+    showChartImage(key, chart.blob);
+    if (chart.fromCache) setStatus("Из сохранённых графиков");
+    else if (chart.saved === false) setStatus("График построен, на сервер не записался");
+    else if (chart.truncated) setStatus("Длинная сделка: на графике вход и выход, середина скрыта.");
+    else setStatus("");
+  } catch (err) {
+    if (String(err?.message) === "auth") {
+      logout();
+      return;
+    }
+    if (chartPaintGen.get(key) !== gen) return;
+    setStatus(chartErrorText(err));
+  }
+}
+
+function chartPngName(entry) {
+  const t = entry.trade;
+  const pair = String(t.pair || "pair").replace(/[^\w]+/g, "");
+  const side = t.is_short ? "SHORT" : "LONG";
+  const strat = tradeSourceLabel(t, entry.bot)
+    .replace(/[^\wа-яА-ЯёЁ.-]+/gi, "_")
+    .replace(/_+/g, "_")
+    .slice(0, 48);
+  const raw = entry.open ? t.open_date : t.close_date || t.close_fill_date || t.open_date || "";
+  const when = String(raw).replace(/\D/g, "").slice(0, 14);
+  const id = t.trade_id ?? t.id ?? "x";
+  return `${pair}_${side}_${strat}_${when}_${id}.png`;
+}
+
+function triggerDownload(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
+}
+
+async function downloadOneChart(entry) {
+  const chart = await ensureTradeChartPng(entry);
+  triggerDownload(chart.blob, chartPngName(entry));
+}
+
+function crc32Bytes(bytes) {
+  let c = 0xffffffff;
+  for (let i = 0; i < bytes.length; i += 1) {
+    c = ZIP_CRC_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
+  }
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+function zipU16(n) {
+  const b = new Uint8Array(2);
+  new DataView(b.buffer).setUint16(0, n, true);
+  return b;
+}
+
+function zipU32(n) {
+  const b = new Uint8Array(4);
+  new DataView(b.buffer).setUint32(0, n >>> 0, true);
+  return b;
+}
+
+function concatBytes(parts) {
+  let len = 0;
+  for (const part of parts) len += part.length;
+  const out = new Uint8Array(len);
+  let offset = 0;
+  for (const part of parts) {
+    out.set(part, offset);
+    offset += part.length;
+  }
+  return out;
+}
+
+function buildStoredZip(files) {
+  const now = new Date();
+  const dosTime = ((now.getHours() & 31) << 11) | ((now.getMinutes() & 63) << 5) | ((now.getSeconds() >> 1) & 31);
+  const dosDate = (((now.getFullYear() - 1980) & 127) << 9) | (((now.getMonth() + 1) & 15) << 5) | (now.getDate() & 31);
+  const enc = new TextEncoder();
+  const locals = [];
+  const centrals = [];
+  let offset = 0;
+  for (const file of files) {
+    const name = enc.encode(file.name);
+    const data = file.data;
+    const crc = crc32Bytes(data);
+    const local = concatBytes([
+      zipU32(0x04034b50),
+      zipU16(20),
+      zipU16(0x0800),
+      zipU16(0),
+      zipU16(dosTime),
+      zipU16(dosDate),
+      zipU32(crc),
+      zipU32(data.length),
+      zipU32(data.length),
+      zipU16(name.length),
+      zipU16(0),
+      name,
+      data,
+    ]);
+    const central = concatBytes([
+      zipU32(0x02014b50),
+      zipU16(20),
+      zipU16(20),
+      zipU16(0x0800),
+      zipU16(0),
+      zipU16(dosTime),
+      zipU16(dosDate),
+      zipU32(crc),
+      zipU32(data.length),
+      zipU32(data.length),
+      zipU16(name.length),
+      zipU16(0),
+      zipU16(0),
+      zipU16(0),
+      zipU16(0),
+      zipU32(0),
+      zipU32(offset),
+      name,
+    ]);
+    locals.push(local);
+    centrals.push(central);
+    offset += local.length;
+  }
+  const centralBlob = concatBytes(centrals);
+  const eocd = concatBytes([
+    zipU32(0x06054b50),
+    zipU16(0),
+    zipU16(0),
+    zipU16(files.length),
+    zipU16(files.length),
+    zipU32(centralBlob.length),
+    zipU32(offset),
+    zipU16(0),
+  ]);
+  return concatBytes([...locals, centralBlob, eocd]);
+}
+
+async function mapPool(items, limit, fn) {
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      await fn(items[index], index);
+    }
+  });
+  await Promise.all(workers);
+}
+
+function setChartsArchiveProgress(text) {
+  const el = $("charts-archive-progress");
+  if (!el) return;
+  el.textContent = text || "";
+  el.hidden = !text;
+}
+
+function setChartsArchiveBusy(busy) {
+  chartsZipBusy = busy;
+  const png = $("charts-download-all-btn");
+  const json = $("charts-download-json-btn");
+  if (png) png.disabled = busy;
+  if (json) json.disabled = busy;
+  if (!busy) setChartsArchiveProgress("");
+}
+
+async function downloadChartArchive(kind) {
+  if (chartsZipBusy) return;
+  const entries = getFilteredChartEntries();
+  const json = kind === "json";
+  if (!entries.length) {
+    showToast("Нет сделок по выбранным фильтрам", "warn");
+    return;
+  }
+  if (entries.length > CHARTS_ZIP_MAX) {
+    showToast(`Слишком много сделок (${entries.length}). Сузьте период или стратегию — в один архив до ${CHARTS_ZIP_MAX}.`, "warn");
+    return;
+  }
+  const noun = json ? "JSON" : "графиков";
+  if (entries.length > 80 && !window.confirm(`Собрать ${entries.length} ${noun} в один ZIP?`)) return;
+  setChartsArchiveBusy(true);
+  setChartsArchiveProgress(`${json ? "JSON" : "PNG"}: 0 / ${entries.length}`);
+  let done = 0;
+  const files = [];
+  const errors = [];
+  try {
+    await mapPool(entries, 3, async (entry) => {
+      const fileName = json ? chartJsonName(entry) : chartPngName(entry);
+      const name = chartArchiveName(entry, fileName);
+      try {
+        if (json) {
+          const chart = await ensureTradeChartJson(entry);
+          files.push({ name, data: new TextEncoder().encode(chart.text) });
+        } else {
+          const chart = await ensureTradeChartPng(entry);
+          files.push({ name, data: new Uint8Array(await chart.blob.arrayBuffer()) });
+        }
+      } catch (err) {
+        errors.push(`${name}: ${chartErrorText(err)}`);
+      } finally {
+        done += 1;
+        setChartsArchiveProgress(`${json ? "JSON" : "PNG"}: ${done} / ${entries.length}`);
+      }
+    });
+    if (!files.length) {
+      showToast(errors[0] || (json ? "Не удалось собрать JSON" : "Не удалось построить графики"), "warn");
+      return;
+    }
+    if (errors.length) {
+      files.push({ name: "errors.txt", data: new TextEncoder().encode(errors.join("\n")) });
+    }
+    const stamp = new Date().toISOString().slice(0, 10);
+    const count = files.length - (errors.length ? 1 : 0);
+    triggerDownload(
+      new Blob([buildStoredZip(files)], { type: "application/zip" }),
+      json ? `sdelki-${stamp}.zip` : `grafiki-${stamp}.zip`,
+    );
+    showToast(
+      `Архив сохранён: ${count} ${json ? "JSON" : "PNG"}${errors.length ? `, ошибок ${errors.length}` : ""}`,
+      "ok",
+    );
+  } finally {
+    setChartsArchiveBusy(false);
+    renderChartsView();
+  }
+}
+
+async function downloadAllChartPngs() {
+  return downloadChartArchive("png");
+}
+
+function redrawOpenCharts() {
+  if ($("charts-view")?.classList.contains("hidden")) return;
+  for (const key of chartsExpanded) {
+    const model = chartsModelCache.get(key);
+    const canvas = pickVisibleChartCanvas(key);
+    if (model && canvas) paintTradeChart(canvas, model);
+  }
+}
+
+function bindChartsControls() {
+  $("charts-back-btn")?.addEventListener("click", closeCharts);
+  $("charts-refresh-btn")?.addEventListener("click", () => {
+    chartsModelCache.clear();
+    chartsPngCache.clear();
+    chartsJsonCache.clear();
+    loadCharts();
+  });
+  $("charts-download-all-btn")?.addEventListener("click", () => downloadAllChartPngs());
+  $("charts-download-json-btn")?.addEventListener("click", () => downloadChartArchive("json"));
+  $("charts-date-from")?.addEventListener("change", applyChartsDateRange);
+  $("charts-date-to")?.addEventListener("change", applyChartsDateRange);
+  $("charts-page-prev")?.addEventListener("click", () => {
+    if (chartsPage > 1) {
+      chartsPage -= 1;
+      renderChartsView();
+    }
+  });
+  $("charts-page-next")?.addEventListener("click", () => {
+    chartsPage += 1;
+    renderChartsView();
+  });
+  $("charts-view")?.addEventListener("click", (e) => {
+    const periodBtn = e.target.closest("[data-charts-period]");
+    if (periodBtn) {
+      chartsPeriod = normalizeStatsPeriod(periodBtn.dataset.chartsPeriod || "all");
+      chartsDateFrom = "";
+      chartsDateTo = "";
+      chartsPage = 1;
+      renderChartsView();
+      return;
+    }
+    const sideBtn = e.target.closest("[data-charts-side]");
+    if (sideBtn) {
+      chartsSide = normalizeTradeSide(sideBtn.dataset.chartsSide || "all");
+      chartsPage = 1;
+      renderChartsView();
+      return;
+    }
+    const stratBtn = e.target.closest("[data-charts-strategy]");
+    if (stratBtn) {
+      chartsStrategy = stratBtn.getAttribute("data-charts-strategy") || "all";
+      chartsPage = 1;
+      renderChartsView();
+      return;
+    }
+    const toggle = e.target.closest("[data-chart-toggle]");
+    if (toggle) {
+      const key = toggle.getAttribute("data-chart-toggle");
+      const opening = !chartsExpanded.has(key);
+      if (opening) chartsExpanded.add(key);
+      else chartsExpanded.delete(key);
+      renderChartsView();
+      if (!opening) return;
+      const entry = findChartEntry(key);
+      if (entry && !chartsPngCache.get(chartPngMemKey(entry))) showChart(entry);
+      return;
+    }
+    const png = e.target.closest("[data-chart-png]");
+    if (!png) return;
+    const key = png.getAttribute("data-chart-png");
+    const entry = findChartEntry(key);
+    if (!entry) return;
+    const nodes = chartNodes("data-chart-status", key);
+    nodes.forEach((el) => {
+      el.textContent = "Сохраняю PNG…";
+    });
+    downloadOneChart(entry)
+      .then(() => {
+        nodes.forEach((el) => {
+          el.textContent = "";
+        });
+      })
+      .catch((err) => {
+        if (String(err?.message) === "auth") logout();
+        else {
+          nodes.forEach((el) => {
+            el.textContent = chartErrorText(err);
+          });
+        }
+      });
+  });
+  window.addEventListener("resize", redrawOpenCharts);
+}
+
+/* --- Analytics: Отчёт (Cursor agent) --- */
+let reportPeriod = "today";
+let reportDateFrom = "";
+let reportDateTo = "";
+let reportLastPayload = null;
+let reportBusy = false;
+
+function userMayUseReport() {
+  return userMayUseBlock("report") || userMayUseBlock("history");
+}
+
+function reportPeriodPayload() {
+  if (reportPeriod === "custom") {
+    return {
+      period: "custom",
+      from: reportDateFrom || undefined,
+      to: reportDateTo || undefined,
+    };
+  }
+  return { period: reportPeriod };
+}
+
+function fmtReportPnl(value) {
+  const n = Number(value || 0);
+  return `${n > 0 ? "+" : ""}${n.toFixed(2)} $`;
+}
+
+function renderReportSummary(payload) {
+  const el = $("report-summary");
+  if (!el) return;
+  const s = payload?.summary || {};
+  const period = payload?.period || {};
+  const wr = s.winrate_pct != null ? `${s.winrate_pct}%` : "—";
+  const cells = [
+    ["Период", period.label || "—"],
+    ["Сделок", String(s.trades ?? 0)],
+    ["Winrate", wr],
+    ["PnL", fmtReportPnl(s.pnl_abs)],
+    ["Wins / Losses", `${s.wins ?? 0} / ${s.losses ?? 0}`],
+  ];
+  el.innerHTML = cells
+    .map(
+      ([label, value]) =>
+        `<div class="stats-kpi"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`
+    )
+    .join("");
+}
+
+/** Light markdown → HTML for agent analysis (headers, lists, bold, paragraphs). */
+function renderReportMarkdown(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return "<p class=\"muted\">Пустой ответ агента.</p>";
+  const lines = raw.split(/\r?\n/);
+  const parts = [];
+  let listOpen = false;
+  const flushList = () => {
+    if (listOpen) {
+      parts.push("</ul>");
+      listOpen = false;
+    }
+  };
+  const inline = (s) =>
+    escapeHtml(s).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/`([^`]+)`/g, "<code>$1</code>");
+  for (const line of lines) {
+    const h = /^(#{1,3})\s+(.+)$/.exec(line);
+    if (h) {
+      flushList();
+      const lvl = h[1].length === 1 ? "h2" : "h3";
+      parts.push(`<${lvl}>${inline(h[2])}</${lvl}>`);
+      continue;
+    }
+    const li = /^[-*•]\s+(.+)$/.exec(line);
+    if (li) {
+      if (!listOpen) {
+        parts.push("<ul>");
+        listOpen = true;
+      }
+      parts.push(`<li>${inline(li[1])}</li>`);
+      continue;
+    }
+    flushList();
+    if (!line.trim()) {
+      parts.push("");
+      continue;
+    }
+    parts.push(`<p>${inline(line)}</p>`);
+  }
+  flushList();
+  return parts.filter((p) => p !== "").join("\n");
+}
+
+function updateReportPeriodUi() {
+  document.querySelectorAll(".report-period-btn").forEach((btn) => {
+    btn.classList.toggle("is-active", btn.dataset.reportPeriod === reportPeriod);
+  });
+  const range = $("report-date-range");
+  if (range) range.hidden = reportPeriod !== "custom";
+  if ($("report-date-from")) $("report-date-from").value = reportDateFrom;
+  if ($("report-date-to")) $("report-date-to").value = reportDateTo;
+}
+
+function setReportPeriod(period) {
+  reportPeriod = period || "today";
+  if (reportPeriod !== "custom") {
+    reportDateFrom = "";
+    reportDateTo = "";
+  }
+  updateReportPeriodUi();
+}
+
+function applyReportDateRange() {
+  reportDateFrom = $("report-date-from")?.value || "";
+  reportDateTo = $("report-date-to")?.value || "";
+  reportPeriod = "custom";
+  updateReportPeriodUi();
+}
+
+function downloadReportJson(payload) {
+  if (!payload) return;
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
+  const a = document.createElement("a");
+  const stamp = (payload.period?.date_from || "report") + "_" + (payload.period?.date_to || "");
+  a.href = URL.createObjectURL(blob);
+  a.download = `cryptotools-report-${stamp}.json`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+async function runTradeReport({ analyze = true } = {}) {
+  if (!userMayUseReport() || reportBusy) return;
+  const statusEl = $("report-status");
+  const analysisEl = $("report-analysis");
+  const runBtn = $("report-run-btn");
+  if (reportPeriod === "custom" && !reportDateFrom && !reportDateTo) {
+    if (statusEl) statusEl.textContent = "Укажите даты интервала";
+    return;
+  }
+  reportBusy = true;
+  if (runBtn) {
+    runBtn.disabled = true;
+    runBtn.classList.add("is-busy");
+  }
+  if (analysisEl && analyze) {
+    analysisEl.classList.add("is-loading");
+    analysisEl.textContent = "Агент анализирует сделки… обычно 1–3 мин.";
+  }
+  if (statusEl) statusEl.textContent = analyze ? "Формирование отчёта…" : "Загрузка сделок…";
+  try {
+    const customPrompt = String($("report-prompt")?.value || "").trim();
+    const body = { ...reportPeriodPayload(), analyze: !!analyze };
+    if (analyze && customPrompt) body.prompt = customPrompt;
+    const path = analyze ? "/report/analyze" : "/report";
+    const payload = analyze
+      ? await pairConfigApi(path, "POST", body)
+      : await pairConfigApi(
+          `/report?period=${encodeURIComponent(body.period || "today")}` +
+            (body.from ? `&from=${encodeURIComponent(body.from)}` : "") +
+            (body.to ? `&to=${encodeURIComponent(body.to)}` : "")
+        );
+    reportLastPayload = payload;
+    renderReportSummary(payload);
+    if (analysisEl) {
+      analysisEl.classList.remove("is-loading");
+      if (payload.analysis) {
+        analysisEl.innerHTML = renderReportMarkdown(payload.analysis);
+      } else if (analyze) {
+        analysisEl.textContent = "Агент не вернул текст.";
+      }
+    }
+    const n = payload.trades_total ?? payload.trades?.length ?? 0;
+    const model = payload.model ? ` · ${payload.model}` : "";
+    const ms = payload.elapsed_ms != null ? ` · ${(payload.elapsed_ms / 1000).toFixed(0)}с` : "";
+    if (statusEl) {
+      statusEl.textContent = `${n} сделок · PnL ${fmtReportPnl(payload.summary?.pnl_abs)}${model}${ms}`;
+    }
+  } catch (e) {
+    if (e.message === "auth") logout();
+    else {
+      if (analysisEl) {
+        analysisEl.classList.remove("is-loading");
+        analysisEl.textContent = formatApiError(e.message);
+      }
+      if (statusEl) statusEl.textContent = formatApiError(e.message);
+    }
+  } finally {
+    reportBusy = false;
+    if (runBtn) {
+      runBtn.disabled = false;
+      runBtn.classList.remove("is-busy");
+    }
+  }
+}
+
+function openReport() {
+  if (!userMayUseReport()) return;
+  closeMobileMenu();
+  hideMainViewsForOverlay();
+  const view = $("report-view");
+  view?.classList.remove("hidden");
+  view?.setAttribute("aria-hidden", "false");
+  updateReportPeriodUi();
+  if (!reportLastPayload) {
+    runTradeReport({ analyze: false }).catch(() => {});
+  }
+}
+
+function closeReport() {
+  $("report-view")?.classList.add("hidden");
+  $("report-view")?.setAttribute("aria-hidden", "true");
+  $("dashboard-view")?.classList.remove("hidden");
+}
+
+function bindReportControls() {
+  document.querySelectorAll(".report-period-btn").forEach((btn) => {
+    if (btn.dataset.bound) return;
+    btn.dataset.bound = "1";
+    btn.addEventListener("click", () => setReportPeriod(btn.dataset.reportPeriod || "today"));
+  });
+  $("report-date-from")?.addEventListener("change", applyReportDateRange);
+  $("report-date-to")?.addEventListener("change", applyReportDateRange);
+  $("report-run-btn")?.addEventListener("click", () => runTradeReport({ analyze: true }));
+  $("report-json-btn")?.addEventListener("click", async () => {
+    if (!reportLastPayload) await runTradeReport({ analyze: false });
+    if (reportLastPayload) downloadReportJson(reportLastPayload);
+  });
+  $("report-back-btn")?.addEventListener("click", closeReport);
+}
+
 function colorForStrategyName(name, colorMap) {
   if (colorMap.has(name)) return colorMap.get(name);
   const color = PNL_DASH_COLORS[colorMap.size % PNL_DASH_COLORS.length];
@@ -2802,8 +4419,13 @@ function updatePnlDashFilterUi() {
   });
   document.querySelector(".pnl-dash-bot-group")?.classList.toggle("hidden", pnlDashTf === "1h");
   document.querySelectorAll(".pnl-dash-period").forEach((btn) => {
-    btn.classList.toggle("is-active", (btn.dataset.pnlDashPeriod || "all") === pnlDashPeriod);
+    const custom = Boolean(pnlDashDateFrom || pnlDashDateTo);
+    btn.classList.toggle(
+      "is-active",
+      !custom && (btn.dataset.pnlDashPeriod || "all") === pnlDashPeriod,
+    );
   });
+  syncDateInputs("pnl-date-from", "pnl-date-to", pnlDashDateFrom, pnlDashDateTo);
   document.querySelectorAll(".pnl-dash-side").forEach((btn) => {
     btn.classList.toggle("is-active", (btn.dataset.pnlDashSide || "all") === pnlDashSide);
   });
@@ -2814,10 +4436,22 @@ function renderPnlDashboard(data) {
   updatePnlDashFilterUi();
 
   const catalog = data.catalog || strategyCatalog;
-  const finderFiltered = filterTradesBySide(filterClosedTrades(data.finderTrades, pnlDashPeriod), pnlDashSide);
-  const stratFiltered = filterTradesBySide(filterClosedTrades(data.stratTrades, pnlDashPeriod), pnlDashSide);
-  const gridFiltered = filterTradesBySide(filterClosedTrades(data.gridTrades, pnlDashPeriod), pnlDashSide);
-  const bybitFiltered = pnlDashSide === "all" ? filterBybitHistory(data.bybitHistory, pnlDashPeriod) : [];
+  const finderFiltered = filterTradesBySide(
+    filterClosedTrades(data.finderTrades, pnlDashPeriod, pnlDashDateFrom, pnlDashDateTo),
+    pnlDashSide,
+  );
+  const stratFiltered = filterTradesBySide(
+    filterClosedTrades(data.stratTrades, pnlDashPeriod, pnlDashDateFrom, pnlDashDateTo),
+    pnlDashSide,
+  );
+  const gridFiltered = filterTradesBySide(
+    filterClosedTrades(data.gridTrades, pnlDashPeriod, pnlDashDateFrom, pnlDashDateTo),
+    pnlDashSide,
+  );
+  const bybitFiltered =
+    pnlDashSide === "all"
+      ? filterBybitHistory(data.bybitHistory, pnlDashPeriod, pnlDashDateFrom, pnlDashDateTo)
+      : [];
   const built = buildStatsRows(finderFiltered, stratFiltered, gridFiltered, bybitFiltered, catalog);
   let rows;
   if (pnlDashTf === "1h") {
@@ -2893,7 +4527,7 @@ function renderPnlDashboard(data) {
 
   const statusEl = $("pnl-dashboard-status");
   if (statusEl) {
-    const periodLabel = STATS_PERIOD_LABELS[pnlDashPeriod] || STATS_PERIOD_LABELS.all;
+    const periodLabel = statsPeriodLabel(pnlDashPeriod, pnlDashDateFrom, pnlDashDateTo);
     const sideLabel = tradeSideLabel(pnlDashSide);
     statusEl.textContent =
       totalClosed > 0
@@ -2906,12 +4540,11 @@ async function loadPnlDashboard(force = false) {
   const statusEl = $("pnl-dashboard-status");
   if (statusEl) statusEl.textContent = "Загрузка…";
   try {
-    if (!force && (pnlDashDataCache || statsDataCache || historyDataCache)) {
-      pnlDashDataCache = pnlDashDataCache || statsDataCache || historyDataCache;
-    } else {
-      pnlDashDataCache = await fetchStatsData(CLOSED_TRADES_FETCH_LIMIT);
-      statsDataCache = pnlDashDataCache;
-    }
+    pnlDashDataCache = await fetchStatsData(CLOSED_TRADES_FETCH_LIMIT, {
+      force,
+      accountMode: pnlDashMode,
+    });
+    statsDataCache = pnlDashDataCache;
     renderPnlDashboard(pnlDashDataCache);
   } catch (e) {
     if (e.message === "auth") logout();
@@ -2950,6 +4583,15 @@ function setPnlDashTf(tf) {
 
 function setPnlDashPeriod(period) {
   pnlDashPeriod = normalizeStatsPeriod(period);
+  pnlDashDateFrom = "";
+  pnlDashDateTo = "";
+  if (pnlDashDataCache) renderPnlDashboard(pnlDashDataCache);
+  else loadPnlDashboard(false);
+}
+
+function applyPnlDashDateRange() {
+  pnlDashDateFrom = $("pnl-date-from")?.value || "";
+  pnlDashDateTo = $("pnl-date-to")?.value || "";
   if (pnlDashDataCache) renderPnlDashboard(pnlDashDataCache);
   else loadPnlDashboard(false);
 }
@@ -2959,6 +4601,28 @@ function setPnlDashSide(side) {
   updatePnlDashFilterUi();
   if (pnlDashDataCache) renderPnlDashboard(pnlDashDataCache);
   else loadPnlDashboard(false);
+}
+
+
+function setRatingAccountMode(mode) {
+  ratingAccountMode = ["live", "demo", "all"].includes(mode) ? mode : "all";
+  document.querySelectorAll(".rating-mode").forEach((btn) => {
+    btn.classList.toggle("is-active", (btn.dataset.ratingMode || "all") === ratingAccountMode);
+  });
+  loadRating(true).catch(() => {});
+}
+function setPnlDashMode(mode) {
+  pnlDashMode = ["live", "demo", "all"].includes(mode) ? mode : "all";
+  document.querySelectorAll(".pnl-dash-mode").forEach((btn) => {
+    btn.classList.toggle("is-active", (btn.dataset.pnlDashMode || "all") === pnlDashMode);
+  });
+  loadPnlDashboard(true).catch(() => {});
+}
+function setStatsAccountMode(mode) {
+  statsAccountMode = ["live", "demo", "all"].includes(mode) ? mode : "all";
+  document.querySelectorAll(".stats-mode-btn").forEach((btn) => {
+    btn.classList.toggle("is-active", (btn.dataset.statsMode || "all") === statsAccountMode);
+  });
 }
 
 function bindPnlDashboardControls() {
@@ -2977,19 +4641,28 @@ function bindPnlDashboardControls() {
     btn.dataset.bound = "1";
     btn.addEventListener("click", () => setPnlDashPeriod(btn.dataset.pnlDashPeriod || "all"));
   });
+  $("pnl-date-from")?.addEventListener("change", applyPnlDashDateRange);
+  $("pnl-date-to")?.addEventListener("change", applyPnlDashDateRange);
   document.querySelectorAll(".pnl-dash-side").forEach((btn) => {
     if (btn.dataset.bound) return;
     btn.dataset.bound = "1";
     btn.addEventListener("click", () => setPnlDashSide(btn.dataset.pnlDashSide || "all"));
+  });
+  document.querySelectorAll(".pnl-dash-mode").forEach((btn) => {
+    if (btn.dataset.bound) return;
+    btn.dataset.bound = "1";
+    btn.addEventListener("click", () => setPnlDashMode(btn.dataset.pnlDashMode || "all"));
   });
   $("pnl-dashboard-back-btn")?.addEventListener("click", closePnlDashboard);
   $("pnl-dashboard-refresh-btn")?.addEventListener("click", () => loadPnlDashboard(true));
 }
 
 let ratingPeriod = "all";
+let ratingDateFrom = "";
+let ratingDateTo = "";
 let ratingTf = "5m";
 let ratingScope = "strategies"; // strategies | pairs | days | matrix
-let ratingBot = "all"; // all | price_action
+let ratingBot = "all";
 let ratingSide = "all"; // all | long | short
 let ratingUserFilter = ""; // "" = all accounts (admin only)
 let ratingDataCache = {}; // key: `${scope}:${user||"all"}:${tf}:${bot}:${side}`
@@ -3018,11 +4691,10 @@ const RATING_DEFAULT_THEAD = `<tr>
 </tr>`;
 
 function ratingCacheKey(scope = ratingScope, user = ratingUserFilter) {
-  return `${scope}:${user || "all"}:${ratingTf}:${ratingBot}:${ratingSide}`;
+  return `${scope}:${user || "all"}:${ratingTf}:${ratingBot}:${ratingSide}:${ratingAccountMode}:${ratingDateFrom}:${ratingDateTo}`;
 }
 
 function ratingBotLabel() {
-  if (ratingBot === "price_action") return PRICE_ACTION_STATS_LABEL;
   return "";
 }
 
@@ -3038,48 +4710,40 @@ async function ensureRatingUserOptions() {
   const group = $("rating-user-group");
   const sel = $("rating-user-filter");
   if (!group || !sel) return;
-  if (!isAdminUser()) {
-    group.classList.add("hidden");
-    ratingUserFilter = "";
-    sel.value = "";
-    return;
-  }
   group.classList.remove("hidden");
-  try {
-    const data = await pairConfigApi("/users");
-    const users = Array.isArray(data.users) ? data.users : [];
-    const prev = ratingUserFilter;
-    const options = [`<option value="">Все аккаунты</option>`];
-    for (const u of users) {
-      const id = String(u.id || "");
-      if (!id) continue;
-      const name = String(u.username || id);
-      const isAdm = u.role === "admin" || id === "admin";
-      const label = isAdm ? `Главный (${name})` : name;
-      options.push(`<option value="${escapeHtml(id)}">${escapeHtml(label)}</option>`);
+  const prev = ratingUserFilter;
+  const options = [
+    `<option value="">Все аккаунты</option>`,
+    `<option value="self">Свой</option>`,
+  ];
+  if (isAdminUser()) {
+    try {
+      const data = await pairConfigApi("/users");
+      const users = Array.isArray(data.users) ? data.users : [];
+      for (const u of users) {
+        const id = String(u.id || "");
+        if (!id) continue;
+        const name = String(u.username || id);
+        const isAdm = u.role === "admin" || id === "admin";
+        const label = isAdm ? `Главный (${name})` : name;
+        options.push(`<option value="${escapeHtml(id)}">${escapeHtml(label)}</option>`);
+      }
+      const ids = new Set(["", "self", ...users.map((u) => String(u.id || ""))]);
+      ratingUserFilter = prev && ids.has(prev) ? prev : "";
+    } catch {
+      ratingUserFilter = prev === "self" || prev === "" ? prev : "";
     }
-    sel.innerHTML = options.join("");
-    const ids = new Set(users.map((u) => String(u.id || "")));
-    ratingUserFilter = prev && ids.has(prev) ? prev : "";
-    sel.value = ratingUserFilter;
-  } catch {
-    // Keep current options if /users fails
+  } else {
+    ratingUserFilter = prev === "self" || prev === "" ? prev : "";
   }
+  sel.innerHTML = options.join("");
+  sel.value = ratingUserFilter;
 }
 
 function syncRatingUserFilterVisibility() {
   const group = $("rating-user-group");
   if (!group) return;
-  if (!isAdminUser()) {
-    group.classList.add("hidden");
-    if (ratingUserFilter) {
-      ratingUserFilter = "";
-      const sel = $("rating-user-filter");
-      if (sel) sel.value = "";
-    }
-  } else {
-    group.classList.remove("hidden");
-  }
+  group.classList.remove("hidden");
 }
 
 function hideMainViewsForOverlay() {
@@ -3087,10 +4751,16 @@ function hideMainViewsForOverlay() {
   $("logs-view")?.classList.add("hidden");
   $("settings-view")?.classList.add("hidden");
   $("history-view")?.classList.add("hidden");
+  $("charts-view")?.classList.add("hidden");
+  $("charts-view")?.setAttribute("aria-hidden", "true");
+  $("report-view")?.classList.add("hidden");
+  $("report-view")?.setAttribute("aria-hidden", "true");
   $("pnl-dashboard-view")?.classList.add("hidden");
   $("pnl-dashboard-view")?.setAttribute("aria-hidden", "true");
   $("rating-view")?.classList.add("hidden");
   $("rating-view")?.setAttribute("aria-hidden", "true");
+  $("stats-view")?.classList.add("hidden");
+  $("stats-view")?.setAttribute("aria-hidden", "true");
   $("dashboard-view")?.classList.add("hidden");
 }
 
@@ -3114,6 +4784,15 @@ function closeRating() {
 
 function setRatingPeriod(period) {
   ratingPeriod = normalizeStatsPeriod(period);
+  ratingDateFrom = "";
+  ratingDateTo = "";
+  updateRatingFilterUi();
+  loadRating(true);
+}
+
+function applyRatingDateRange() {
+  ratingDateFrom = $("rating-date-from")?.value || "";
+  ratingDateTo = $("rating-date-to")?.value || "";
   updateRatingFilterUi();
   loadRating(true);
 }
@@ -3159,10 +4838,9 @@ function setRatingScope(scope) {
   loadRating(false);
 }
 
-function setRatingBot(bot) {
-  const next = bot === "price_action" ? bot : "all";
-  if (ratingBot === next) return;
-  ratingBot = next;
+function setRatingBot(_bot) {
+  if (ratingBot === "all") return;
+  ratingBot = "all";
   ratingExpandedPairs.clear();
   updateRatingFilterUi();
   loadRating(false);
@@ -3235,8 +4913,10 @@ function updateRatingFilterUi() {
     btn.setAttribute("aria-selected", active ? "true" : "false");
   });
   document.querySelectorAll(".rating-period").forEach((btn) => {
-    btn.classList.toggle("is-active", btn.dataset.ratingPeriod === ratingPeriod);
+    const custom = Boolean(ratingDateFrom || ratingDateTo);
+    btn.classList.toggle("is-active", !custom && btn.dataset.ratingPeriod === ratingPeriod);
   });
+  syncDateInputs("rating-date-from", "rating-date-to", ratingDateFrom, ratingDateTo);
   document.querySelectorAll(".rating-tf").forEach((btn) => {
     btn.classList.toggle("is-active", (btn.dataset.ratingTf || "5m") === ratingTf);
   });
@@ -3635,7 +5315,7 @@ function renderRating(data) {
     bindRatingCopyButtons(body);
   }
 
-  const periodLabel = STATS_PERIOD_LABELS[ratingPeriod] || STATS_PERIOD_LABELS.all;
+  const periodLabel = statsPeriodLabel(ratingPeriod, ratingDateFrom, ratingDateTo);
   const users = data?.users ?? 0;
   const trades = data?.trades_total ?? 0;
   const entityLabel = isDays ? "Дней недели" : isPairs ? "Пар" : "Стратегий";
@@ -3674,7 +5354,7 @@ async function loadRating(force) {
   if (status) status.textContent = "Загрузка…";
   updateRatingFilterUi();
   const scope = ratingScope;
-  const user = isAdminUser() ? ratingUserFilter : "";
+  const user = ratingUserFilter || "";
   const tf = ratingTf;
   const cacheKey = ratingCacheKey(scope, user);
   try {
@@ -3683,9 +5363,12 @@ async function loadRating(force) {
       !force &&
       cached &&
       cached.period === ratingPeriod &&
+      (cached.date_from || "") === ratingDateFrom &&
+      (cached.date_to || "") === ratingDateTo &&
       (cached.tf || "5m") === tf &&
       (cached.user_filter || "") === (user || "") &&
-      normalizeTradeSide(cached.side || "all") === ratingSide
+      normalizeTradeSide(cached.side || "all") === ratingSide &&
+      (cached.account_mode || "all") === ratingAccountMode
     ) {
       renderRating(cached);
       return;
@@ -3694,7 +5377,10 @@ async function loadRating(force) {
       period: ratingPeriod,
       tf,
       limit: scope === "days" ? "7" : "100",
+      account_mode: ratingAccountMode || "all",
     });
+    if (ratingDateFrom) params.set("from", ratingDateFrom);
+    if (ratingDateTo) params.set("to", ratingDateTo);
     if (user) params.set("user", user);
     if (ratingBot && ratingBot !== "all") params.set("bot", ratingBot);
     if (ratingSide && ratingSide !== "all") params.set("side", ratingSide);
@@ -3709,8 +5395,10 @@ async function loadRating(force) {
               ? `/strategy-rating-weekday-matrix?${params}`
               : `/strategy-rating?${params}`;
     const data = await pairConfigApi(endpoint);
+    data.date_from = ratingDateFrom;
+    data.date_to = ratingDateTo;
     ratingDataCache[cacheKey] = data;
-    if (ratingScope === scope && ratingTf === tf && (isAdminUser() ? ratingUserFilter : "") === user) {
+    if (ratingScope === scope && ratingTf === tf && ratingUserFilter === user) {
       renderRating(data);
     }
   } catch (e) {
@@ -3720,11 +5408,18 @@ async function loadRating(force) {
 }
 
 function bindRatingControls() {
+    document.querySelectorAll(".rating-mode").forEach((btn) => {
+    if (btn.dataset.bound) return;
+    btn.dataset.bound = "1";
+    btn.addEventListener("click", () => setRatingAccountMode(btn.dataset.ratingMode || "all"));
+  });
   document.querySelectorAll(".rating-period").forEach((btn) => {
     if (btn.dataset.bound) return;
     btn.dataset.bound = "1";
     btn.addEventListener("click", () => setRatingPeriod(btn.dataset.ratingPeriod || "all"));
   });
+  $("rating-date-from")?.addEventListener("change", applyRatingDateRange);
+  $("rating-date-to")?.addEventListener("change", applyRatingDateRange);
   document.querySelectorAll(".rating-tf").forEach((btn) => {
     if (btn.dataset.bound) return;
     btn.dataset.bound = "1";
@@ -3775,19 +5470,21 @@ function addClosedTradeToRow(row, trade) {
 }
 
 function updateStatsPeriodUi() {
+  const custom = Boolean(statsDateFrom || statsDateTo);
   document.querySelectorAll(".stats-period-btn").forEach((btn) => {
-    const active = (btn.dataset.period || "all") === statsPeriod;
+    const active = !custom && (btn.dataset.period || "all") === statsPeriod;
     btn.classList.toggle("is-active", active);
   });
+  syncDateInputs("stats-date-from", "stats-date-to", statsDateFrom, statsDateTo);
 }
 
 function updateStatsModalChrome() {
   const meta = STATS_SCOPE_META[statsScope] || STATS_SCOPE_META.all;
-  const titleEl = $("stats-modal-title");
-  const noteEl = $("stats-modal-note");
+  const titleEl = $("stats-view-title");
+  const noteEl = $("stats-view-note");
   if (titleEl) titleEl.textContent = meta.title;
   if (noteEl) {
-    const periodLabel = STATS_PERIOD_LABELS[statsPeriod] || STATS_PERIOD_LABELS.all;
+    const periodLabel = statsPeriodLabel(statsPeriod, statsDateFrom, statsDateTo);
     noteEl.textContent = `${meta.note} Период: ${periodLabel}.`;
   }
   updateStatsPeriodUi();
@@ -3800,10 +5497,10 @@ function renderStatsModal(data) {
   if (!bodyEl || !summaryEl) return;
 
   const catalog = data.catalog || strategyCatalog;
-  const finderFiltered = filterClosedTrades(data.finderTrades, statsPeriod);
-  const stratFiltered = filterClosedTrades(data.stratTrades, statsPeriod);
-  const gridFiltered = filterClosedTrades(data.gridTrades, statsPeriod);
-  const bybitFiltered = filterBybitHistory(data.bybitHistory, statsPeriod);
+  const finderFiltered = filterClosedTrades(data.finderTrades, statsPeriod, statsDateFrom, statsDateTo);
+  const stratFiltered = filterClosedTrades(data.stratTrades, statsPeriod, statsDateFrom, statsDateTo);
+  const gridFiltered = filterClosedTrades(data.gridTrades, statsPeriod, statsDateFrom, statsDateTo);
+  const bybitFiltered = filterBybitHistory(data.bybitHistory, statsPeriod, statsDateFrom, statsDateTo);
 
   const rows = filterStatsRows(
     buildStatsRows(finderFiltered, stratFiltered, gridFiltered, bybitFiltered, catalog),
@@ -3933,8 +5630,12 @@ async function fetchBotClosedTrades(bot, limit = 5000) {
 }
 
 /** Server keeps a warm /stats-bundle cache; client only renders it. */
-async function fetchStatsData(_tradeLimit = CLOSED_TRADES_FETCH_LIMIT, { force = false } = {}) {
-  const qs = force ? "?force=1" : "";
+async function fetchStatsData(_tradeLimit = CLOSED_TRADES_FETCH_LIMIT, { force = false, accountMode = null } = {}) {
+  const mode = accountMode || statsAccountMode || pnlDashMode || "all";
+  const params = new URLSearchParams();
+  if (force) params.set("force", "1");
+  params.set("account_mode", mode);
+  const qs = `?${params.toString()}`;
   const data = await pairConfigApi(`/stats-bundle${qs}`);
   return {
     finderTrades: data.finder || [],
@@ -3991,11 +5692,13 @@ function adoptOpenSummary(summary) {
   return openSummaryCache;
 }
 
-async function prefetchStatsBundle({ force = false } = {}) {
+async function prefetchStatsBundle({ force = false, accountMode = null } = {}) {
+  const mode = accountMode || statsAccountMode || "all";
   const now = Date.now();
   if (!force && statsDataCache && now - lastStatsPrefetchAt < STATS_PREFETCH_MS) {
     if (statsDataCache.openSummary) {
-      adoptOpenSummary(statsDataCache.openSummary);
+      const summary = statsDataCache.openSummary;
+      adoptOpenSummary(summary?.live || summary?.demo || summary);
       renderTradesSummaryFromOpen(openSummaryCache);
     }
     return statsDataCache;
@@ -4003,13 +5706,17 @@ async function prefetchStatsBundle({ force = false } = {}) {
   if (statsPrefetchInFlight) return statsPrefetchInFlight;
   statsPrefetchInFlight = (async () => {
     try {
-      const data = await fetchStatsData(CLOSED_TRADES_FETCH_LIMIT, { force });
+      const data = await fetchStatsData(CLOSED_TRADES_FETCH_LIMIT, {
+        force,
+        accountMode: mode,
+      });
       statsDataCache = data;
       historyDataCache = data;
       if (!pnlDashDataCache) pnlDashDataCache = data;
       lastStatsPrefetchAt = Date.now();
       if (data.openSummary) {
-        adoptOpenSummary(data.openSummary);
+        const summary = data.openSummary;
+        adoptOpenSummary(summary?.live || summary?.demo || summary);
         renderTradesSummaryFromOpen(openSummaryCache);
       }
       return data;
@@ -4020,12 +5727,12 @@ async function prefetchStatsBundle({ force = false } = {}) {
   return statsPrefetchInFlight;
 }
 
-async function loadStatistics() {
+async function loadStatistics(force = false) {
   const summaryEl = $("stats-summary");
   const bodyEl = $("stats-table-body");
   if (!bodyEl) return;
 
-  if (statsDataCache) {
+  if (statsDataCache && !force) {
     renderStatsModal(statsDataCache);
   } else {
     summaryEl.innerHTML = '<p class="muted">Загрузка…</p>';
@@ -4033,7 +5740,10 @@ async function loadStatistics() {
   }
 
   try {
-    statsDataCache = await prefetchStatsBundle();
+    statsDataCache = await prefetchStatsBundle({
+      force: !!force,
+      accountMode: statsAccountMode,
+    });
     renderStatsModal(statsDataCache);
   } catch (e) {
     if (e.message === "auth") logout();
@@ -4048,22 +5758,39 @@ async function loadStatistics() {
 
 function setStatsPeriod(period) {
   statsPeriod = normalizeStatsPeriod(period);
+  statsDateFrom = "";
+  statsDateTo = "";
+  if (statsDataCache) renderStatsModal(statsDataCache);
+  else loadStatistics();
+}
+
+function applyStatsDateRange() {
+  statsDateFrom = $("stats-date-from")?.value || "";
+  statsDateTo = $("stats-date-to")?.value || "";
   if (statsDataCache) renderStatsModal(statsDataCache);
   else loadStatistics();
 }
 
 function openStats(scope = "all", period = null) {
   statsScope = STATS_SCOPE_META[scope] ? scope : "all";
-  if (period) statsPeriod = normalizeStatsPeriod(period);
-  $("stats-modal").classList.remove("hidden");
-  $("stats-modal").setAttribute("aria-hidden", "false");
+  if (period) {
+    statsPeriod = normalizeStatsPeriod(period);
+    statsDateFrom = "";
+    statsDateTo = "";
+  }
+  closeMobileMenu();
+  hideMainViewsForOverlay();
+  const view = $("stats-view");
+  view?.classList.remove("hidden");
+  view?.setAttribute("aria-hidden", "false");
   if (statsDataCache) renderStatsModal(statsDataCache);
   loadStatistics();
 }
 
 function closeStats() {
-  $("stats-modal").classList.add("hidden");
-  $("stats-modal").setAttribute("aria-hidden", "true");
+  $("stats-view")?.classList.add("hidden");
+  $("stats-view")?.setAttribute("aria-hidden", "true");
+  $("dashboard-view")?.classList.remove("hidden");
 }
 
 function bindPanelStatsButtons() {
@@ -4082,6 +5809,18 @@ function bindStatsPeriodButtons() {
     btn.dataset.bound = "1";
     btn.addEventListener("click", () => {
       setStatsPeriod(btn.dataset.period || "all");
+    });
+  });
+  $("stats-date-from")?.addEventListener("change", applyStatsDateRange);
+  $("stats-date-to")?.addEventListener("change", applyStatsDateRange);
+  $("stats-back-btn")?.addEventListener("click", closeStats);
+  $("stats-refresh-btn")?.addEventListener("click", () => loadStatistics(true));
+  document.querySelectorAll(".stats-mode-btn").forEach((btn) => {
+    if (btn.dataset.bound) return;
+    btn.dataset.bound = "1";
+    btn.addEventListener("click", () => {
+      setStatsAccountMode(btn.dataset.statsMode || "all");
+      loadStatistics(true).catch(() => {});
     });
   });
 }
@@ -4105,7 +5844,7 @@ function strategyLabel(id) {
 function tradeStatsRowKey(trade, bot) {
   if (bot === "finder") return FINDER_STATS_LABEL;
   if (bot === "grid") return GRID_STATS_LABEL;
-  if (isPriceActionTrade(trade)) return PRICE_ACTION_STATS_KEY;
+  if (isPriceActionTrade(trade)) return "__price_action__";
   const base = tradeSourceId(trade, bot);
   if (!trade?.enter_tag) return base;
   const raw = String(trade.enter_tag);
@@ -4188,9 +5927,8 @@ function syncEnabledFromPayload(data) {
     applyPinnedMaxPerStrategy(data.max_open_trades_per_strategy);
     updateMaxTradesHint();
   }
-  if (isSettingsOpen()) {
-    renderPlacementAdmin(data);
-  }
+  // Placement lives on the strategy panel (not only Settings) — always refresh count/lists.
+  renderPlacementAdmin(data);
   repaintStrategyTradesFromCache();
 }
 
@@ -4255,30 +5993,34 @@ function renderPlacementAdmin(data) {
     if (s?.id && !byId.has(String(s.id))) byId.set(String(s.id), s);
   });
 
+  // Promote candidates = not yet in main (birth test stays listed forever on Test panel).
   const sourceRows = promoteCandidates.length
     ? promoteCandidates
-    : (catalog || []).filter((s) => {
-        const panel = strategyUiPanel(s);
-        return panel === "test" || panel === "htf1h";
-      });
-  const testRows = sourceRows.filter((s) => strategyUiPanel(s) === "test");
-  const htfRows = sourceRows.filter((s) => strategyUiPanel(s) === "htf1h");
+    : (catalog || []).filter((s) => isTestCatalogEntry(s) || isHtfStrategy(s));
+  const testRows = sourceRows.filter((s) => isTestCatalogEntry(s) && !isHtfStrategy(s));
+  const htfRows = sourceRows.filter((s) => isHtfStrategy(s));
   const mainFromPlacement = (data?.ui_placement?.main || []).map(String);
-  const mainRows = (catalog || []).filter((s) => strategyUiPanel(s) === "main");
+  const mainRows = (catalog || []).filter(
+    (s) => s.in_main || s.show_on_main || strategyUiPanel(s) === "main"
+  );
   const displayMainRows = (data?.ui_placement
     ? mainFromPlacement
     : mainRows.map((s) => s.id)
   ).map((id) => {
     const known = byId.get(id);
-    if (known) return known;
+    if (known) return { ...known, in_main: true, show_on_main: true };
     const htf = String(id).endsWith("1hStrategy");
-    return { id, name: id, ui_panel: htf ? "htf1h" : "main", htf_group: htf, in_main: true };
+    return { id, name: id, ui_panel: htf ? "htf1h" : "main", htf_group: htf, in_main: true, show_on_main: true };
   });
 
   const tagHtml = (s, action) => {
     const backHtf = !!(s.htf_group || s.htfGroup) || String(s.id || "").endsWith("1hStrategy");
     const title =
-      action === "promote" ? "В основные" : backHtf ? "Вернуть в 1-часовые" : "Вернуть в тестовые";
+      action === "promote"
+        ? "Скопировать в основные"
+        : backHtf
+          ? "Убрать из основных"
+          : "Убрать из основных";
     return `<button type="button" class="placement-tag${action === "demote" ? " is-main" : ""}" data-placement-action="${action}" data-strategy="${escapeHtml(s.id)}" data-htf-back="${backHtf ? "1" : "0"}" title="${title}">${escapeHtml(strategyCatalogLabel(s))}${action === "demote" ? " ×" : ""}</button>`;
   };
   const empty = (text) => `<span class="placement-tag-empty muted">${text}</span>`;
@@ -4292,7 +6034,7 @@ function renderPlacementAdmin(data) {
   const countEl = $("placement-tags-count");
   if (countEl) countEl.textContent = String(testRows.length + htfRows.length + displayMainRows.length);
   const leftHead = $("placement-test-head");
-  if (leftHead) leftHead.textContent = accountKind === "live" && !isAdminUser() ? "В основные" : "Тестовые";
+  if (leftHead) leftHead.textContent = "Скопировать в основные";
 
   const root = $("placement-tags") || testList;
   root.querySelectorAll("[data-placement-action]").forEach((btn) => {
@@ -4313,15 +6055,13 @@ function renderPlacementAdmin(data) {
         syncEnabledFromPayload(res);
         renderStrategyToggles();
         updateStrategyDisplay();
+        updateTestStrategyDisplay();
         renderPlacementAdmin(res);
         const name = strategyLabel(id);
-        const backHtf = btn.getAttribute("data-htf-back") === "1";
         showPlacementMsg(
           action === "promote"
-            ? `${name} → Основные (выкл). Включите в панели «Стратегии».`
-            : backHtf
-              ? `${name} → 1-часовые (выкл)`
-              : `${name} → тестовые (выкл)`
+            ? `${name} скопирована в Основные (выкл). В Тестовых остаётся.`
+            : `${name} убрана из Основных (выкл)`
         );
       } catch (e) {
         showPlacementMsg(formatApiError(e.message) || String(e), true);
@@ -4337,6 +6077,12 @@ function syncStrategyRiskFromPayload(data) {
   if (!risk) return;
   if (risk.stoploss_pct != null) strategyRisk.stoploss_pct = Number(risk.stoploss_pct);
   if (risk.take_profit_pct != null) strategyRisk.take_profit_pct = Number(risk.take_profit_pct);
+  if (risk.time_close_enabled != null) strategyRisk.time_close_enabled = !!risk.time_close_enabled;
+  if (risk.time_close_minutes != null) strategyRisk.time_close_minutes = Number(risk.time_close_minutes);
+  if (risk.time_close_tp_pct != null) strategyRisk.time_close_tp_pct = Number(risk.time_close_tp_pct);
+  if (risk.time_close_loss_enabled != null) strategyRisk.time_close_loss_enabled = !!risk.time_close_loss_enabled;
+  if (risk.time_close_loss_minutes != null) strategyRisk.time_close_loss_minutes = Number(risk.time_close_loss_minutes);
+  if (risk.time_close_loss_tp_pct != null) strategyRisk.time_close_loss_tp_pct = Number(risk.time_close_loss_tp_pct);
 }
 
 function syncTestSettingsFromPayload(data) {
@@ -4361,6 +6107,12 @@ function syncTestSettingsFromPayload(data) {
   if (ts.stake_amount != null) testSettings.stake_amount = Number(ts.stake_amount);
   if (ts.stoploss_pct != null) testSettings.stoploss_pct = Number(ts.stoploss_pct);
   if (ts.take_profit_pct != null) testSettings.take_profit_pct = Number(ts.take_profit_pct);
+  if (ts.time_close_enabled != null) testSettings.time_close_enabled = !!ts.time_close_enabled;
+  if (ts.time_close_minutes != null) testSettings.time_close_minutes = Number(ts.time_close_minutes);
+  if (ts.time_close_tp_pct != null) testSettings.time_close_tp_pct = Number(ts.time_close_tp_pct);
+  if (ts.time_close_loss_enabled != null) testSettings.time_close_loss_enabled = !!ts.time_close_loss_enabled;
+  if (ts.time_close_loss_minutes != null) testSettings.time_close_loss_minutes = Number(ts.time_close_loss_minutes);
+  if (ts.time_close_loss_tp_pct != null) testSettings.time_close_loss_tp_pct = Number(ts.time_close_loss_tp_pct);
   applyPinnedTestSettings();
   // Main and test pools are separate — never overwrite «Открыто (основные)» with test max.
   updateMaxTradesHint();
@@ -4371,7 +6123,13 @@ function strategyRiskSummaryText() {
   const tp = Number(strategyRisk.take_profit_pct);
   if (!Number.isFinite(sl) || !Number.isFinite(tp)) return "";
   const hedge = dualHedgeEnabled ? " · dual L+S" : "";
-  return `SL −${sl}% · TP +${tp}%${hedge}`;
+  const timeClose = strategyRisk.time_close_enabled
+    ? ` · прибыль ${strategyRisk.time_close_minutes} мин (>${strategyRisk.time_close_tp_pct}%)`
+    : "";
+  const timeCloseLoss = strategyRisk.time_close_loss_enabled
+    ? ` · убыток ${strategyRisk.time_close_loss_minutes} мин (>${strategyRisk.time_close_loss_tp_pct}%)`
+    : "";
+  return `SL −${sl}% · TP +${tp}%${hedge}${timeClose}${timeCloseLoss}`;
 }
 
 function setSettingsSummary(id, text) {
@@ -4395,32 +6153,31 @@ function fmtClosedProfit(profit, panel) {
   return fmtPct(fallback);
 }
 
-function closedPnlSummaryText(bot) {
-  const profit = botLiveCache[bot]?.profit || botLiveCache[bot]?.closedProfitDb;
-  const coin = closedCoin(profit, bot === "strategy" ? "main" : null);
-  if (coin == null || !Number.isFinite(Number(coin))) return "";
-  return ` · PnL ${fmtUsdSigned(coin)}`;
-}
-
 function updateBotSettingsSummaries() {
   const strat = BOTS.strategy;
   const risk = strategyRiskSummaryText();
   setSettingsSummary(
     "strategy-settings-summary",
-    `макс ${strat.maxTrades} · stake ${strat.stakeAmount} USDT${risk ? ` · ${risk}` : ""}${closedPnlSummaryText("strategy")} · развернуть`
+    `макс ${strat.maxTrades} · stake ${strat.stakeAmount} USDT${risk ? ` · ${risk}` : ""} · развернуть`
   );
   const tSl = Number(testSettings.stoploss_pct);
   const tTp = Number(testSettings.take_profit_pct);
   const tRisk =
     Number.isFinite(tSl) && Number.isFinite(tTp) ? `SL −${tSl}% · TP +${tTp}%` : "";
+  const tTimeClose = testSettings.time_close_enabled
+    ? ` · прибыль ${testSettings.time_close_minutes} мин (>${testSettings.time_close_tp_pct}%)`
+    : "";
+  const tTimeCloseLoss = testSettings.time_close_loss_enabled
+    ? ` · убыток ${testSettings.time_close_loss_minutes} мин (>${testSettings.time_close_loss_tp_pct}%)`
+    : "";
   setSettingsSummary(
     "test-strategy-settings-summary",
-    `макс ${testSettings.max_open_trades} · stake ${testSettings.stake_amount} USDT${tRisk ? ` · ${tRisk}` : ""} · развернуть`
+    `макс ${testSettings.max_open_trades} · stake ${testSettings.stake_amount} USDT${tRisk ? ` · ${tRisk}` : ""}${tTimeClose}${tTimeCloseLoss} · развернуть`
   );
   const grid = BOTS.grid;
   setSettingsSummary(
     "grid-settings-summary",
-    `макс ${grid.maxTrades} · stake ${grid.stakeAmount} USDT${closedPnlSummaryText("grid")} · развернуть`
+    `боковиков ${grid.maxTrades} · stake ${grid.stakeAmount} USDT · развернуть`
   );
   setSettingsSummary(
     "bybitgrid-settings-summary",
@@ -4429,7 +6186,7 @@ function updateBotSettingsSummaries() {
   const finder = BOTS.finder;
   setSettingsSummary(
     "finder-settings-summary",
-    `макс ${finder.maxTrades}${closedPnlSummaryText("finder")} · развернуть`
+    `макс ${finder.maxTrades} · развернуть`
   );
 }
 
@@ -4505,8 +6262,7 @@ function renderDualHedgeControl() {
 
 function isTestStrategy(s) {
   if (!s) return false;
-  if (s.ui_panel) return s.ui_panel === "test";
-  return !!(s.test_group || s.testGroup);
+  return isTestCatalogEntry(s);
 }
 
 function isHtfStrategy(s) {
@@ -4526,9 +6282,13 @@ function catalogByGroup(group = false) {
   const want =
     group === true || group === "test" ? "test" : group === "htf1h" ? "htf1h" : "main";
   return strategyCatalog.filter((s) => {
-    const panel = strategyUiPanel(s);
-    if (panel === "hidden") return false;
-    return panel === want;
+    if (!s) return false;
+    if (want === "test") return isTestCatalogEntry(s) && !isHtfStrategy(s);
+    if (want === "htf1h") return isHtfStrategy(s);
+    // Main: only strategies explicitly copied into placement.main
+    if (s.in_main != null) return !!s.in_main;
+    if (s.show_on_main != null) return !!s.show_on_main;
+    return strategyUiPanel(s) === "main" && !isBirthTestStrategy(s);
   });
 }
 
@@ -4877,8 +6637,8 @@ function bindUiHints() {
   );
 }
 
-function whitelistSummaryText(pairs) {
-  if (isAllVolumePairlist()) return "top-200 по объёму · развернуть";
+function whitelistSummaryText(pairs, bot) {
+  if (bot !== "grid" && isAllVolumePairlist()) return "top-200 по объёму · развернуть";
   if (!pairs.length) return "пусто · развернуть";
   if (pairs.length <= 2) return `${pairs.join(", ")} · развернуть`;
   return `${pairs.length} пар · развернуть`;
@@ -4891,7 +6651,7 @@ function renderWhitelist(bot, whitelist) {
   const el = $(BOTS[bot].pairsEl);
   if (el) el.textContent = pairs.join(", ") || "—";
   const summary = $(`${bot}-pairs-summary`);
-  if (summary) summary.textContent = whitelistSummaryText(pairs);
+  if (summary) summary.textContent = whitelistSummaryText(pairs, bot);
   if (bot === "strategy") {
     const testEl = $("test-strategy-pairs");
     if (testEl) testEl.textContent = pairs.join(", ") || "—";
@@ -5607,8 +7367,8 @@ function renderStrategyTogglesInto(container, { testGroup = false, group = "" } 
           ? "Нет тестовых 1-часовых"
           : "Нет 1-часовых в основных — добавьте в Настройках, меню «Перенос»"
         : panelGroup === "test"
-          ? "Нет стратегий в тестовом блоке — перенесите из Основных в Настройках («Перенос»)"
-          : "Нет стратегий в Основных — добавьте в Настройках («Перенос»). На Live список не синхронизируется с Demo";
+          ? "Нет тестовых стратегий в каталоге"
+          : "Нет стратегий в Основных — добавьте через «Перенос» выше (копия, в Тестовых останутся)";
     container.innerHTML = `<li class="strategy-toggle-item strategy-panel-empty"><span class="muted">${empty}</span></li>`;
     return;
   }
@@ -6052,6 +7812,16 @@ async function setStrategyRisk(stoplossPct, takeProfitPct) {
   return data;
 }
 
+async function setStrategyTimeClose(patch) {
+  const data = await pairConfigApi("/pairs", "POST", {
+    action: "set_strategy_time_close",
+    ...patch,
+  });
+  syncStrategyRiskFromPayload(data);
+  updateStrategyDisplay();
+  return data;
+}
+
 function renderStrategyRiskInputHtml() {
   const sl = Number(strategyRisk.stoploss_pct);
   const tp = Number(strategyRisk.take_profit_pct);
@@ -6086,7 +7856,151 @@ function renderStrategyRiskControls() {
     el.innerHTML = renderStrategyRiskInputHtml();
     bindStrategyRiskInput(el.querySelector("[data-strategy-risk-input]"));
   }
+  const tcEl = $("strategy-time-close-panel");
+  const locked = settingsReadonly || demoMirrorAdmin;
+  const sig = [
+    strategyRisk.time_close_enabled,
+    strategyRisk.time_close_minutes,
+    strategyRisk.time_close_tp_pct,
+    strategyRisk.time_close_loss_enabled,
+    strategyRisk.time_close_loss_minutes,
+    strategyRisk.time_close_loss_tp_pct,
+    locked,
+  ].join("|");
+  if (tcEl && tcEl.dataset.settingsSig !== sig && !tcEl.contains(document.activeElement)) {
+    tcEl.innerHTML = renderStrategyTimeCloseHtml();
+    tcEl.dataset.settingsSig = sig;
+    bindStrategyTimeClose(tcEl);
+    tcEl.querySelectorAll("input, button").forEach((el) => { el.disabled = locked; });
+  }
   updateBotSettingsSummaries();
+}
+
+function renderTimeCloseLegHtml({
+  kind,
+  title,
+  enabled,
+  minutes,
+  threshold,
+  thresholdLabel,
+  ariaThreshold,
+  prefix,
+}) {
+  return `
+    <div class="numeric-setting strategy-risk-setting strategy-time-close-leg" data-${prefix}-time-close-${kind}>
+      <span class="strategy-time-close-leg-title">${title}</span>
+      <label class="strategy-dual-hedge-label" title="${title}: включить">
+        <input type="checkbox" class="${prefix}-time-close-${kind}-cb" ${enabled ? "checked" : ""} />
+        <span class="strategy-dual-hedge-title-text"><strong>Вкл</strong></span>
+      </label>
+      <label class="strategy-risk-field">
+        <span class="muted">Через</span>
+        <input type="number" class="numeric-setting-input ${prefix}-time-close-${kind}-minutes" min="${TEST_TIME_CLOSE_MIN_MIN}" max="${TEST_TIME_CLOSE_MIN_MAX}" step="1" value="${minutes}" inputmode="numeric" aria-label="${title}: минуты" />
+        <span class="numeric-setting-suffix">мин</span>
+      </label>
+      <label class="strategy-risk-field">
+        <span class="muted">${thresholdLabel} &gt;</span>
+        <input type="number" class="numeric-setting-input ${prefix}-time-close-${kind}-tp" min="${TEST_TP_MIN}" max="${TEST_TP_MAX}" step="0.1" value="${threshold}" inputmode="decimal" aria-label="${ariaThreshold}" />
+        <span class="numeric-setting-suffix">%</span>
+      </label>
+      <button type="button" class="btn btn-sm primary numeric-setting-save" data-time-close-kind="${kind}">Сохранить</button>
+    </div>
+  `;
+}
+
+function renderStrategyTimeCloseHtml() {
+  const hint = uiHintHtml(
+    "Таймер считается от открытия каждой сделки отдельно. Проверка один раз, когда у этой сделки проходит указанное время (плюс несколько минут на цикл монитора): прибыль строго выше порога — закрыть. Если в этот момент порог не пройден, по времени сделка больше не закроется. Сделки с разным временем входа не закрываются вместе. «Закрытие убытков» — то же для убытка (по умолчанию выкл). PnL до комиссии. Обычные SL/TP работают независимо."
+  );
+  return `
+    <div class="strategy-risk-bar-inner strategy-time-close-stack">
+      <span class="strategy-risk-title">Закрытие по истечению времени ${hint}</span>
+      ${renderTimeCloseLegHtml({
+        kind: "profit",
+        title: "Закрытие прибыли",
+        enabled: !!strategyRisk.time_close_enabled,
+        minutes: Number(strategyRisk.time_close_minutes),
+        threshold: Number(strategyRisk.time_close_tp_pct),
+        thresholdLabel: "Прибыль",
+        ariaThreshold: "Текущая прибыль до комиссии больше, %",
+        prefix: "strategy",
+      })}
+      ${renderTimeCloseLegHtml({
+        kind: "loss",
+        title: "Закрытие убытков",
+        enabled: !!strategyRisk.time_close_loss_enabled,
+        minutes: Number(strategyRisk.time_close_loss_minutes),
+        threshold: Number(strategyRisk.time_close_loss_tp_pct),
+        thresholdLabel: "Убыток",
+        ariaThreshold: "Текущий убыток до комиссии больше, %",
+        prefix: "strategy",
+      })}
+    </div>
+  `;
+}
+
+function bindTimeCloseLeg(container, { prefix, kind, saveFn, enabledKey, minutesKey, tpKey }) {
+  if (!container) return;
+  const cb = container.querySelector(`.${prefix}-time-close-${kind}-cb`);
+  const minInput = container.querySelector(`.${prefix}-time-close-${kind}-minutes`);
+  const tpInput = container.querySelector(`.${prefix}-time-close-${kind}-tp`);
+  const btn = container.querySelector(".numeric-setting-save");
+  if (!cb || !minInput || !tpInput || !btn) return;
+
+  const save = async () => {
+    const minutes = Number(minInput.value);
+    const tp = Number(tpInput.value);
+    if (!Number.isInteger(minutes) || minutes < TEST_TIME_CLOSE_MIN_MIN || minutes > TEST_TIME_CLOSE_MIN_MAX) {
+      showToast(`Время: от ${TEST_TIME_CLOSE_MIN_MIN} до ${TEST_TIME_CLOSE_MIN_MAX} мин`, "warn");
+      return;
+    }
+    if (!Number.isFinite(tp) || tp < TEST_TP_MIN || tp > TEST_TP_MAX) {
+      showToast(`Порог: от ${TEST_TP_MIN}% до ${TEST_TP_MAX}%`, "warn");
+      return;
+    }
+    btn.disabled = true;
+    try {
+      await saveFn({
+        [enabledKey]: cb.checked,
+        [minutesKey]: Math.round(minutes),
+        [tpKey]: tp,
+      });
+    } catch (e) {
+      if (e.message === "auth") logout();
+      else showToast(formatApiError(e.message), "error");
+    } finally {
+      btn.disabled = false;
+    }
+  };
+
+  btn.onclick = save;
+  cb.onchange = save;
+  minInput.onkeydown = (e) => {
+    if (e.key === "Enter") save();
+  };
+  tpInput.onkeydown = (e) => {
+    if (e.key === "Enter") save();
+  };
+}
+
+function bindStrategyTimeClose(panel) {
+  if (!panel) return;
+  bindTimeCloseLeg(panel.querySelector("[data-strategy-time-close-profit]"), {
+    prefix: "strategy",
+    kind: "profit",
+    saveFn: setStrategyTimeClose,
+    enabledKey: "time_close_enabled",
+    minutesKey: "time_close_minutes",
+    tpKey: "time_close_tp_pct",
+  });
+  bindTimeCloseLeg(panel.querySelector("[data-strategy-time-close-loss]"), {
+    prefix: "strategy",
+    kind: "loss",
+    saveFn: setStrategyTimeClose,
+    enabledKey: "time_close_loss_enabled",
+    minutesKey: "time_close_loss_minutes",
+    tpKey: "time_close_loss_tp_pct",
+  });
 }
 
 function renderTestStrategyRiskInputHtml() {
@@ -6117,10 +8031,79 @@ function renderTestStrategyRiskInputHtml() {
 
 function renderTestStrategyRiskControls() {
   const el = $("test-strategy-risk-panel");
-  if (!el) return;
-  el.innerHTML = renderTestStrategyRiskInputHtml();
-  bindTestStrategyRiskInput(el.querySelector("[data-test-strategy-risk-input]"));
+  if (el) {
+    el.innerHTML = renderTestStrategyRiskInputHtml();
+    bindTestStrategyRiskInput(el.querySelector("[data-test-strategy-risk-input]"));
+  }
+  const tcEl = $("test-strategy-time-close-panel");
+  const locked = settingsReadonly || demoMirrorAdmin;
+  const sig = [
+    testSettings.time_close_enabled,
+    testSettings.time_close_minutes,
+    testSettings.time_close_tp_pct,
+    testSettings.time_close_loss_enabled,
+    testSettings.time_close_loss_minutes,
+    testSettings.time_close_loss_tp_pct,
+    locked,
+  ].join("|");
+  if (tcEl && tcEl.dataset.settingsSig !== sig && !tcEl.contains(document.activeElement)) {
+    tcEl.innerHTML = renderTestStrategyTimeCloseHtml();
+    tcEl.dataset.settingsSig = sig;
+    bindTestStrategyTimeClose(tcEl);
+    tcEl.querySelectorAll("input, button").forEach((el) => { el.disabled = locked; });
+  }
   updateBotSettingsSummaries();
+}
+
+function renderTestStrategyTimeCloseHtml() {
+  const hint = uiHintHtml(
+    "Таймер тестового блока считается от открытия каждой сделки отдельно. Проверка один раз, когда у этой сделки проходит указанное время (плюс несколько минут на цикл монитора): прибыль строго выше порога — закрыть. Если в этот момент порог не пройден, по времени сделка больше не закроется. «Закрытие убытков» — то же для убытка (по умолчанию выкл). PnL до комиссии. Обычные SL/TP работают независимо."
+  );
+  return `
+    <div class="strategy-risk-bar-inner strategy-time-close-stack">
+      <span class="strategy-risk-title">Закрытие по истечению времени ${hint}</span>
+      ${renderTimeCloseLegHtml({
+        kind: "profit",
+        title: "Закрытие прибыли",
+        enabled: !!testSettings.time_close_enabled,
+        minutes: Number(testSettings.time_close_minutes),
+        threshold: Number(testSettings.time_close_tp_pct),
+        thresholdLabel: "Прибыль",
+        ariaThreshold: "Текущая прибыль до комиссии больше, %",
+        prefix: "test",
+      })}
+      ${renderTimeCloseLegHtml({
+        kind: "loss",
+        title: "Закрытие убытков",
+        enabled: !!testSettings.time_close_loss_enabled,
+        minutes: Number(testSettings.time_close_loss_minutes),
+        threshold: Number(testSettings.time_close_loss_tp_pct),
+        thresholdLabel: "Убыток",
+        ariaThreshold: "Текущий убыток до комиссии больше, %",
+        prefix: "test",
+      })}
+    </div>
+  `;
+}
+
+function bindTestStrategyTimeClose(panel) {
+  if (!panel) return;
+  bindTimeCloseLeg(panel.querySelector("[data-test-time-close-profit]"), {
+    prefix: "test",
+    kind: "profit",
+    saveFn: setTestStrategySettings,
+    enabledKey: "time_close_enabled",
+    minutesKey: "time_close_minutes",
+    tpKey: "time_close_tp_pct",
+  });
+  bindTimeCloseLeg(panel.querySelector("[data-test-time-close-loss]"), {
+    prefix: "test",
+    kind: "loss",
+    saveFn: setTestStrategySettings,
+    enabledKey: "time_close_loss_enabled",
+    minutesKey: "time_close_loss_minutes",
+    tpKey: "time_close_loss_tp_pct",
+  });
 }
 
 async function setTestStrategySettings(patch) {
@@ -6235,7 +8218,7 @@ function updateMaxTradesHint() {
       ? ` · ≤${BOTS.strategy.maxPerStrategy}/стратегия`
       : "";
   const testBit = testMax > 0 ? ` · тест ≤${testMax}` : "";
-  el.textContent = `Стратегии — ${mainSlots}+${testMax}${per}${testBit} · Price Action`;
+  el.textContent = `Стратегии — ${mainSlots}+${testMax}${per}${testBit}`;
 }
 
 async function setMaxTrades(bot, value) {
@@ -6391,11 +8374,14 @@ function bindStakeInput(container, bot) {
 
 function renderMaxTradesInput(bot) {
   const maxTrades = BOTS[bot].maxTrades;
+  const label = bot === "grid" ? "Боковиков" : `Макс. сделок ${BOTS[bot].label}`;
+  const hint = bot === "grid" ? `<span class="muted stat-hint">сколько каналов держим · 0 = стоп</span>` : "";
   return `
     <div class="numeric-setting" data-max-trades-input data-bot="${bot}">
-      <input type="number" class="numeric-setting-input" min="0" step="1" value="${maxTrades}" inputmode="numeric" aria-label="Макс. сделок ${BOTS[bot].label}" />
+      <input type="number" class="numeric-setting-input" min="0" step="1" value="${maxTrades}" inputmode="numeric" aria-label="${label}" />
       <button type="button" class="btn btn-sm primary numeric-setting-save">Сохранить</button>
     </div>
+    ${hint}
   `;
 }
 
@@ -6487,25 +8473,18 @@ function renderStrategySharedLimitsInto(el, { compact = false } = {}) {
 }
 
 function renderTestStrategyStats(el, profit, balance, openCount) {
+  renderBotBalanceSection("test-strategy", profit, "test", balance);
   if (!el) return;
   const active = document.activeElement;
   if (active && el.contains(active) && active.matches("input, button")) return;
   const maxOpen = Number(testSettings.max_open_trades) || 0;
   const per = Number(testSettings.max_open_trades_per_strategy) || 0;
   const stake = Number(testSettings.stake_amount) || 5;
-  const usdt = getUsdtWallet(balance);
-  const botAvail = usdt?.bot_owned;
-  const walletFree = usdt?.free;
-  const inMargin = usdt?.used;
   const sig = [
     openCount,
     maxOpen,
     per,
     stake,
-    fmtClosedProfit(profit, "test"),
-    botAvail ?? "",
-    walletFree ?? "",
-    inMargin ?? "",
   ].join("|");
   const dirtyInput = [...el.querySelectorAll("input")].some(
     (input) => input !== document.activeElement && input.value !== input.defaultValue
@@ -6522,7 +8501,7 @@ function renderTestStrategyStats(el, profit, balance, openCount) {
       </div>
       <span class="muted stat-hint">0 = стоп тестовых · отдельно от основных</span>
     </div>
-    <div class="stat-per-strategy">
+    <div class="stat stat-per-strategy">
       <span class="stat-inline-label">На одну тестовую</span>
       <div class="numeric-setting" data-test-max-per-input>
         <input type="number" class="numeric-setting-input" min="0" step="1" value="${per}" inputmode="numeric" aria-label="Макс. сделок на одну тестовую стратегию" />
@@ -6530,7 +8509,6 @@ function renderTestStrategyStats(el, profit, balance, openCount) {
       </div>
       <span class="muted stat-hint">0 = без лимита по enter_tag</span>
     </div>
-    <div class="stat">Прибыль (закрытые)<strong>${fmtClosedProfit(profit, "test")}</strong></div>
     <div class="stat stat-stake-limit">
       <span class="stat-inline-label">Stake (тест)</span>
       <div class="numeric-setting numeric-setting-stake" data-test-stake-input>
@@ -6538,10 +8516,6 @@ function renderTestStrategyStats(el, profit, balance, openCount) {
         <span class="numeric-setting-suffix">USDT</span>
         <button type="button" class="btn btn-sm primary numeric-setting-save">Сохранить</button>
       </div>
-    </div>
-    <div class="stat" title="Сколько USDT этот бот может использовать для новой сделки (учитываются только его сделки в БД)">
-      Доступно боту<strong>${botAvail != null ? fmtUsd(botAvail) : "—"}</strong>
-      <span class="stat-hint">общий кошелёк ${walletFree != null ? fmtUsd(walletFree) : "—"} · в марже ${inMargin != null ? fmtUsd(inMargin) : "—"}</span>
     </div>
   `;
   bindNumericSetting(el.querySelector("[data-test-max-trades-input]"), {
@@ -6608,19 +8582,16 @@ function renderHtfStakeControls() {
   });
 }
 
-function renderHtfStrategyStats(el, profit, openCount) {
+function renderHtfStrategyStats(el, profit, openCount, balance) {
   if (!el) return;
-  const closed = fmtClosedProfit(profit, "htf1h");
   const n = profit?.trade_count_htf;
   const closedNote = n != null ? `${n} сделок` : "";
-  const sig = [openCount, closed, closedNote].join("|");
+  renderBotBalanceSection("htf1h", profit, "htf1h", balance, closedNote);
+  const sig = String(openCount);
   if (el.dataset.statSig === sig) return;
   el.dataset.statSig = sig;
   el.innerHTML = `
     <div class="stat">Открыто (1-часовые)<strong>${openCount}</strong></div>
-    <div class="stat">Прибыль (закрытые)<strong>${closed}</strong>
-      ${closedNote ? `<span class="stat-hint">${closedNote}</span>` : ""}
-    </div>
   `;
 }
 
@@ -6631,8 +8602,9 @@ function renderTestStrategyLimits() {
 function isTestStrategyId(sid) {
   const id = String(sid || "");
   if (!id) return false;
-  const fromCatalog = (strategyCatalog || []).find((s) => s.id === id);
-  if (fromCatalog) return isTestCatalogEntry(fromCatalog);
+  const base = statsRowBaseId(id);
+  const fromCatalog = (strategyCatalog || []).find((s) => s.id === id || s.id === base);
+  if (fromCatalog) return isTestLaneStrategy(fromCatalog);
   // Catalog may still be loading, or the tenant allowlist omitted this id.
   return /TestStrategy$/i.test(id);
 }
@@ -6687,7 +8659,7 @@ function splitStrategyTrades(trades) {
   const test = [];
   const htf = [];
   for (const t of list) {
-    if (isRetiredTrade(t) || isPriceActionTrade(t)) continue;
+    if (isRetiredTrade(t)) continue;
     if (isHtfTrade(t)) htf.push(t);
     else if (isTestTrade(t, "strategy")) test.push(t);
     else main.push(t);
@@ -6695,7 +8667,39 @@ function splitStrategyTrades(trades) {
   return { main, test, htf };
 }
 
+function renderBotBalanceSection(prefix, profit, scope, balance, note = "") {
+  const body = $(`${prefix}-balance-body`);
+  if (!body) return;
+  const usdt = getUsdtWallet(balance);
+  const botAvail = usdt?.bot_owned;
+  const walletFree = usdt?.free;
+  const inMargin = usdt?.used;
+  const closed = fmtClosedProfit(profit, scope);
+  const walletHint = balance?.note || `общий кошелёк ${walletFree != null ? fmtUsd(walletFree) : "—"} · в марже ${inMargin != null ? fmtUsd(inMargin) : "—"}`;
+  const sig = [closed, botAvail ?? "", walletHint, note].join("|");
+  if (body.dataset.statSig === sig) return;
+  body.dataset.statSig = sig;
+  body.innerHTML = `
+    <div class="stats">
+      <div class="stat">Прибыль (закрытые)<strong>${closed}</strong>${note ? `<span class="stat-hint">${note}</span>` : ""}</div>
+      <div class="stat" title="Сколько USDT этот бот может использовать для новой сделки (учитываются только его сделки в БД)">
+        Доступно боту<strong>${botAvail != null ? fmtUsd(botAvail) : "—"}</strong>
+        <span class="stat-hint">${escapeHtml(walletHint)}</span>
+      </div>
+    </div>
+  `;
+  const summary = $(`${prefix}-balance-summary`);
+  if (summary) {
+    const coin = closedCoin(profit, scope);
+    const parts = [];
+    if (coin != null && Number.isFinite(Number(coin))) parts.push(`PnL ${fmtUsdSigned(coin)}`);
+    if (botAvail != null) parts.push(`доступно ${fmtUsd(botAvail)}`);
+    summary.textContent = parts.length ? parts.join(" · ") : "нет данных";
+  }
+}
+
 function renderStatsInto(el, bot, profit, balance, openCount, stakeAmount, { openLabel = null } = {}) {
+  renderBotBalanceSection(bot, profit, bot === "strategy" ? "main" : null, balance);
   if (!el) return;
   // Poll rebuild must not wipe an in-progress edit of max trades / stake.
   const active = document.activeElement;
@@ -6712,16 +8716,12 @@ function renderStatsInto(el, bot, profit, balance, openCount, stakeAmount, { ope
   if (STAKE_EDITABLE_BOTS.has(bot) && stakeAmount != null) {
     BOTS[bot].stakeAmount = Number(stakeAmount);
   }
-  const usdt = getUsdtWallet(balance);
-  const botAvail = usdt?.bot_owned;
-  const walletFree = usdt?.free;
-  const inMargin = usdt?.used;
   const stakeCell = STAKE_EDITABLE_BOTS.has(bot)
     ? `<div class="stat stat-stake-limit"><span class="stat-inline-label">Stake</span>${renderStakeInput(bot)}</div>`
     : `<div class="stat">Stake<strong>${fmtUsd(stakeAmount ?? 5)}</strong></div>`;
   const perStrategyBlock =
     bot === "strategy"
-      ? `<div class="stat-per-strategy">
+      ? `<div class="stat stat-per-strategy">
           <span class="stat-inline-label">На одну стратегию</span>
           ${renderMaxPerStrategyInput()}
           <span class="muted stat-hint">0 = без лимита</span>
@@ -6734,10 +8734,6 @@ function renderStatsInto(el, bot, profit, balance, openCount, stakeAmount, { ope
     cfg.maxTrades,
     BOTS[bot]?.stakeAmount ?? stakeAmount ?? "",
     bot === "strategy" ? BOTS.strategy.maxPerStrategy : "",
-    fmtClosedProfit(profit, bot === "strategy" ? "main" : null),
-    botAvail ?? "",
-    walletFree ?? "",
-    inMargin ?? "",
     settingsReadonly ? 1 : 0,
     tradesTitle,
   ].join("|");
@@ -6750,14 +8746,9 @@ function renderStatsInto(el, bot, profit, balance, openCount, stakeAmount, { ope
     <div class="stat stat-trades-limit">
       ${tradesTitle}<strong>${openCount} / ${cfg.maxTrades}</strong>
       ${renderMaxTradesInput(bot)}
-      ${perStrategyBlock}
     </div>
-    <div class="stat">Прибыль (закрытые)<strong>${fmtClosedProfit(profit, bot === "strategy" ? "main" : null)}</strong></div>
+    ${perStrategyBlock}
     ${stakeCell}
-    <div class="stat" title="Сколько USDT этот бот может использовать для новой сделки (учитываются только его сделки в БД)">
-      Доступно боту<strong>${botAvail != null ? fmtUsd(botAvail) : "—"}</strong>
-      <span class="stat-hint">общий кошелёк ${walletFree != null ? fmtUsd(walletFree) : "—"} · в марже ${inMargin != null ? fmtUsd(inMargin) : "—"}</span>
-    </div>
   `;
   bindMaxTradesInput(el.querySelector("[data-max-trades-input]"), bot);
   if (bot === "strategy") {
@@ -6770,7 +8761,88 @@ function renderStatsInto(el, bot, profit, balance, openCount, stakeAmount, { ope
 }
 
 function renderStats(bot, profit, balance, openCount, stakeAmount) {
-  renderStatsInto($(BOTS[bot].statsEl), bot, profit, balance, openCount, stakeAmount);
+  const openLabel = bot === "grid" ? "Боковиков" : null;
+  renderStatsInto($(BOTS[bot].statsEl), bot, profit, balance, openCount, stakeAmount, { openLabel });
+}
+
+/** Stake PnL at a given mark vs open_rate (same formula as backend mark-to-market). */
+function tradePnlAtRate(t, rate) {
+  const open = Number(t.open_rate);
+  const r = Number(rate);
+  const lev = Number(t.leverage) || 1;
+  const stake = Number(t.stake_amount) || 0;
+  if (!(open > 0) || !(r > 0) || !Number.isFinite(r)) return null;
+  const ratio = t.is_short ? ((open - r) / open) * lev : ((r - open) / open) * lev;
+  return { ratio, abs: ratio * stake, pct: ratio * 100 };
+}
+
+function fmtTradePnlSpan(pnl) {
+  if (!pnl) return "—";
+  return `<span class="${pnlClass(pnl.abs)}">${fmtPct(pnl.pct)} (${fmtUsd(pnl.abs, 4)})</span>`;
+}
+
+function tradeHasTrackedExtremes(t) {
+  const minR = Number(t?.min_rate);
+  const maxR = Number(t?.max_rate);
+  return minR > 0 && maxR > 0 && Number.isFinite(minR) && Number.isFinite(maxR);
+}
+
+/**
+ * Best / worst stake-PnL extremes from min_rate/max_rate.
+ * requireTracked=true (history): empty when min/max never recorded (old closes).
+ * Open cards also fold in current_rate; closed — close_rate when tracked.
+ */
+function tradeMaxProfitLoss(t, { requireTracked = false } = {}) {
+  const open = Number(t.open_rate);
+  if (!(open > 0)) return { maxProfit: null, maxLoss: null };
+  const hasTracked = tradeHasTrackedExtremes(t);
+  if (requireTracked && !hasTracked) return { maxProfit: null, maxLoss: null };
+
+  const cur = Number(t.current_rate);
+  const close = Number(t.close_rate);
+  let minR = hasTracked ? Number(t.min_rate) : NaN;
+  let maxR = hasTracked ? Number(t.max_rate) : NaN;
+  const extras = [];
+  if (Number.isFinite(cur) && cur > 0) extras.push(cur);
+  if (Number.isFinite(close) && close > 0) extras.push(close);
+
+  if (!(minR > 0) || !(maxR > 0)) {
+    if (requireTracked) return { maxProfit: null, maxLoss: null };
+    minR = extras.length ? Math.min(open, ...extras) : open;
+    maxR = extras.length ? Math.max(open, ...extras) : open;
+  } else {
+    for (const e of extras) {
+      minR = Math.min(minR, e);
+      maxR = Math.max(maxR, e);
+    }
+  }
+
+  const atMin = tradePnlAtRate(t, minR);
+  const atMax = tradePnlAtRate(t, maxR);
+  const candidates = [atMin, atMax].filter(Boolean);
+  if (!candidates.length) return { maxProfit: null, maxLoss: null };
+  let maxProfit = candidates[0];
+  let maxLoss = candidates[0];
+  for (const c of candidates) {
+    if (c.ratio > maxProfit.ratio) maxProfit = c;
+    if (c.ratio < maxLoss.ratio) maxLoss = c;
+  }
+  return { maxProfit, maxLoss };
+}
+
+function fmtHistoryExtremeCell(pnl) {
+  if (!pnl) return "—";
+  return `${fmtUsdSigned(pnl.abs, 2)}<br><span class="muted history-pnl-pct">${fmtPct(pnl.pct)}</span>`;
+}
+
+function historyExtremeExportFields(t) {
+  const { maxProfit, maxLoss } = tradeMaxProfitLoss(t, { requireTracked: true });
+  return {
+    max_profit_usdt: maxProfit ? maxProfit.abs.toFixed(4) : "",
+    max_profit_pct: maxProfit ? maxProfit.pct.toFixed(2) : "",
+    max_loss_usdt: maxLoss ? maxLoss.abs.toFixed(4) : "",
+    max_loss_pct: maxLoss ? maxLoss.pct.toFixed(2) : "",
+  };
 }
 
 function tradeDetailRows(t) {
@@ -6781,6 +8853,7 @@ function tradeDetailRows(t) {
   const openOrderText = openOrders.length
     ? openOrders.map((o) => `${o.ft_order_side} ${o.order_type}`).join(", ")
     : null;
+  const extremes = tradeMaxProfitLoss(t);
 
   return [
     ["Пара", t.pair],
@@ -6796,6 +8869,8 @@ function tradeDetailRows(t) {
     ["Номинал (сейчас)", notional != null ? fmtUsd(notional) : "—"],
     ["Вложено (маржа)", fmtUsd(t.max_stake_amount ?? t.stake_amount)],
     ["Нереализ. PnL", `<span class="${pnlClass(t.profit_abs)}">${fmtPct(t.profit_pct)} (${fmtUsd(t.profit_abs, 4)})</span>`],
+    ["Макс. прибыль", fmtTradePnlSpan(extremes.maxProfit)],
+    ["Макс. убыток", fmtTradePnlSpan(extremes.maxLoss)],
     ["Общий PnL", `<span class="${pnlClass(t.total_profit_abs)}">${fmtPctRatio(t.total_profit_ratio)} (${fmtUsd(t.total_profit_abs, 4)})</span>`],
     ["Комиссия funding", t.funding_fees != null ? fmtUsd(t.funding_fees, 4) : "—"],
     ["Стоп-лосс", t.stop_loss_abs != null ? `${fmtRate(t.stop_loss_abs)} (${fmtPctRatio(t.stop_loss_ratio)})` : "—"],
@@ -6825,6 +8900,7 @@ function tradeListSignature(bot, trades) {
           t.leverage || 1,
           t.strategy || "",
           t.enter_tag || "",
+          t.open_date || "",
           fmtMlConfidenceDetail(t),
           t.open_rate,
           t.current_rate,
@@ -6916,7 +8992,7 @@ function renderTradesInto(el, bot, trades) {
         .join("");
       const pnl = Number(t.profit_pct || 0);
       const tag = tradeSourceLabel(t, bot);
-      const mlBadge = renderTradeMlBadge(t);
+      const openAt = t.open_date ? fmtAppDateShort(t.open_date) : "—";
       const expanded = isTradeExpanded(bot, t.trade_id);
       const expandCls = expanded ? "is-expanded" : "is-collapsed";
       return `<article class="trade-card ${expandCls}" data-trade-id="${t.trade_id}">
@@ -6924,11 +9000,9 @@ function renderTradesInto(el, bot, trades) {
           <button type="button" class="trade-toggle" aria-expanded="${expanded ? "true" : "false"}" aria-label="${expanded ? "Свернуть сделку" : "Развернуть сделку"}">
             <div class="trade-summary-main">
               <strong class="trade-pair">${t.pair}</strong>
-              <span class="trade-meta">${t.is_short ? "SHORT" : "LONG"} · ${t.leverage || 1}x · #${t.trade_id}</span>
-              <span class="trade-meta">${tag}${tradeMlSummaryLabel(t)} · маржа ${fmtUsd(t.stake_amount)}</span>
+              <span class="trade-meta">${openAt} · ${t.leverage || 1}x · ${tag} · маржа ${fmtUsd(t.stake_amount)}</span>
             </div>
             <div class="trade-head-right">
-              ${mlBadge}
               <span class="trade-pnl ${pnlClass(t.profit_abs)}">${fmtPct(pnl)}</span>
               <span class="trade-rate">${fmtUsd(t.profit_abs, 4)}</span>
             </div>
@@ -7056,8 +9130,12 @@ function renderActions(bot, running) {
   }
   const slotsDisabled = Number(cfg.maxTrades) <= 0;
   if (slotsDisabled) {
+    const slotsNote =
+      bot === "grid"
+        ? "Боковиков = 0 — бот остановлен. Укажите, сколько каналов держать."
+        : "Макс. сделок = 0 — бот остановлен и не торгует. Установите 1 или больше на карточке бота.";
     fillAll(`
-      <p class="muted finder-disabled-note">Макс. сделок = 0 — бот остановлен и не торгует. Установите 1 или больше на карточке бота.</p>
+      <p class="muted finder-disabled-note">${slotsNote}</p>
       <button class="btn" data-bot="${bot}" data-act="stop" ${!running ? "disabled" : ""}>Стоп</button>
       <button class="btn" data-bot="${bot}" data-act="reload">Reload config</button>
     `);
@@ -7088,8 +9166,9 @@ function renderActions(bot, running) {
     fillAll(`<span class="muted">Demo: просмотр сделок администратора</span>`);
     return;
   }
+  const startLabel = bot === "grid" ? "Старт · Demo" : "Старт";
   fillAll(`
-    <button class="btn primary" data-bot="${bot}" data-act="start" ${running ? "disabled" : ""}>Старт</button>
+    <button class="btn primary" data-bot="${bot}" data-act="start" ${running ? "disabled" : ""}>${startLabel}</button>
     <button class="btn" data-bot="${bot}" data-act="stop" ${!running ? "disabled" : ""}>Стоп</button>
     <button class="btn" data-bot="${bot}" data-act="reload">Reload config</button>
     ${scanBtn}
@@ -7101,11 +9180,17 @@ function renderActions(bot, running) {
     try {
       if (act === "start") {
         if (Number(BOTS[bot].maxTrades) <= 0) {
-          showToast("Макс. сделок = 0. Установите 1 или больше в Настройках.", "warn");
+          showToast(
+            bot === "grid"
+              ? "Боковиков = 0. Укажите, сколько каналов держать."
+              : "Макс. сделок = 0. Установите 1 или больше в Настройках.",
+            "warn"
+          );
           return;
         }
         btn.disabled = true;
         await setBotEnabled(bot, true);
+        if (bot === "grid") showToast("Grid торгует на Demo-счёте администратора", "info");
       }
       if (act === "stop") {
         if (!confirm(`Остановить бота «${BOTS[bot].label}»? Новые сделки не будут открываться.`)) return;
@@ -7290,6 +9375,20 @@ function paintTestStrategyScanActions() {
   bindStrategyRunScanButton();
 }
 
+function strategyScanCount(raw) {
+  if (raw == null || raw === "") return null;
+  if (typeof raw === "number" && Number.isFinite(raw)) return raw;
+  if (typeof raw === "string" && raw.trim() !== "" && Number.isFinite(Number(raw))) return Number(raw);
+  if (Array.isArray(raw)) return raw.length;
+  if (typeof raw === "object") {
+    if (Array.isArray(raw.selected)) return raw.selected.length;
+    if (typeof raw.selected === "number") return raw.selected;
+    if (typeof raw.found === "number") return raw.found;
+    if (typeof raw.count === "number") return raw.count;
+  }
+  return null;
+}
+
 async function loadStrategyScanInfo() {
   const els = ["strategy-scan-info"]
     .map((id) => $(id))
@@ -7319,7 +9418,11 @@ async function loadStrategyScanInfo() {
     const by = d.by_strategy || {};
     const parts = Object.entries(by)
       .slice(0, 4)
-      .map(([sid, cnt]) => `${STRATEGY_SCAN_SHORT[sid] || sid.replace(/Strategy$/, "")}:${cnt}`)
+      .map(([sid, raw]) => {
+        const name = STRATEGY_SCAN_SHORT[sid] || String(sid).replace(/Strategy$/, "");
+        const count = strategyScanCount(raw);
+        return count == null ? name : `${name}: ${count}`;
+      })
       .join(" · ");
     setText(
       parts
@@ -7450,7 +9553,7 @@ function paintBotLive(bot, { config, profit, balance, trades, running, stateHint
       openLabel: "Открыто (основные)",
     });
     renderTestStrategyStats($("test-strategy-stats"), profit, balance, test.length);
-    renderHtfStrategyStats($("htf1h-stats"), profit, (htf || []).length);
+    renderHtfStrategyStats($("htf1h-stats"), profit, (htf || []).length, balance);
     renderActions(bot, isRunning);
     renderTradesInto($(BOTS.strategy.tradesEl), bot, main);
     renderTradesInto($("test-strategy-trades"), bot, test);
@@ -8183,10 +10286,15 @@ async function refreshBybitGrid({ scan = false } = {}) {
     }
     statsEl.innerHTML = `
       <div class="stat"><span class="muted">Активных</span><strong>${active.length}</strong></div>
-      <div class="stat"><span class="muted">Суммарный PnL</span><strong class="${pnlCls}">${pnl >= 0 ? "+" : ""}${pnl.toFixed(2)} USDT</strong></div>
-      <div class="stat"><span class="muted">Funding</span><strong class="${funding.ok === false ? "loss" : ""}">${funding.fund_usdt != null ? Number(funding.fund_usdt).toFixed(1) : "—"}</strong></div>
       <div class="stat"><span class="muted">Лимит</span><strong>${maxBots}</strong></div>
     `;
+    $("bybitgrid-balance-body").innerHTML = `
+      <div class="stats">
+        <div class="stat">PnL активных сеток<strong class="${pnlCls}">${fmtUsdSigned(pnl)}</strong><span class="stat-hint">Реализованный + нереализованный</span></div>
+        <div class="stat">Баланс Funding<strong class="${funding.ok === false ? "loss" : ""}">${funding.fund_usdt != null ? fmtUsd(funding.fund_usdt) : "—"}</strong><span class="stat-hint">Unified ${funding.unified_usdt != null ? fmtUsd(funding.unified_usdt) : "—"}</span></div>
+      </div>
+    `;
+    $("bybitgrid-balance-summary").textContent = `PnL активных ${fmtUsdSigned(pnl)}`;
     updateBotSettingsSummaries();
 
     const canDeployMore = active.length < maxBots;
@@ -8797,357 +10905,6 @@ function bindLlmControls() {
   });
 }
 
-let paPairs = [];
-let paRenderSig = "";
-
-function closePaTickersPanel() {
-  const wrap = $("pa-tickers");
-  const panel = $("pa-tickers-panel");
-  const btn = $("pa-tickers-btn");
-  if (panel) {
-    panel.hidden = true;
-    resetStrategyTickersPanelPosition(panel);
-  }
-  if (btn) btn.setAttribute("aria-expanded", "false");
-  wrap?.classList.remove("is-open");
-}
-
-function renderPaPairs(pairs) {
-  const el = $("pa-pairs");
-  if (!el) return;
-  paPairs = Array.isArray(pairs) ? pairs.slice() : [];
-  const count = $("pa-tickers-count");
-  if (count) count.textContent = String(paPairs.length);
-  const key = paPairs.join("|");
-  if (el.dataset.pairsKey === key) return;
-  el.dataset.pairsKey = key;
-  el.innerHTML = paPairs.length
-    ? paPairs
-        .map(
-          (pair) => `
-      <li class="strategy-tickers-item">
-        <span class="strategy-tickers-pair" title="${escapeHtml(pair)}">${escapeHtml(pairBaseLabel(pair))}</span>
-        <button type="button" class="strategy-tickers-remove" data-pair="${escapeHtml(pair)}" title="Убрать ${escapeHtml(pairBaseLabel(pair))}" ${settingsReadonly ? "disabled" : ""}>×</button>
-      </li>`
-        )
-        .join("")
-    : `<li class="strategy-tickers-empty muted">Нет тикеров — бот не торгует</li>`;
-  const panel = $("pa-tickers-panel");
-  const wrap = $("pa-tickers");
-  if (panel && wrap && !panel.hidden) positionStrategyTickersPanel(wrap, panel);
-}
-
-function paDecisionText(view) {
-  if (!view) return "—";
-  const st = view.status || {};
-  const cards = Array.isArray(st.cards) ? st.cards : [];
-  const signals = Array.isArray(st.signals) ? st.signals : [];
-  const confirmed = cards.filter((c) => c.decision === "LONG" || c.decision === "SHORT");
-  if (!view.enabled) return "Бот выключен — нажмите Старт";
-  if (st.stale) {
-    const at = st.updated_at ? ` · последние данные ${fmtHistoryDateRaw(st.updated_at)}` : "";
-    return `Нет свежих данных бота${at} — проверьте systemd-юнит price_action`;
-  }
-  if (signals.length) {
-    return signals
-      .map((row) => {
-        const side = String(row.side || "").toUpperCase();
-        const score = Number(row.score);
-        const scoreText = Number.isFinite(score) ? ` · ${score}/8` : "";
-        const setup = row.setup === "liquidity_sweep" ? "Liquidity Sweep" : row.setup === "trend_pullback" ? "Trend Pullback" : "";
-        return `${pairBaseLabel(row.pair)} ${side}${scoreText}${setup ? ` · ${setup}` : ""}`;
-      })
-      .join(" · ");
-  }
-  if (st.state === "idle") return String(st.reason || "Нет активных пар");
-  if (st.state === "error") return String(st.reason || "Ошибка цикла — смотрите лог Price Action");
-  if (confirmed.length) return `Подтверждённых карточек: ${confirmed.length} · новых сигналов в этом цикле нет`;
-  if (cards.length) return `Скан ${cards.length} пар: подтверждённых входов нет`;
-  return String(st.reason || "Ожидание первого цикла");
-}
-
-function paPrice(value) {
-  if (value == null || value === "") return "—";
-  return fmtRate(value);
-}
-
-function paCardHtml(card) {
-  const decision = String(card.decision || "");
-  const sideClass = decision === "LONG" ? "is-long" : "is-short";
-  const regime = card.regime && typeof card.regime === "object" ? card.regime : {};
-  const tf = card.timeframes && typeof card.timeframes === "object" ? card.timeframes : {};
-  const parts = Array.isArray(card.score_parts) ? card.score_parts : [];
-  const reasons = Array.isArray(card.reasons) ? card.reasons.slice(0, 4) : [];
-  const notes = Array.isArray(card.user_notes) ? card.user_notes : [];
-  const score = Number(card.score);
-  const scoreText = Number.isFinite(score) ? `${score}/8` : "—";
-  const rr = Number(card.rr_net);
-  const risk = Number(card.risk_pct);
-  const spread = Number(card.spread_pct);
-  const depth = Number(card.depth_usdt);
-  const turnover = Number(card.turnover24h);
-  return `
-    <article class="pa-card ${sideClass}">
-      <div class="pa-card-head">
-        <span class="pa-pair" title="${escapeHtml(card.pair || "")}">${escapeHtml(pairBaseLabel(card.pair))}</span>
-        <span class="pa-side">${escapeHtml(decision)}</span>
-        <span class="pa-setup">${escapeHtml(card.setup_label || "—")}</span>
-        <span class="pa-score" title="Скор качества 0–8, не вероятность">${escapeHtml(scoreText)}</span>
-      </div>
-      <p class="pa-regime">${escapeHtml(regime.label || "Режим: —")} · 1h ${escapeHtml(tf["1h"] || "—")} · 15m ${escapeHtml(tf["15m"] || "—")} · 5m ${escapeHtml(tf["5m"] || "—")}</p>
-      <div class="pa-grid">
-        <div><span>Вход</span><strong>${paPrice(card.entry)}</strong></div>
-        <div><span>Стоп</span><strong class="neg">${paPrice(card.sl)}</strong></div>
-        <div><span>TP1</span><strong class="pos">${paPrice(card.tp1)}</strong></div>
-        <div><span>TP2</span><strong class="pos">${paPrice(card.tp2)}</strong></div>
-      </div>
-      <p class="pa-meta">
-        R/R ${Number.isFinite(rr) ? rr.toFixed(2) : "—"} · риск ${Number.isFinite(risk) ? `${risk.toFixed(2)}%` : "—"}
-        · спред ${Number.isFinite(spread) ? `${spread.toFixed(3)}%` : "—"}
-        · глубина $${Number.isFinite(depth) ? fmtUsdCompact(depth) : "—"}
-        · оборот $${Number.isFinite(turnover) ? fmtUsdCompact(turnover) : "—"}
-      </p>
-      ${
-        parts.length
-          ? `<div class="pa-score-parts">${parts
-              .map(
-                (p) =>
-                  `<span class="pa-score-part" title="${escapeHtml(p.label || "")}">${escapeHtml(p.label || "")} ${escapeHtml(String(p.score ?? 0))}/${escapeHtml(String(p.max ?? 0))}</span>`
-              )
-              .join("")}</div>`
-          : ""
-      }
-      ${
-        reasons.length
-          ? `<ul class="pa-reasons">${reasons.map((r) => `<li>${escapeHtml(r)}</li>`).join("")}</ul>`
-          : ""
-      }
-      ${
-        notes.length
-          ? `<p class="pa-user-notes">Не проходит ваши настройки: ${notes.map((n) => escapeHtml(n)).join(" · ")}</p>`
-          : ""
-      }
-    </article>`;
-}
-
-function renderPaCards(view) {
-  const el = $("pa-cards");
-  if (!el) return;
-  const cards = Array.isArray(view?.status?.cards) ? view.status.cards : [];
-  const sig = JSON.stringify(cards);
-  if (sig === paRenderSig) return;
-  paRenderSig = sig;
-  const confirmed = cards
-    .filter((c) => c.decision === "LONG" || c.decision === "SHORT")
-    .sort((a, b) => Number(b.score || 0) - Number(a.score || 0) || Number(b.rr_net || 0) - Number(a.rr_net || 0));
-  const skipped = cards
-    .filter((c) => c.decision !== "LONG" && c.decision !== "SHORT")
-    .sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
-  let html = confirmed.map(paCardHtml).join("");
-  if (skipped.length) {
-    html += `
-      <details class="pa-skipped">
-        <summary>Без входа · ${skipped.length} пар</summary>
-        <ul class="pa-skipped-list">
-          ${skipped
-            .map((card) => {
-              const reason = card.reason || (Array.isArray(card.filters) ? card.filters.find((f) => !f.ok)?.reason : "") || "нет подтверждения";
-              const score = Number(card.score);
-              return `<li><strong>${escapeHtml(pairBaseLabel(card.pair))}</strong> · ${escapeHtml(card.setup_label || "—")} · ${escapeHtml(reason)} · ${Number.isFinite(score) ? score : 0}/8</li>`;
-            })
-            .join("")}
-        </ul>
-      </details>`;
-  }
-  el.innerHTML = html;
-}
-
-function paintPriceAction(view) {
-  const badge = $("pa-state");
-  const st = view?.status || {};
-  if (badge) {
-    const on = !!view?.enabled;
-    if (on && st.stale) {
-      badge.textContent = "STALE";
-      badge.className = "badge stale";
-    } else {
-      badge.textContent = on ? "RUNNING" : "STOPPED";
-      badge.className = on ? "badge running" : "badge stopped";
-    }
-  }
-  const active = document.activeElement;
-  const settings = view?.settings || {};
-  const fields = [
-    ["pa-stake", settings.stake_amount ?? 5],
-    ["pa-leverage", settings.leverage ?? 3],
-    ["pa-max", settings.max_open_trades ?? 1],
-    ["pa-min-score", settings.min_score ?? 6],
-    ["pa-min-rr", settings.min_rr ?? 1.5],
-    ["pa-max-spread", settings.max_spread_pct ?? 0.08],
-    ["pa-min-depth", settings.min_depth_usdt ?? 20000],
-  ];
-  for (const [id, value] of fields) {
-    const el = $(id);
-    if (el && active !== el) el.value = String(value);
-    if (el) el.disabled = !!settingsReadonly;
-  }
-  const setupFields = [
-    ["pa-enable-pullback", settings.enable_trend_pullback !== false],
-    ["pa-enable-sweep", settings.enable_liquidity_sweep !== false],
-  ];
-  for (const [id, value] of setupFields) {
-    const el = $(id);
-    if (el && active !== el) el.checked = value;
-    if (el) el.disabled = !!settingsReadonly;
-  }
-  for (const id of ["pa-save", "pa-pair-add", "pa-pair-input"]) {
-    const el = $(id);
-    if (el) el.disabled = !!settingsReadonly;
-  }
-  const toggle = $("pa-toggle");
-  if (toggle) {
-    toggle.textContent = view?.enabled ? "Стоп" : "Старт";
-    toggle.classList.toggle("danger", !!view?.enabled);
-    toggle.classList.toggle("primary", !view?.enabled);
-    toggle.disabled = !!settingsReadonly;
-  }
-  const pairs = Array.isArray(settings.pairs) ? settings.pairs : view?.pairs || [];
-  renderPaPairs(pairs);
-  const setups = [];
-  if (settings.enable_trend_pullback !== false) setups.push("Trend Pullback");
-  if (settings.enable_liquidity_sweep !== false) setups.push("Liquidity Sweep");
-  const setupText = setups.length ? setups.join(" · ") : "Сетапы выключены";
-  const subtitle = $("pa-subtitle");
-  if (subtitle) {
-    subtitle.textContent = `${setupText} · ${pairs.length} пар · скор ≥ ${settings.min_score ?? 6}/8 · R/R ≥ ${settings.min_rr ?? 1.5} · стейк ${settings.stake_amount ?? 5} USDT · плечо ${settings.leverage ?? 3}x`;
-  }
-  const decision = $("pa-decision");
-  if (decision) decision.textContent = paDecisionText(view);
-  renderPaCards(view);
-  renderTradesInto($("pa-trades"), "strategy", view?.trades || []);
-}
-
-async function refreshPriceAction() {
-  if (!userMayUseBlock("price_action")) return;
-  const view = await pairConfigApi("/price-action");
-  paintPriceAction(view);
-}
-
-async function savePriceActionSettings(extra = {}) {
-  const body = {
-    enable_trend_pullback: !!$("pa-enable-pullback")?.checked,
-    enable_liquidity_sweep: !!$("pa-enable-sweep")?.checked,
-    stake_amount: Number($("pa-stake")?.value),
-    leverage: Number($("pa-leverage")?.value),
-    max_open_trades: Number($("pa-max")?.value),
-    min_score: Number($("pa-min-score")?.value),
-    min_rr: Number($("pa-min-rr")?.value),
-    max_spread_pct: Number($("pa-max-spread")?.value),
-    min_depth_usdt: Number($("pa-min-depth")?.value),
-    ...extra,
-  };
-  const view = await pairConfigApi("/price-action", "POST", body);
-  paintPriceAction(view);
-  return view;
-}
-
-function showPaMsg(text, isError = false) {
-  const el = $("pa-msg");
-  if (!el) return;
-  el.textContent = text;
-  el.className = `pair-msg ${isError ? "error" : "ok"}`;
-  el.classList.remove("hidden");
-}
-
-function bindPriceActionControls() {
-  $("pa-save")?.addEventListener("click", async () => {
-    const btn = $("pa-save");
-    if (!btn || btn.disabled) return;
-    btn.disabled = true;
-    try {
-      await savePriceActionSettings();
-      showPaMsg("Сохранено");
-    } catch (e) {
-      if (e.message === "auth") logout();
-      else showPaMsg(formatApiError(e.message), true);
-    } finally {
-      btn.disabled = !!settingsReadonly;
-    }
-  });
-  $("pa-toggle")?.addEventListener("click", async () => {
-    const btn = $("pa-toggle");
-    if (!btn || btn.disabled) return;
-    const enable = btn.textContent.trim() !== "Стоп";
-    btn.disabled = true;
-    try {
-      await savePriceActionSettings({ enabled: enable });
-      showPaMsg(enable ? "Бот запущен" : "Новые входы остановлены");
-    } catch (e) {
-      if (e.message === "auth") logout();
-      else showPaMsg(formatApiError(e.message), true);
-    } finally {
-      btn.disabled = !!settingsReadonly;
-    }
-  });
-  $("pa-tickers-btn")?.addEventListener("click", (ev) => {
-    ev.preventDefault();
-    ev.stopPropagation();
-    const wrap = $("pa-tickers");
-    const panel = $("pa-tickers-panel");
-    const btn = $("pa-tickers-btn");
-    if (!wrap || !panel || !btn) return;
-    const willOpen = panel.hidden;
-    closeAllStrategyTickersPanels();
-    closeLlmTickersPanel();
-    closeAllMlConfidenceMenus();
-    if (!willOpen) {
-      closePaTickersPanel();
-      return;
-    }
-    panel.hidden = false;
-    btn.setAttribute("aria-expanded", "true");
-    wrap.classList.add("is-open");
-    requestAnimationFrame(() => {
-      positionStrategyTickersPanel(wrap, panel);
-      const input = $("pa-pair-input");
-      if (input && !input.disabled) input.focus();
-    });
-  });
-  $("pa-pair-form")?.addEventListener("submit", async (ev) => {
-    ev.preventDefault();
-    const input = $("pa-pair-input");
-    const raw = String(input?.value || "").trim();
-    if (!raw || settingsReadonly) return;
-    const btn = $("pa-pair-add");
-    if (btn) btn.disabled = true;
-    try {
-      await savePriceActionSettings({ pairs: [...paPairs, raw] });
-      if (input) input.value = "";
-      showPaMsg("Пара добавлена");
-    } catch (e) {
-      if (e.message === "auth") logout();
-      else showPaMsg(formatApiError(e.message), true);
-    } finally {
-      if (btn) btn.disabled = !!settingsReadonly;
-    }
-  });
-  $("pa-pairs")?.addEventListener("click", async (ev) => {
-    const btn = ev.target.closest(".strategy-tickers-remove");
-    if (!btn || btn.disabled) return;
-    ev.preventDefault();
-    ev.stopPropagation();
-    const pair = btn.getAttribute("data-pair");
-    if (!pair) return;
-    btn.disabled = true;
-    try {
-      await savePriceActionSettings({ pairs: paPairs.filter((item) => item !== pair) });
-      showPaMsg(`${pairBaseLabel(pair)} убрана`);
-    } catch (e) {
-      if (e.message === "auth") logout();
-      else showPaMsg(formatApiError(e.message), true);
-    }
-  });
-}
 
 let cursorPairs = [];
 
@@ -9334,7 +11091,7 @@ function paintCursor50(view) {
 }
 
 async function refreshCursor50() {
-  if (!userMayUseBlock("llm")) return;
+  if (!userMayUseBlock("cursor50")) return;
   const view = await pairConfigApi("/cursor50");
   paintCursor50(view);
 }
@@ -9516,6 +11273,7 @@ async function refreshPanelHeavy() {
       else console.warn("refreshStrategyEnabled:", e.message);
     });
     const liveBots = ["strategy"];
+    if (userMayUseBlock("grid")) liveBots.push("grid");
     Promise.all(liveBots.map((b) => refreshBotSafe(b)))
       .then((results) => {
         const stratTrades = results[0] || [];
@@ -9535,8 +11293,9 @@ async function refreshPanelHeavy() {
       refreshServerStats().catch(() => {}),
       refreshReconcileBanner().catch(() => {}),
       loadStrategyScanInfo().catch(() => {}),
-      refreshPriceAction().catch((e) => {
-        if (e.message === "auth") logout();
+      refreshCursor50().catch((e) => {
+        if (e?.message === "auth") logout();
+        else console.warn("refreshCursor50:", e?.message || e);
       }),
     ];
     Promise.all(sideTasks).catch(() => {});
@@ -9713,7 +11472,15 @@ function renderTradingToggle(me) {
   const sigOk = sig.active ? "работает" : sig.state || "—";
   const exeOk = exe.active ? "работает" : exe.state || "—";
   statusEl.textContent = `Signal Engine: ${sigOk} · Executor: ${exeOk}`;
-  chk.checked = !!tradingFlags.strategy;
+  const liveFlags = me?.trading_flags_live || tradingFlagsLive || tradingFlags;
+  const demoFlags = me?.trading_flags_demo || tradingFlagsDemo;
+  chk.checked = !!(liveFlags.strategy ?? tradingFlags.strategy);
+  const demoChk = $("trading-strategy-demo-enabled");
+  const demoRow = $("trading-strategy-demo-row");
+  if (demoRow) demoRow.classList.toggle("hidden", !(hasDemoSecrets || isAdminUser()));
+  if (demoChk) demoChk.checked = !!demoFlags.strategy;
+  const liveRow = $("trading-strategy-live-row");
+  if (liveRow) liveRow.classList.toggle("hidden", !hasLiveSecrets && hasDemoSecrets && !isAdminUser());
 }
 
 function showTelegramMsg(text, isError = false) {
@@ -9826,12 +11593,16 @@ async function saveTelegramSettings({ clear = false } = {}) {
   return data;
 }
 
-async function saveTradingToggle(enabled) {
+async function saveTradingToggle(enabled, accountMode = "live") {
   const msg = $("trading-toggle-msg");
   try {
-    await setBotEnabled("strategy", !!enabled);
-    const data = await pairConfigApi("/trading-enabled");
-    tradingFlags = data.flags || tradingFlags;
+    await setBotEnabled("strategy", !!enabled, accountMode);
+    const data = await pairConfigApi(`/trading-enabled?account_mode=${accountMode === "demo" ? "demo" : "live"}`);
+    if (accountMode === "demo") tradingFlagsDemo = data.flags || tradingFlagsDemo;
+    else {
+      tradingFlags = data.flags || tradingFlags;
+      tradingFlagsLive = data.flags || tradingFlagsLive;
+    }
     paintSharedStrategyState();
     if (msg) {
       msg.textContent = enabled ? "Автоторговля включена" : "Автоторговля выключена (открытые сделки всё ещё мониторятся)";
@@ -9928,7 +11699,6 @@ function openSettings() {
   loadTelegramSettings().catch(() => {});
   if (isAdminUser()) {
     loadUsersAdmin().catch(() => {});
-    renderPlacementAdmin({ strategies: strategyCatalog });
     loadScanFreqSettings().catch(() => {});
   }
 }
@@ -10268,21 +12038,19 @@ $("users-create-btn")?.addEventListener("click", async () => {
     await pairConfigApi("/users", "POST", { username, password });
     $("users-new-name").value = "";
     $("users-new-pass").value = "";
-    showUsersMsg(
-      `Созданы ${username} + ${username}_demo (одинаковый пароль). Боты выкл.; у Live без тестовых стратегий.`
-    );
+    showUsersMsg(`Создан ${username}. Боты выкл. Live/Demo ключи — в настройках.`);
     await loadUsersAdmin();
   } catch (e) {
     showUsersMsg(formatApiError(e.message), true);
   }
 });
 
-$("users-backfill-demo-btn")?.addEventListener("click", async () => {
-  if (!confirm("Создать недостающие *_demo пары для существующих пользователей?")) return;
+$("users-migrate-demo-btn")?.addEventListener("click", async () => {
+  if (!confirm("Удалить legacy *_demo логины и перенести данные в dual-key контексты?")) return;
   try {
-    const r = await pairConfigApi("/users/backfill-demo-pairs", "POST", {});
+    const r = await pairConfigApi("/users/migrate-demo-accounts", "POST", {});
     showUsersMsg(
-      `Demo-пары: создано ${ (r.created || []).length }, уже были ${ (r.skipped || []).length }, ошибок ${ (r.errors || []).length }`
+      `Миграция Demo: перенесено ${(r.migrated || []).length}, пустых удалено ${(r.deleted_empty || []).length}, ошибок ${(r.errors || []).length}`
     );
     await loadUsersAdmin();
   } catch (e) {
@@ -10351,46 +12119,95 @@ $("user-perms-strats-none")?.addEventListener("click", () => {
   });
 });
 
-$("secrets-save-btn")?.addEventListener("click", async () => {
-  const key = $("secrets-api-key")?.value.trim() || "";
-  const secret = $("secrets-api-secret")?.value || "";
-  let demoTrading = !!$("secrets-mode-demo")?.checked;
-  if (accountKind === "demo") demoTrading = true;
-  else if (accountKind === "live" && !isAdminUser()) demoTrading = false;
-  const name =
-    $("secrets-name")?.value.trim() ||
-    (demoTrading ? "Demo Trading" : "Live");
+async function saveModeSecrets(mode, exchange = "bybit") {
+  const ex = exchange === "binance" ? "binance" : "bybit";
+  const prefix = `secrets-${ex}-${mode === "demo" ? "demo" : "live"}`;
+  const key = $(`${prefix}-api-key`)?.value.trim() || "";
+  const secret = $(`${prefix}-api-secret`)?.value || "";
   if (!key || !secret) return showSecretsMsg("Введите API Key и Secret", true);
+  const exLabel = ex === "binance" ? "Binance" : "Bybit";
   try {
     const payload = {
-      name,
+      account_mode: mode,
+      exchange: ex,
       bybit_api_key: key,
       bybit_api_secret: secret,
-      bybit_demo_trading: demoTrading,
+      name: `${exLabel} ${mode === "demo" ? "Demo" : "Live"}`,
     };
-    // Admin writes own profiles; tenants / impersonation write encrypted secrets.
-    if (isAdminUser() && !isImpersonating) {
-      payload.user_id = "admin";
-    }
+    if (isAdminUser() && !isImpersonating && ex === "bybit") payload.user_id = "admin";
     await pairConfigApi("/secrets", "PUT", payload);
-    $("secrets-api-key").value = "";
-    $("secrets-api-secret").value = "";
-    if ($("secrets-name")) $("secrets-name").value = "";
+    if ($(`${prefix}-api-key`)) $(`${prefix}-api-key`).value = "";
+    if ($(`${prefix}-api-secret`)) $(`${prefix}-api-secret`).value = "";
     showSecretsMsg(
-      demoTrading
-        ? `«${name}» сохранён (Demo → api-demo.bybit.com)`
-        : `«${name}» сохранён (Live → api.bybit.com)`
+      mode === "demo"
+        ? `${exLabel} Demo ключи сохранены`
+        : `${exLabel} Live ключи сохранены`
+    );
+    await refreshAuthMe();
+    applyBlockVisibility();
+  } catch (e) {
+    showSecretsMsg(formatApiError(e.message), true);
+  }
+}
+async function savePanelTradeOn(panel, value) {
+  const next = String(value || "bybit").toLowerCase();
+  const key = panel === "test" ? "trade_on_test" : "trade_on_main";
+  try {
+    const payload = { [key]: next };
+    if (isAdminUser() && !isImpersonating) payload.user_id = currentUser?.id || "admin";
+    const res = await pairConfigApi("/trade-on", "PUT", payload);
+    tradeOnMainPref = res?.trade_on_main || tradeOnMainPref;
+    tradeOnTestPref = res?.trade_on_test || tradeOnTestPref;
+    tradeOnPref = res?.trade_on || tradeOnMainPref;
+    const mainSel = $("trade-on-main-select");
+    if (mainSel) mainSel.value = tradeOnMainPref;
+    const testSel = $("trade-on-test-select");
+    if (testSel) testSel.value = tradeOnTestPref;
+    const label = next === "all" ? "все" : next === "binance" ? "Binance" : "Bybit";
+    showSecretsMsg(
+      panel === "test" ? `Тестовые → биржа: ${label}` : `Основные → биржа: ${label}`
     );
     await refreshAuthMe();
   } catch (e) {
     showSecretsMsg(formatApiError(e.message), true);
+    const mainSel = $("trade-on-main-select");
+    if (mainSel) mainSel.value = tradeOnMainPref;
+    const testSel = $("trade-on-test-select");
+    if (testSel) testSel.value = tradeOnTestPref;
   }
+}
+document.querySelectorAll("[data-secrets-save]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const mode = btn.getAttribute("data-secrets-save") || "live";
+    const exchange = btn.getAttribute("data-secrets-exchange") || "bybit";
+    saveModeSecrets(mode, exchange).catch(() => {});
+  });
+});
+$("trade-on-main-select")?.addEventListener("change", (e) => {
+  savePanelTradeOn("main", e.target.value).catch(() => {});
+});
+$("trade-on-test-select")?.addEventListener("change", (e) => {
+  savePanelTradeOn("test", e.target.value).catch(() => {});
+});
+document.querySelectorAll(".secrets-ex-card").forEach((card) => {
+  card.addEventListener("toggle", () => {
+    card.dataset.userToggled = "1";
+  });
 });
 
 $("trading-strategy-enabled")?.addEventListener("change", async (e) => {
   const enabled = !!e.target.checked;
   try {
-    await saveTradingToggle(enabled);
+    await saveTradingToggle(enabled, "live");
+  } catch (err) {
+    if (err.message === "auth") logout();
+    e.target.checked = !enabled;
+  }
+});
+$("trading-strategy-demo-enabled")?.addEventListener("change", async (e) => {
+  const enabled = !!e.target.checked;
+  try {
+    await saveTradingToggle(enabled, "demo");
   } catch (err) {
     if (err.message === "auth") logout();
     e.target.checked = !enabled;
@@ -10464,9 +12281,67 @@ $("strategy-bot-restart-btn")?.addEventListener("click", async () => {
   }
 });
 
+function closeNavDropdowns(except = null) {
+  document.querySelectorAll("[data-nav-dropdown].is-open").forEach((dd) => {
+    if (except && dd === except) return;
+    dd.classList.remove("is-open");
+    const toggle = dd.querySelector(".nav-dropdown-toggle");
+    const menu = dd.querySelector(".nav-dropdown-menu");
+    if (toggle) toggle.setAttribute("aria-expanded", "false");
+    if (menu) menu.setAttribute("hidden", "");
+  });
+}
+
+function openNavDropdown(dd) {
+  if (!dd) return;
+  const toggle = dd.querySelector(".nav-dropdown-toggle");
+  const menu = dd.querySelector(".nav-dropdown-menu");
+  if (!toggle || !menu) return;
+  closeNavDropdowns(dd);
+  dd.classList.add("is-open");
+  toggle.setAttribute("aria-expanded", "true");
+  menu.removeAttribute("hidden");
+}
+
+function bindNavDropdowns() {
+  const root = $("topbar");
+  if (!root || root.dataset.navDropdownBound) return;
+  root.dataset.navDropdownBound = "1";
+  root.addEventListener("click", (e) => {
+    const t = e.target;
+    if (!(t instanceof Element)) return;
+    const toggle = t.closest(".nav-dropdown-toggle");
+    if (toggle) {
+      e.preventDefault();
+      e.stopPropagation();
+      const dd = toggle.closest("[data-nav-dropdown]");
+      if (!dd) return;
+      if (dd.classList.contains("is-open")) closeNavDropdowns();
+      else openNavDropdown(dd);
+      return;
+    }
+    if (t.closest(".nav-dropdown-item")) closeNavDropdowns();
+  });
+  document.addEventListener(
+    "click",
+    (e) => {
+      const t = e.target;
+      if (!(t instanceof Element)) return;
+      if (t.closest("[data-nav-dropdown]")) return;
+      closeNavDropdowns();
+    },
+    true
+  );
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeNavDropdowns();
+  });
+  window.addEventListener("resize", () => closeNavDropdowns());
+}
+
 function closeMobileMenu() {
   const bar = $("topbar");
   const toggle = $("menu-toggle");
+  closeNavDropdowns();
   if (!bar || !toggle) return;
   bar.classList.remove("is-menu-open");
   toggle.setAttribute("aria-expanded", "false");
@@ -10776,6 +12651,10 @@ function goHome() {
   $("logs-view")?.setAttribute("aria-hidden", "true");
   $("history-view")?.classList.add("hidden");
   $("history-view")?.setAttribute("aria-hidden", "true");
+  $("charts-view")?.classList.add("hidden");
+  $("charts-view")?.setAttribute("aria-hidden", "true");
+  $("report-view")?.classList.add("hidden");
+  $("report-view")?.setAttribute("aria-hidden", "true");
   $("settings-view")?.classList.add("hidden");
   $("settings-view")?.setAttribute("aria-hidden", "true");
   $("pnl-dashboard-view")?.classList.add("hidden");
@@ -10806,12 +12685,9 @@ $("logout-btn").addEventListener("click", () => {
   logout();
 });
 $("brand-home-btn")?.addEventListener("click", goHome);
-$("refresh-btn").addEventListener("click", () => {
-  closeMobileMenu();
-  refreshAll();
-});
+bindNavDropdowns();
 $("stats-btn").addEventListener("click", () => {
-  toggleNavItem("stats-modal", () => openStats("all", "all"));
+  toggleNavItem("stats-view", () => openStats("all", "all"));
 });
 $("pnl-dashboard-btn")?.addEventListener("click", () => {
   toggleNavItem("pnl-dashboard-view", openPnlDashboard);
@@ -10821,6 +12697,12 @@ $("rating-btn")?.addEventListener("click", () => {
 });
 $("history-btn")?.addEventListener("click", () => {
   toggleNavItem("history-view", openHistory);
+});
+$("charts-btn")?.addEventListener("click", () => {
+  toggleNavItem("charts-view", openCharts);
+});
+$("report-btn")?.addEventListener("click", () => {
+  toggleNavItem("report-view", openReport);
 });
 $("info-btn").addEventListener("click", () => {
   toggleNavItem("info-modal", openInfo);
@@ -10883,6 +12765,14 @@ document.addEventListener("keydown", (e) => {
       closeRating();
       return;
     }
+    if ($("stats-view") && !$("stats-view").classList.contains("hidden")) {
+      closeStats();
+      return;
+    }
+    if ($("charts-view") && !$("charts-view").classList.contains("hidden")) {
+      closeCharts();
+      return;
+    }
     if ($("history-view") && !$("history-view").classList.contains("hidden")) {
       closeHistory();
       return;
@@ -10892,7 +12782,6 @@ document.addEventListener("keydown", (e) => {
       return;
     }
     closeMobileMenu();
-    closeStats();
     closeInfo();
     closeGuide();
     closeBybitGridModal();
@@ -10902,8 +12791,6 @@ document.addEventListener("keydown", (e) => {
 window.addEventListener("resize", () => {
   if (!isMobileMenuMode()) closeMobileMenu();
 });
-$("stats-close").addEventListener("click", closeStats);
-$("stats-modal").querySelector(".modal-backdrop").addEventListener("click", closeStats);
 $("bybitgrid-history-toggle")?.addEventListener("click", toggleBybitGridHistory);
 $("info-close").addEventListener("click", closeInfo);
 $("info-modal").querySelector(".modal-backdrop").addEventListener("click", closeInfo);
@@ -11024,11 +12911,15 @@ function closeTelegramOverlay() {
     closeHistory();
     return true;
   }
+  if (isNavSurfaceOpen("report-view")) {
+    closeReport();
+    return true;
+  }
   if (isNavSurfaceOpen("settings-view")) {
     closeSettings();
     return true;
   }
-  if (isNavSurfaceOpen("stats-modal")) {
+  if (isNavSurfaceOpen("stats-view")) {
     closeStats();
     return true;
   }
@@ -11058,8 +12949,9 @@ function telegramOverlayOpen() {
     "pnl-dashboard-view",
     "rating-view",
     "history-view",
+    "report-view",
     "settings-view",
-    "stats-modal",
+    "stats-view",
     "info-modal",
     "guide-modal",
     "bybitgrid-modal",
@@ -11091,8 +12983,9 @@ function bindTelegramShell() {
     "pnl-dashboard-view",
     "rating-view",
     "history-view",
+    "report-view",
     "settings-view",
-    "stats-modal",
+    "stats-view",
     "info-modal",
     "guide-modal",
     "bybitgrid-modal",
@@ -11140,11 +13033,12 @@ bindTradeLists();
 bindLlmControls();
 bindLlm50Controls();
 bindCursorControls();
-bindPriceActionControls();
 bindStrategyRunScanButton();
 bindPanelStatsButtons();
 bindStatsPeriodButtons();
 bindHistoryControls();
+bindChartsControls();
+bindReportControls();
 bindPnlDashboardControls();
 bindRatingControls();
 renderStrategyRiskControls();

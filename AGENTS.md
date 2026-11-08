@@ -69,16 +69,17 @@ cryptotools/
 | systemd | Config | Роль | API |
 |---------|--------|------|-----|
 | `cryptotools-signal-engine` | `config_signal_engine.json` | MultiStrategyRouter (`CT_SIGNAL_ONLY`) | `:8081` |
-| `trade-executor` | `trade_executor.py` | сигналы → Bybit по юзеру | — |
+| `trade-executor` | `trade_executor.py` | сигналы → Bybit/Binance по юзеру (`trade_on`) | — |
 | `cryptotools-grid` | `config_grid.json` | VolatilityGridStrategy | `:8082` |
 | `cryptotools-finder` | `config.json` | TradeFinderStrategy | `:8080` |
-| `cryptotools-price-action` | `price_action_bot.py` | Price Action (public data, отдельный) | — |
 | `pair-config` | `pair_config_server.py` | UI API, control-plane | `:8090` |
 | `cryptotools-telegram-bot` | `telegram_bot.py` | Mini App + уведомления | — |
 
 Продовый путь Strategy: **signal-engine → signal_bus → trade-executor**.  
-Price Action — отдельный scanner (`price_action_bot.py`, теги `PaTrendPullback`/`PaLiquiditySweep`) → тот же `signal_bus` → `trade-executor`; по умолчанию OFF, Start из UI.  
-`cryptotools-llm` / `cryptotools-cursor` — retired (disabled, сигналы отклоняются executor).  
+`cryptotools-price-action` / Price Action — retired (unit disabled, код удалён, сигналы отклоняются executor).  
+`cryptotools-llm` / fixed Cursor (`cursor`) — retired.  
+`cryptotools-cursor` / **Cursor 50** — retired (unit disabled; `/cursor50` → 410; флаги в `RETIRED_BOTS`).  
+1h strategies (`*1hStrategy` / panel htf1h) — retired from live catalog/UI; labels kept for history.  
 Legacy `cryptotools-strategy` + `config_strategy.json` — не основной путь.
 
 ### Guard / reconcile
@@ -89,22 +90,25 @@ Legacy `cryptotools-strategy` + `config_strategy.json` — не основной
 ### Multi-user
 
 - **Admin** — shared units + `.cryptotools.env`.
-- **Live** — `users.json` (`account_kind: live`), `secrets/{id}.enc`, `tenants/{id}/`, порты `18100+`.
-- **Demo** — `username_demo` (`account_kind: demo`), api-demo Bybit; switch Live↔Demo в UI.
-- Логин JWT → `bot-proxy/{bot}/...`. Placement / enabled / test settings — **per user** в SQLite.
-- Новые users: боты OFF по умолчанию; Live без блока `test_strategies` (если не выдали права).
+- **Один логин** — `users.json` (`account_kind: live`), без `*_demo` аккаунтов и без Live↔Demo switch.
+- **Multi-exchange dual keys** — Live/Demo × Bybit/Binance в настройках. Contexts: `{uid}` / `{uid}__demo` (Bybit), `{uid}__binance` / `{uid}__binance__demo` (Binance). Secrets/tenant dirs per context.
+- **`trade_on_main` / `trade_on_test`** (prefs / select «Биржа» на панелях Стратегии и Тестовые): `bybit` | `binance` | `all`. Default **`bybit`**. API: `GET|PUT /trade-on`. Тест → только Demo; copy-to-main не убирает из Тестовых.
+- **Боты:** Основные стратегии / Grid / Finder — twin Live+Demo при наличии ключей (флаги на Bybit-контексте, наследуются биржами). **Тестовые** — только Demo API (без дубля).
+- Логин JWT → `bot-proxy/{bot}/...`. Placement — в панели основных стратегий; prefs в SQLite. Start/Stop с `account_mode=live|demo`.
+- Новые users: боты OFF; блок `test_strategies` доступен (торгует после Demo-ключей).
+- Миграция legacy `*_demo`: `POST /users/migrate-demo-accounts` (после деплоя).
 - Sudoers: `deploy/sudoers-cryptotools-tenants` (tenant + admin wrappers). Master: `SECRETS_MASTER_KEY`.
 
 ### Control-plane
 
-- DB: `user_data/control_plane.sqlite` (desired / observed / outbox / user_settings).
-- API: `GET|PATCH /bots/{strategy|grid|finder}`, SSE `/bots/events`.
+- DB: `user_data/control_plane.sqlite` (desired / observed / outbox / user_settings) — ключ `user_id` = trading context.
+- API: `GET|PATCH /bots/{strategy|grid|finder}?account_mode=…`, SSE `/bots/events`.
 - UI пишет **desired**; worker `bot_reconcile` поднимает process + sync `trading_enabled`.
 
 ### Telegram
 
 - Unit `cryptotools-telegram-bot`; Mini App URL → Contabo `:8443`.
-- Chat id на Live/parent; Demo через `telegram_owner_id`.
+- Chat id на login user; `telegram_owner_id` резолвит parent для demo-context.
 
 ### Деплой
 

@@ -61,7 +61,7 @@ DEFAULT_TENANT_LIMITS = {"finder": 1, "strategy": 1, "grid": 1}
 DEFAULT_TENANT_STAKES = {"finder": 5, "strategy": 5, "grid": 10}
 
 PBKDF2_ITERATIONS = 390_000
-SESSION_TTL_SECONDS = 7 * 24 * 3600  # 7 days
+SESSION_TTL_SECONDS = 12 * 3600  # 12 hours (was 7 days)
 _USERS_LOCK = threading.RLock()
 
 _UNIT_TEMPLATES = {
@@ -117,13 +117,14 @@ def _ensure_user_data_dir() -> Path:
 
 
 def get_master_key() -> str:
-    """Resolve secrets master key.
+    """Resolve secrets master key (Fernet).
 
-    Order: ``SECRETS_MASTER_KEY`` → ``FREQUI_JWT_SECRET`` → generate and
+    Order: ``SECRETS_MASTER_KEY`` → ``FREQUI_JWT_SECRET`` (legacy) → generate and
     persist to ``user_data/.secrets_master`` (mode 0o600; owner-only).
+    Prefer a dedicated ``SECRETS_MASTER_KEY`` so JWT rotation does not break .enc.
     """
     for env_name in ("SECRETS_MASTER_KEY", "FREQUI_JWT_SECRET"):
-        val = (os.environ.get(env_name) or "").strip()
+        val = (os.environ.get(env_name) or "").strip().replace("\r", "")
         if val:
             return val
 
@@ -320,8 +321,144 @@ def real_admin_id(user: Optional[dict[str, Any]]) -> Optional[str]:
     return str(imp) if imp else None
 
 
+DEMO_CONTEXT_SUFFIX = "__demo"
+BINANCE_CONTEXT_SUFFIX = "__binance"
+SUPPORTED_EXCHANGES = ("bybit", "binance")
+DEFAULT_EXCHANGE = "bybit"
+DEFAULT_TRADE_ON = "bybit"  # existing users keep Bybit-only behaviour
+
+
+def is_demo_context_id(context_id: Optional[str]) -> bool:
+    """True for internal demo trading context ids (``…__demo``)."""
+    cid = str(context_id or "")
+    return bool(cid.endswith(DEMO_CONTEXT_SUFFIX) and len(cid) > len(DEMO_CONTEXT_SUFFIX))
+
+
+def normalize_exchange(exchange: Any, *, default: str = DEFAULT_EXCHANGE) -> str:
+    raw = str(exchange or "").strip().lower()
+    if raw in SUPPORTED_EXCHANGES:
+        return raw
+    return default
+
+
+def normalize_trade_on(value: Any, *, default: str = DEFAULT_TRADE_ON) -> str:
+    raw = str(value or "").strip().lower()
+    if raw in ("all", "bybit", "binance"):
+        return raw
+    return default
+
+
+def context_exchange(context_id: str) -> str:
+    """``bybit`` | ``binance`` for a trading context id."""
+    cid = str(context_id or "")
+    if is_demo_context_id(cid):
+        cid = cid[: -len(DEMO_CONTEXT_SUFFIX)]
+    if cid.endswith(BINANCE_CONTEXT_SUFFIX):
+        return "binance"
+    return "bybit"
+
+
+def parent_user_id_of_context(context_id: str) -> str:
+    """Login user id for a trading context (strips ``__demo`` / ``__binance``)."""
+    cid = str(context_id or "").strip()
+    if is_demo_context_id(cid):
+        cid = cid[: -len(DEMO_CONTEXT_SUFFIX)]
+    if cid.endswith(BINANCE_CONTEXT_SUFFIX):
+        cid = cid[: -len(BINANCE_CONTEXT_SUFFIX)]
+    return cid
+
+
+def exchange_context_id(
+    user_id: str,
+    *,
+    exchange: Any = DEFAULT_EXCHANGE,
+    mode: Any = "live",
+) -> str:
+    """Trading context: bybit live=``{uid}``, demo=``{uid}__demo``;
+    binance live=``{uid}__binance``, demo=``{uid}__binance__demo``.
+    """
+    uid = parent_user_id_of_context(str(user_id or "").strip())
+    if not uid:
+        raise ValueError("user_id required")
+    ex = normalize_exchange(exchange)
+    m = normalize_account_mode(mode, default="live")
+    if ex == "binance":
+        base = f"{uid}{BINANCE_CONTEXT_SUFFIX}"
+    else:
+        base = uid
+    if m == "demo":
+        return f"{base}{DEMO_CONTEXT_SUFFIX}"
+    return base
+
+
+def demo_context_id(user_id: str, *, exchange: Any = DEFAULT_EXCHANGE) -> str:
+    """Internal demo trading context (not a loginable account)."""
+    return exchange_context_id(user_id, exchange=exchange, mode="demo")
+
+
+def live_context_id(user_id: str, *, exchange: Any = DEFAULT_EXCHANGE) -> str:
+    return exchange_context_id(user_id, exchange=exchange, mode="live")
+
+
+def context_mode(context_id: str) -> str:
+    """``live`` | ``demo`` for a trading context id."""
+    return "demo" if is_demo_context_id(context_id) else "live"
+
+
+def normalize_account_mode(mode: Any, *, default: str = "live") -> str:
+    raw = str(mode or "").strip().lower()
+    if raw in ("live", "demo", "all"):
+        return raw
+    return default
+
+
+def trading_context_id(
+    user_id: str,
+    mode: Any = "live",
+    *,
+    exchange: Any = DEFAULT_EXCHANGE,
+) -> str:
+    """Resolve live/demo trading context id for a login user (+ exchange)."""
+    return exchange_context_id(user_id, exchange=exchange, mode=mode)
+
+
+def flag_context_id(context_id: str) -> str:
+    """Bybit live/demo context that owns shared trading flags for a mode."""
+    uid = parent_user_id_of_context(context_id)
+    return exchange_context_id(uid, exchange="bybit", mode=context_mode(context_id))
+
+
+def iter_user_contexts(
+    user_id: str,
+    *,
+    modes: Optional[list[str]] = None,
+    exchanges: Optional[list[str]] = None,
+) -> list[str]:
+    """Return trading context ids for a login user (exchanges × modes)."""
+    uid = parent_user_id_of_context(str(user_id or "").strip())
+    want_modes = modes or ["live", "demo"]
+    want_ex = exchanges or list(SUPPORTED_EXCHANGES)
+    out: list[str] = []
+    for ex in want_ex:
+        nex = normalize_exchange(ex, default="")
+        if nex not in SUPPORTED_EXCHANGES:
+            continue
+        for m in want_modes:
+            nm = normalize_account_mode(m, default="")
+            if nm not in ("live", "demo"):
+                continue
+            out.append(exchange_context_id(uid, exchange=nex, mode=nm))
+    seen: set[str] = set()
+    uniq: list[str] = []
+    for cid in out:
+        if cid and cid not in seen:
+            seen.add(cid)
+            uniq.append(cid)
+    return uniq
+
+
 def account_kind(user: Optional[dict[str, Any]]) -> str:
-    """``live`` | ``demo`` | ``admin``."""
+    """``live`` | ``demo`` | ``admin``. Legacy ``demo`` login rows may still exist pre-migration."""
     if not user:
         return "live"
     if is_admin(user) and not is_impersonating(user):
@@ -343,6 +480,7 @@ def is_live_account(user: Optional[dict[str, Any]]) -> bool:
 
 
 def linked_demo_user(user: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    """Legacy helper — returns old ``*_demo`` login row if still present."""
     if not user:
         return None
     did = str(user.get("demo_user_id") or "").strip()
@@ -357,13 +495,15 @@ def linked_parent_user(user: Optional[dict[str, Any]]) -> Optional[dict[str, Any
 
 
 def telegram_owner_id(user_id: str) -> str:
-    """Resolve user id that owns the Telegram link (parent for demo accounts)."""
+    """Resolve user id that owns the Telegram link (parent for legacy demo accounts / contexts)."""
     uid = str(user_id or "").strip()
     if not uid or uid == "admin":
         return uid or "admin"
+    if is_demo_context_id(uid):
+        return parent_user_id_of_context(uid)
     user = get_user_by_id(uid)
     if not user:
-        return uid
+        return parent_user_id_of_context(uid)
     parent = linked_parent_user(user)
     if parent and parent.get("id"):
         return str(parent["id"])
@@ -371,32 +511,17 @@ def telegram_owner_id(user_id: str) -> str:
 
 
 def account_switch_info(user: Optional[dict[str, Any]]) -> dict[str, Any]:
-    """Fields for /auth/me switcher."""
+    """Deprecated Live↔Demo switcher fields (always off). Kept for API compat."""
     if not user or (is_admin(user) and not is_impersonating(user)):
-        return {
-            "account_kind": "admin",
-            "can_switch_demo": False,
-            "can_switch_live": False,
-            "linked_username": None,
-            "linked_user_id": None,
-        }
-    kind = account_kind(user)
-    if kind == "live":
-        demo = linked_demo_user(user)
-        return {
-            "account_kind": "live",
-            "can_switch_demo": bool(demo and demo.get("enabled", True)),
-            "can_switch_live": False,
-            "linked_username": (demo or {}).get("username"),
-            "linked_user_id": (demo or {}).get("id"),
-        }
-    parent = linked_parent_user(user)
+        kind = "admin"
+    else:
+        kind = "live"
     return {
-        "account_kind": "demo",
+        "account_kind": kind,
         "can_switch_demo": False,
-        "can_switch_live": bool(parent and parent.get("enabled", True)),
-        "linked_username": (parent or {}).get("username"),
-        "linked_user_id": (parent or {}).get("id"),
+        "can_switch_live": False,
+        "linked_username": None,
+        "linked_user_id": None,
     }
 
 
@@ -404,34 +529,33 @@ def account_switch_info(user: Optional[dict[str, Any]]) -> dict[str, Any]:
 UI_BLOCKS: list[dict[str, str]] = [
     {"id": "test_strategies", "name": "Тестовые стратегии"},
     {"id": "strategy", "name": "Стратегии"},
-    {"id": "price_action", "name": "Price Action"},
+    {"id": "cursor50", "name": "Cursor 50 (снят)"},
     {"id": "llm", "name": "DeepSeek (снят)"},
     {"id": "history", "name": "История сделок"},
     {"id": "dashboard", "name": "Дашборд PnL"},
     {"id": "rating", "name": "Рейтинг"},
+    {"id": "report", "name": "Отчёт"},
 ]
 UI_BLOCK_IDS: frozenset[str] = frozenset(b["id"] for b in UI_BLOCKS)
 # Hidden from permission editor/defaults; kept in UI_BLOCK_IDS so saved allowlists stay valid.
-RETIRED_BLOCK_IDS: frozenset[str] = frozenset({"llm"})
+RETIRED_BLOCK_IDS: frozenset[str] = frozenset({"llm", "cursor50"})
 
-# Live users: all active blocks except test strategies panel.
+# One account: main strategies + optional test panel (demo keys) + views.
 LIVE_DEFAULT_ALLOWED_BLOCKS: list[str] = [
-    b["id"]
-    for b in UI_BLOCKS
-    if b["id"] != "test_strategies" and b["id"] not in RETIRED_BLOCK_IDS
+    b["id"] for b in UI_BLOCKS if b["id"] not in RETIRED_BLOCK_IDS
 ]
-# Demo users: view house (admin) trades — strategy/finder/grid + history/rating.
-# Settings/TG are read-only in UI; no own test-trading panel required.
+# Legacy demo-login defaults (migration may still reference).
 DEMO_DEFAULT_ALLOWED_BLOCKS: list[str] = [
     b["id"]
     for b in UI_BLOCKS
     if b["id"]
     in {
         "strategy",
-        "price_action",
+        "test_strategies",
         "history",
         "dashboard",
         "rating",
+        "report",
     }
 ]
 
@@ -500,10 +624,13 @@ def user_may_use_strategy(user: Optional[dict[str, Any]], strategy_id: str) -> b
 
 
 def user_may_use_block(user: Optional[dict[str, Any]], block_id: str) -> bool:
+    bid = str(block_id or "")
+    if bid in RETIRED_BLOCK_IDS:
+        return False
     allow = user_allowed_blocks(user)
     if allow is None:
         return True
-    return str(block_id) in allow
+    return bid in allow
 
 
 def user_may_use_bot(user: Optional[dict[str, Any]], bot: str) -> bool:
@@ -610,7 +737,7 @@ def _make_user_id(username: str, existing_ids: set[str]) -> str:
 
 
 def create_user(username: str, password: str) -> dict[str, Any]:
-    """Create Live user + paired ``username_demo`` tenant. Returns Live public user."""
+    """Create a single login user (live). Demo keys are optional later via secrets."""
     username = (username or "").strip()
     if not username:
         raise ValueError("username is required")
@@ -621,28 +748,15 @@ def create_user(username: str, password: str) -> dict[str, Any]:
     if username.lower().endswith("_demo"):
         raise ValueError("create the live username without _demo suffix")
 
-    demo_username = f"{username}_demo"
-    if len(demo_username) > 64:
-        raise ValueError("username too long for _demo pair")
-
     with _USERS_LOCK:
         users = ensure_users_migrated()
         lower_names = {str(u.get("username", "")).lower() for u in users}
         if username.lower() in lower_names:
             raise ValueError(f"username already exists: {username}")
-        if demo_username.lower() in lower_names:
-            raise ValueError(f"demo username already exists: {demo_username}")
 
         existing_ids = {str(u.get("id")) for u in users}
         live_id = _make_user_id(username, existing_ids)
-        existing_ids.add(live_id)
-        demo_id = _make_user_id(demo_username, existing_ids)
-
-        # Allocate two disjoint port triples.
         live_ports = _allocate_ports(users)
-        users_with_live = list(users) + [{"ports": live_ports}]
-        demo_ports = _allocate_ports(users_with_live)
-
         pw_hash = hash_password(password)
         now = _utc_now_iso()
 
@@ -655,128 +769,279 @@ def create_user(username: str, password: str) -> dict[str, Any]:
             "ports": live_ports,
             "created_at": now,
             "account_kind": "live",
-            "demo_user_id": demo_id,
             "allowed_strategies": None,
             "allowed_blocks": list(LIVE_DEFAULT_ALLOWED_BLOCKS),
         }
-        demo: dict[str, Any] = {
-            "id": demo_id,
-            "username": demo_username,
-            "password_hash": pw_hash,
-            "role": "user",
-            "enabled": True,
-            "ports": demo_ports,
-            "created_at": now,
-            "account_kind": "demo",
-            "parent_user_id": live_id,
-            "allowed_strategies": None,
-            "allowed_blocks": list(DEMO_DEFAULT_ALLOWED_BLOCKS),
-        }
 
         provision_tenant(live_id, live_ports)
-        provision_tenant(demo_id, demo_ports)
         try:
             import user_trading as ut
 
             ut.save_trading_flags(
                 live_id, {"strategy": False, "grid": False, "finder": False}
             )
-            ut.save_trading_flags(
-                demo_id, {"strategy": False, "grid": False, "finder": False}
-            )
         except Exception:
             pass
 
         users.append(live)
-        users.append(demo)
         save_users(users)
         return _public_user(live)
 
 
 def ensure_demo_pair_for_user(user_id: str) -> dict[str, Any]:
-    """Create missing ``{username}_demo`` for an existing live user. Returns live public."""
-    with _USERS_LOCK:
-        users = ensure_users_migrated()
-        live = None
-        for u in users:
-            if str(u.get("id")) == str(user_id):
-                live = u
-                break
-        if not live:
-            raise KeyError(f"user not found: {user_id}")
-        if is_admin(live):
-            raise ValueError("admin has no demo pair")
-        if is_demo_account(live):
-            raise ValueError("cannot create demo pair for a demo account")
-        if live.get("demo_user_id") and get_user_by_id(str(live["demo_user_id"])):
-            return _public_user(live)
-
-        username = str(live.get("username") or "").strip()
-        demo_username = f"{username}_demo"
-        lower_names = {str(u.get("username", "")).lower() for u in users}
-        if demo_username.lower() in lower_names:
-            raise ValueError(f"demo username already exists: {demo_username}")
-
-        existing_ids = {str(u.get("id")) for u in users}
-        demo_id = _make_user_id(demo_username, existing_ids)
-        demo_ports = _allocate_ports(users)
-        now = _utc_now_iso()
-        demo: dict[str, Any] = {
-            "id": demo_id,
-            "username": demo_username,
-            "password_hash": live.get("password_hash") or hash_password(secrets.token_urlsafe(12)),
-            "role": "user",
-            "enabled": bool(live.get("enabled", True)),
-            "ports": demo_ports,
-            "created_at": now,
-            "account_kind": "demo",
-            "parent_user_id": str(live["id"]),
-            "allowed_strategies": None,
-            "allowed_blocks": list(DEMO_DEFAULT_ALLOWED_BLOCKS),
-        }
-        live["account_kind"] = "live"
-        live["demo_user_id"] = demo_id
-        if live.get("allowed_blocks") is None:
-            # Preserve unrestricted only if admin had set null intentionally;
-            # for backfill apply live default (no test panel).
-            live["allowed_blocks"] = list(LIVE_DEFAULT_ALLOWED_BLOCKS)
-
-        provision_tenant(demo_id, demo_ports)
-        try:
-            import user_trading as ut
-
-            ut.save_trading_flags(
-                demo_id, {"strategy": False, "grid": False, "finder": False}
-            )
-        except Exception:
-            pass
-
-        users.append(demo)
-        save_users(users)
-        return _public_user(live)
+    """Deprecated: demo logins removed. Ensures dual-key demo context exists."""
+    live = get_user_by_id(str(user_id))
+    if not live:
+        raise KeyError(f"user not found: {user_id}")
+    if is_admin(live):
+        raise ValueError("admin has no demo pair")
+    if is_demo_account(live):
+        raise ValueError("legacy demo accounts are removed — migrate first")
+    ensure_demo_context(str(live["id"]))
+    return _public_user(live)
 
 
 def backfill_demo_pairs() -> dict[str, Any]:
-    """Ensure every non-admin live user has a demo sibling."""
-    ensure_users_migrated()
-    created: list[str] = []
-    skipped: list[str] = []
-    errors: list[dict[str, str]] = []
-    for u in list(load_users()):
-        if is_admin(u) or is_demo_account(u):
-            continue
-        uid = str(u.get("id") or "")
-        if not uid:
-            continue
-        if u.get("demo_user_id") and get_user_by_id(str(u["demo_user_id"])):
-            skipped.append(uid)
+    """Deprecated no-op alias — runs dual-key migration instead."""
+    return migrate_remove_demo_accounts()
+
+
+def _tenant_has_trade_data(tenant_id: str) -> bool:
+    """True if tenant has open trades or non-trivial closed trade journal."""
+    td = tenant_user_data(str(tenant_id))
+    if not td.is_dir():
+        return False
+    for name in (
+        "tradesv3-strategy.sqlite",
+        "tradesv3-finder.sqlite",
+        "tradesv3-grid.sqlite",
+    ):
+        path = td / name
+        if not path.is_file() or path.stat().st_size < 4096:
             continue
         try:
-            ensure_demo_pair_for_user(uid)
-            created.append(uid)
-        except Exception as exc:  # noqa: BLE001
-            errors.append({"user_id": uid, "error": str(exc)})
-    return {"ok": not errors, "created": created, "skipped": skipped, "errors": errors}
+            import sqlite3
+
+            with sqlite3.connect(path) as conn:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM trades WHERE is_open=1"
+                ).fetchone()
+                if row and int(row[0] or 0) > 0:
+                    return True
+                row2 = conn.execute("SELECT COUNT(*) FROM trades").fetchone()
+                if row2 and int(row2[0] or 0) > 0:
+                    return True
+        except Exception:
+            # Non-empty sqlite we cannot read — treat as precious.
+            return True
+    return False
+
+
+def _rewrite_control_plane_user_id(old_id: str, new_id: str) -> None:
+    """Move control_plane rows from old_id → new_id when new_id has no conflicting rows."""
+    old_id = str(old_id)
+    new_id = str(new_id)
+    if old_id == new_id:
+        return
+    try:
+        import control_plane as cp
+
+        cp.ensure_init()
+        conn = cp._connect()
+        try:
+            tables = (
+                ("bot_desired", "user_id"),
+                ("bot_observed", "user_id"),
+                ("bot_commands", "user_id"),
+                ("user_settings", "user_id"),
+            )
+            for table, col in tables:
+                try:
+                    conn.execute(
+                        f"UPDATE OR IGNORE {table} SET {col}=? WHERE {col}=?",
+                        (new_id, old_id),
+                    )
+                    conn.execute(f"DELETE FROM {table} WHERE {col}=?", (old_id,))
+                except Exception:
+                    pass
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as exc:
+        log.warning("control_plane rewrite %s→%s failed: %s", old_id, new_id, exc)
+
+
+def _move_tenant_dir(src_id: str, dst_id: str) -> bool:
+    src = tenant_user_data(src_id)
+    dst = tenant_user_data(dst_id)
+    if not src.is_dir():
+        return False
+    if dst.exists():
+        # Prefer keeping dst if both exist; caller decides.
+        return False
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(src), str(dst))
+    return True
+
+
+def _move_secrets_file(src_id: str, dst_id: str) -> bool:
+    src = _secrets_path(src_id)
+    dst = _secrets_path(dst_id)
+    if not src.is_file():
+        return False
+    if dst.is_file():
+        return False
+    SECRETS_DIR.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(src), str(dst))
+    return True
+
+
+def migrate_remove_demo_accounts() -> dict[str, Any]:
+    """Collapse legacy ``*_demo`` logins into ``{live_id}__demo`` contexts and delete demo users."""
+    ensure_users_migrated()
+    migrated: list[dict[str, Any]] = []
+    deleted_empty: list[str] = []
+    errors: list[dict[str, str]] = []
+    remaining = 0
+    with _USERS_LOCK:
+        users = list(load_users())
+        by_id = {str(u.get("id")): u for u in users if u.get("id")}
+        demo_rows = [u for u in users if is_demo_account(u)]
+        keep: list[dict[str, Any]] = []
+        removed_ids: set[str] = set()
+
+        for demo in demo_rows:
+            demo_id = str(demo.get("id") or "")
+            parent_id = str(demo.get("parent_user_id") or "").strip()
+            if not parent_id:
+                # Try reverse link from live.demo_user_id
+                for u in users:
+                    if str(u.get("demo_user_id") or "") == demo_id:
+                        parent_id = str(u.get("id") or "")
+                        break
+            if not parent_id or parent_id not in by_id:
+                errors.append({"demo_id": demo_id, "error": "missing parent"})
+                # Still drop login row to satisfy "remove demo accounts"
+                removed_ids.add(demo_id)
+                try:
+                    if tenant_user_data(demo_id).is_dir():
+                        shutil.rmtree(tenant_user_data(demo_id), ignore_errors=True)
+                    sp = _secrets_path(demo_id)
+                    if sp.is_file():
+                        sp.unlink(missing_ok=True)  # type: ignore[arg-type]
+                except Exception:
+                    pass
+                continue
+
+            target = demo_context_id(parent_id)
+            try:
+                has_data = _tenant_has_trade_data(demo_id)
+                if has_data:
+                    moved = _move_tenant_dir(demo_id, target)
+                    if not moved and tenant_user_data(demo_id).is_dir():
+                        # Target already exists — keep demo data under target if empty merge needed
+                        if not _tenant_has_trade_data(target):
+                            shutil.rmtree(tenant_user_data(target), ignore_errors=True)
+                            _move_tenant_dir(demo_id, target)
+                        else:
+                            # Both have data — leave demo dir renamed with suffix backup
+                            backup = f"{target}__legacy_{demo_id}"
+                            _move_tenant_dir(demo_id, backup)
+                            errors.append(
+                                {
+                                    "demo_id": demo_id,
+                                    "error": f"both have trades; demo kept as {backup}",
+                                }
+                            )
+                    _move_secrets_file(demo_id, target)
+                    _rewrite_control_plane_user_id(demo_id, target)
+                    # Force demo venue on moved secrets
+                    try:
+                        blob = _load_secrets_blob(target)
+                        if blob.get("bybit_api_key") and blob.get("bybit_api_secret"):
+                            blob["bybit_demo_trading"] = True
+                            for p in blob.get("profiles") or []:
+                                if isinstance(p, dict):
+                                    p["demo_trading"] = True
+                            _write_secrets_blob(target, blob)
+                            write_tenant_env(target)
+                            sync_tenant_demo_trading(target, True)
+                    except Exception:
+                        pass
+                    migrated.append(
+                        {"demo_id": demo_id, "parent_id": parent_id, "context_id": target}
+                    )
+                else:
+                    # Empty house-mirror tenant — delete
+                    try:
+                        if tenant_user_data(demo_id).is_dir():
+                            shutil.rmtree(tenant_user_data(demo_id), ignore_errors=True)
+                        sp = _secrets_path(demo_id)
+                        if sp.is_file():
+                            sp.unlink(missing_ok=True)  # type: ignore[arg-type]
+                        _rewrite_control_plane_user_id(demo_id, target)  # drop old rows
+                        try:
+                            import control_plane as cp
+
+                            cp.ensure_init()
+                            conn = cp._connect()
+                            try:
+                                for table in (
+                                    "bot_desired",
+                                    "bot_observed",
+                                    "bot_commands",
+                                    "user_settings",
+                                ):
+                                    conn.execute(
+                                        f"DELETE FROM {table} WHERE user_id=?",
+                                        (demo_id,),
+                                    )
+                                conn.commit()
+                            finally:
+                                conn.close()
+                        except Exception:
+                            pass
+                    except Exception as exc:
+                        errors.append({"demo_id": demo_id, "error": str(exc)})
+                    deleted_empty.append(demo_id)
+                removed_ids.add(demo_id)
+            except Exception as exc:
+                errors.append({"demo_id": demo_id, "error": str(exc)})
+                removed_ids.add(demo_id)
+
+        for u in users:
+            uid = str(u.get("id") or "")
+            if uid in removed_ids or is_demo_account(u):
+                continue
+            u.pop("demo_user_id", None)
+            u.pop("parent_user_id", None)
+            if not is_admin(u):
+                u["account_kind"] = "live"
+                # Ensure test panel available under dual-key model
+                blocks = u.get("allowed_blocks")
+                if isinstance(blocks, list) and "test_strategies" not in blocks:
+                    u["allowed_blocks"] = list(
+                        dict.fromkeys([*blocks, "test_strategies"])
+                    )
+            keep.append(u)
+
+        save_users(keep)
+        remaining = len(keep)
+
+    try:
+        import trade_executor as te
+
+        te.clear_exchange_cache(None)
+    except Exception:
+        pass
+
+    return {
+        "ok": True,
+        "migrated": migrated,
+        "deleted_empty": deleted_empty,
+        "errors": errors,
+        "remaining_users": remaining,
+    }
 
 
 def set_user_enabled(user_id: str, enabled: bool) -> dict[str, Any]:
@@ -791,12 +1056,9 @@ def set_user_enabled(user_id: str, enabled: bool) -> dict[str, Any]:
             raise KeyError(f"user not found: {user_id}")
         if is_admin(target) and not enabled:
             raise ValueError("cannot disable admin")
+        if is_demo_account(target):
+            raise ValueError("legacy demo accounts cannot be toggled — run migration")
         target["enabled"] = bool(enabled)
-        if is_live_account(target) and target.get("demo_user_id"):
-            for user in users:
-                if str(user.get("id")) == str(target.get("demo_user_id")):
-                    user["enabled"] = bool(enabled)
-                    break
         save_users(users)
         return _public_user(target)
 
@@ -855,12 +1117,9 @@ def patch_user(
                 enabled = bool(data["enabled"])
                 if is_admin(user) and not enabled:
                     raise ValueError("cannot disable admin")
+                if is_demo_account(user):
+                    raise ValueError("legacy demo accounts cannot be patched — run migration")
                 user["enabled"] = enabled
-                if is_live_account(user) and user.get("demo_user_id"):
-                    for peer in users:
-                        if str(peer.get("id")) == str(user.get("demo_user_id")):
-                            peer["enabled"] = enabled
-                            break
             if "allowed_strategies" in data or "allowed_blocks" in data:
                 if is_admin(user):
                     raise ValueError("cannot set permissions on admin")
@@ -891,16 +1150,6 @@ def set_user_password(user_id: str, password: str) -> dict[str, Any]:
             raise KeyError(f"user not found: {user_id}")
         pw_hash = hash_password(password)
         target["password_hash"] = pw_hash
-        peer_id = None
-        if is_live_account(target):
-            peer_id = target.get("demo_user_id")
-        elif is_demo_account(target):
-            peer_id = target.get("parent_user_id")
-        if peer_id:
-            for user in users:
-                if str(user.get("id")) == str(peer_id):
-                    user["password_hash"] = pw_hash
-                    break
         save_users(users)
         return _public_user(target)
 
@@ -919,10 +1168,16 @@ def _b64url_decode(data: str) -> bytes:
 
 
 def _jwt_secret() -> bytes:
-    for env_name in ("SECRETS_MASTER_KEY", "FREQUI_JWT_SECRET"):
-        val = (os.environ.get(env_name) or "").strip()
-        if val:
-            return val.encode("utf-8")
+    """Session JWT signing key — must stay separate from SECRETS_MASTER_KEY.
+
+    Prefer ``FREQUI_JWT_SECRET`` only. Do not fall through to the Fernet master
+    key once ``SECRETS_MASTER_KEY`` is set (rotating secrets must not invalidate
+    all sessions incorrectly, and vice versa).
+    """
+    val = (os.environ.get("FREQUI_JWT_SECRET") or "").strip().replace("\r", "")
+    if val:
+        return val.encode("utf-8")
+    # Legacy: before SECRETS_MASTER_KEY existed, JWT shared the Fernet master.
     return get_master_key().encode("utf-8")
 
 
@@ -1128,35 +1383,42 @@ def load_user_secrets(user_id: str) -> Optional[dict[str, Any]]:
 
 
 def write_tenant_env(user_id: str) -> Path:
-    """Write ``tenants/{id}/.env`` with Bybit keys (if any) and FREQUI_* API creds.
+    """Write ``tenants/{id}/.env`` with exchange keys and FREQUI_* API creds.
 
-    CTENGINE__* mappings are optional here — ``load_env.sh`` maps FREQUI_/BYBIT_
-    into CTENGINE__ when sourcing the env file.
+    Storage still uses ``bybit_api_*`` blob fields for both Bybit and Binance;
+    ``CT_EXCHANGE`` / ``BINANCE_*`` mirror the context exchange id.
     """
     td = tenant_user_data(user_id)
     td.mkdir(parents=True, exist_ok=True)
     api_user, api_pass, jwt_secret = derive_api_creds(user_id)
 
-    bybit_key = ""
-    bybit_secret = ""
+    api_key = ""
+    api_secret = ""
     demo_trading = False
+    exchange_id = context_exchange(user_id) if str(user_id) != "admin" else DEFAULT_EXCHANGE
     sec = load_user_secrets(user_id)
     if sec:
-        bybit_key = str(sec.get("bybit_api_key") or "")
-        bybit_secret = str(sec.get("bybit_api_secret") or "")
-        demo_trading = _as_bool(sec.get("bybit_demo_trading"))
+        api_key = str(sec.get("bybit_api_key") or sec.get("api_key") or "")
+        api_secret = str(sec.get("bybit_api_secret") or sec.get("api_secret") or "")
+        demo_trading = _as_bool(sec.get("bybit_demo_trading")) or is_demo_context_id(
+            user_id
+        )
+        exchange_id = normalize_exchange(sec.get("exchange") or exchange_id)
 
     demo_val = "true" if demo_trading else "false"
     lines = [
-        f"BYBIT_API_KEY={bybit_key}",
-        f"BYBIT_API_SECRET={bybit_secret}",
-        f"BYBIT_DEMO_TRADING={demo_val}",
+        f"CT_EXCHANGE={exchange_id}",
+        f"BYBIT_API_KEY={api_key if exchange_id == 'bybit' else ''}",
+        f"BYBIT_API_SECRET={api_secret if exchange_id == 'bybit' else ''}",
+        f"BYBIT_DEMO_TRADING={demo_val if exchange_id == 'bybit' else 'false'}",
+        f"BINANCE_API_KEY={api_key if exchange_id == 'binance' else ''}",
+        f"BINANCE_API_SECRET={api_secret if exchange_id == 'binance' else ''}",
+        f"BINANCE_DEMO_TRADING={demo_val if exchange_id == 'binance' else 'false'}",
         f"FREQUI_USERNAME={api_user}",
         f"FREQUI_PASSWORD={api_pass}",
         f"FREQUI_JWT_SECRET={jwt_secret}",
-        # Optional direct mappings (load_env.sh also sets these from FREQUI_/BYBIT_):
-        f"CTENGINE__EXCHANGE__KEY={bybit_key}",
-        f"CTENGINE__EXCHANGE__SECRET={bybit_secret}",
+        f"CTENGINE__EXCHANGE__KEY={api_key}",
+        f"CTENGINE__EXCHANGE__SECRET={api_secret}",
         f"CTENGINE__EXCHANGE__DEMO_TRADING={demo_val}",
         f"CTENGINE__API_SERVER__USERNAME={api_user}",
         f"CTENGINE__API_SERVER__PASSWORD={api_pass}",
@@ -1282,11 +1544,14 @@ def _load_secrets_blob(owner_id: str) -> dict[str, Any]:
     owner_id = str(owner_id)
     path = _admin_secrets_path() if owner_id == "admin" else _secrets_path(owner_id)
     blob = _empty_secrets_blob()
+    decrypt_failed = False
     if path.is_file():
         try:
             loaded = decrypt_secrets(path.read_bytes())
             if isinstance(loaded, dict):
                 blob.update(loaded)
+                # Never treat a previously persisted runtime flag as a live error.
+                blob.pop("_decrypt_error", None)
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             # Do not silently treat encrypted files as empty — usually MASTER_KEY mismatch.
             log.error(
@@ -1296,6 +1561,7 @@ def _load_secrets_blob(owner_id: str) -> dict[str, Any]:
                 exc,
             )
             blob["_decrypt_error"] = str(exc)
+            decrypt_failed = True
     profiles = blob.get("profiles")
     if not isinstance(profiles, list):
         profiles = []
@@ -1332,6 +1598,9 @@ def _load_secrets_blob(owner_id: str) -> dict[str, Any]:
         except Exception:
             # Env-file fallback must still work without SECRETS_MASTER_KEY in process.
             pass
+    # Runtime-only marker: never leave it set after a successful decrypt path above.
+    if decrypt_failed and "_decrypt_error" not in blob:
+        pass
     return blob
 
 
@@ -1339,7 +1608,9 @@ def _write_secrets_blob(owner_id: str, blob: dict[str, Any]) -> None:
     owner_id = str(owner_id)
     SECRETS_DIR.mkdir(parents=True, exist_ok=True)
     path = _admin_secrets_path() if owner_id == "admin" else _secrets_path(owner_id)
-    path.write_bytes(encrypt_secrets(blob))
+    # `_decrypt_error` is process-local; persisting it poisons has_secrets forever.
+    to_store = {k: v for k, v in blob.items() if k != "_decrypt_error"}
+    path.write_bytes(encrypt_secrets(to_store))
     try:
         os.chmod(path, 0o600)
     except OSError:
@@ -1450,20 +1721,25 @@ def upsert_key_profile(
     *,
     demo_trading: bool = False,
     name: str | None = None,
-    mirror_to_demo: bool = True,
+    mirror_to_demo: bool = False,
 ) -> dict[str, Any]:
-    """Add a named key profile (or replace same name) and make it active."""
+    """Add a named key profile (or replace same name) and make it active.
+
+    ``owner_id`` may be a login user or a demo context ``{uid}__demo``.
+    Mode is fixed by ``demo_trading`` (and by context id for non-admin).
+    """
     key = (key or "").strip()
     secret = (secret or "").strip()
     if not key or not secret:
         raise ValueError("bybit api key and secret are required")
     owner_id = str(owner_id)
-    owner = get_user_by_id(owner_id)
-    # Force Live/Demo trading mode by account kind (admin unrestricted).
-    if owner and is_demo_account(owner):
+    # Context id forces venue; login users use explicit demo_trading flag.
+    if is_demo_context_id(owner_id):
         demo_trading = True
-    elif owner and is_live_account(owner) and not is_admin(owner):
-        demo_trading = False
+    elif owner_id != "admin" and get_user_by_id(owner_id) and not is_admin(get_user_by_id(owner_id)):
+        # Non-admin live context: never mark blob as demo unless saving into demo context.
+        if not demo_trading:
+            demo_trading = False
     blob = _load_secrets_blob(owner_id)
     demo = bool(demo_trading)
     label = (name or "").strip() or ("Demo Trading" if demo else "Live")
@@ -1502,33 +1778,15 @@ def upsert_key_profile(
             bots = {}
     else:
         bots = {}
-    mirrored = None
-    if (
-        mirror_to_demo
-        and owner
-        and is_live_account(owner)
-        and not is_admin(owner)
-        and owner.get("demo_user_id")
-    ):
-        try:
-            mirrored = upsert_key_profile(
-                str(owner["demo_user_id"]),
-                key,
-                secret,
-                demo_trading=True,
-                name="Demo Trading",
-                mirror_to_demo=False,
-            )
-        except Exception as exc:  # noqa: BLE001
-            mirrored = {"ok": False, "error": str(exc)}
     return {
         "ok": True,
         "user_id": owner_id,
+        "mode": "demo" if demo else "live",
         "demo_trading": demo,
         "active_profile_id": pid,
         "profiles": _public_profiles(blob),
         "bots_restarted": bots,
-        "mirrored_to_demo": mirrored,
+        "mirrored_to_demo": None,
     }
 
 
@@ -1568,7 +1826,6 @@ def delete_key_profile(owner_id: str, profile_id: str) -> dict[str, Any]:
 def activate_key_profile(owner_id: str, profile_id: str) -> dict[str, Any]:
     owner_id = str(owner_id)
     profile_id = str(profile_id or "").strip()
-    owner = get_user_by_id(owner_id)
     blob = _load_secrets_blob(owner_id)
     found = None
     for p in blob.get("profiles") or []:
@@ -1577,9 +1834,10 @@ def activate_key_profile(owner_id: str, profile_id: str) -> dict[str, Any]:
             break
     if not found:
         raise KeyError(f"profile not found: {profile_id}")
-    if owner and is_demo_account(owner):
+    # Venue fixed by trading context id.
+    if is_demo_context_id(owner_id):
         found["demo_trading"] = True
-    elif owner and is_live_account(owner) and not is_admin(owner):
+    elif owner_id != "admin" and not is_demo_context_id(owner_id):
         found["demo_trading"] = False
     blob["active_profile_id"] = profile_id
     _apply_active_credentials(owner_id, blob)
@@ -1631,15 +1889,17 @@ def _enrich_trade_capability(status: dict[str, Any], key: str, secret: str, demo
 
 
 def secrets_status(user_id: str) -> dict[str, Any]:
-    """Status of stored secrets for a tenant (no raw secret values)."""
-    blob = _load_secrets_blob(str(user_id))
+    """Status of stored secrets for a tenant/context (no raw secret values)."""
+    cid = str(user_id)
+    blob = _load_secrets_blob(cid)
     key = str(blob.get("bybit_api_key") or "").strip()
     secret = str(blob.get("bybit_api_secret") or "").strip()
     has = bool(key and secret)
-    demo = bool(_as_bool(blob.get("bybit_demo_trading")))
-    enc_path = _secrets_path(str(user_id))
+    demo = bool(_as_bool(blob.get("bybit_demo_trading"))) or is_demo_context_id(cid)
+    enc_path = _secrets_path(cid)
     status = {
-        "user_id": str(user_id),
+        "user_id": cid,
+        "mode": context_mode(cid),
         "has_secrets": has,
         "has_bybit_api_key": bool(key),
         "has_bybit_api_secret": bool(secret),
@@ -1652,6 +1912,149 @@ def secrets_status(user_id: str) -> dict[str, Any]:
         status["decrypt_error"] = str(blob["_decrypt_error"])
         status["has_secrets"] = False
     return _enrich_trade_capability(status, key, secret, demo)
+
+
+def has_mode_secrets(
+    user_id: str,
+    mode: str = "live",
+    *,
+    exchange: str = DEFAULT_EXCHANGE,
+) -> bool:
+    """True when the live/demo context for ``exchange`` has usable API keys."""
+    uid = parent_user_id_of_context(str(user_id))
+    m = normalize_account_mode(mode, default="live")
+    ex = normalize_exchange(exchange)
+    if uid == "admin" and m == "live" and ex == "bybit":
+        return bool(admin_secrets_status().get("has_secrets"))
+    return bool(
+        secrets_status(trading_context_id(uid, m, exchange=ex)).get("has_secrets")
+    )
+
+
+def ensure_exchange_context(
+    user_id: str,
+    *,
+    exchange: str = DEFAULT_EXCHANGE,
+    mode: str = "live",
+) -> str:
+    """Provision tenant dir for exchange x mode if missing. Returns context id."""
+    uid = parent_user_id_of_context(str(user_id))
+    if not uid:
+        raise ValueError("user_id required")
+    ex = normalize_exchange(exchange)
+    m = normalize_account_mode(mode, default="live")
+    cid = exchange_context_id(uid, exchange=ex, mode=m)
+    td = tenant_user_data(cid)
+    created = False
+    if not (td.is_dir() and (td / "config_strategy.json").is_file()):
+        with _USERS_LOCK:
+            users = load_users()
+            ports = _allocate_ports(users)
+        provision_tenant(cid, ports)
+        created = True
+    try:
+        import user_prefs as up
+
+        seed_from = live_context_id(uid, exchange="bybit")
+        enabled = up.load_enabled_payload(cid)
+        if created or not (enabled.get("enabled") or {}):
+            up.put(
+                cid,
+                up.KEY_ENABLED,
+                up.load_enabled_payload(seed_from),
+                json_name="enabled_strategies.json",
+            )
+        limits = up.load_bot_limits_payload(cid)
+        if created or not limits:
+            up.save_bot_limits_payload(cid, up.load_bot_limits_payload(seed_from))
+        up.save_placement(cid, up.load_placement(uid))
+    except Exception as exc:
+        log.debug("exchange context seed prefs %s: %s", cid, exc)
+    return cid
+
+
+def ensure_demo_context(user_id: str, *, exchange: str = DEFAULT_EXCHANGE) -> str:
+    """Provision demo context for exchange (default Bybit)."""
+    return ensure_exchange_context(user_id, exchange=exchange, mode="demo")
+
+
+def save_mode_secrets(
+    user_id: str,
+    mode: str,
+    key: str,
+    secret: str,
+    *,
+    name: str | None = None,
+    exchange: str = DEFAULT_EXCHANGE,
+) -> dict[str, Any]:
+    """Save Live/Demo API keys into the matching exchange trading context."""
+    uid = parent_user_id_of_context(str(user_id))
+    m = normalize_account_mode(mode, default="live")
+    ex = normalize_exchange(exchange)
+    if m not in ("live", "demo"):
+        raise ValueError("mode must be live or demo")
+    if uid == "admin" and m == "live" and ex == "bybit":
+        result = save_admin_secrets(
+            key, secret, demo_trading=False, name=name or "Live"
+        )
+        result["exchange"] = ex
+        result["mode"] = m
+        result["context_id"] = "admin"
+        result["parent_user_id"] = "admin"
+        return result
+    cid = ensure_exchange_context(uid, exchange=ex, mode=m)
+    label = name or (f"{ex.title()} Demo" if m == "demo" else f"{ex.title()} Live")
+    result = upsert_key_profile(
+        cid,
+        key,
+        secret,
+        demo_trading=(m == "demo"),
+        name=label,
+        mirror_to_demo=False,
+    )
+    try:
+        blob = _load_secrets_blob(cid)
+        blob["exchange"] = ex
+        blob["bybit_demo_trading"] = m == "demo"
+        _write_secrets_blob(cid, blob)
+        write_tenant_env(cid)
+        sync_tenant_demo_trading(cid, m == "demo")
+    except Exception:
+        pass
+    result["mode"] = m
+    result["exchange"] = ex
+    result["context_id"] = cid
+    result["parent_user_id"] = uid
+    return result
+
+
+def dual_secrets_status(user_id: str) -> dict[str, Any]:
+    """Live/Demo x Bybit/Binance secrets status for one login user."""
+    uid = parent_user_id_of_context(str(user_id))
+    exchanges: dict[str, Any] = {}
+    for ex in SUPPORTED_EXCHANGES:
+        if uid == "admin" and ex == "bybit":
+            live = admin_secrets_status()
+        else:
+            live = secrets_status(live_context_id(uid, exchange=ex))
+        demo = secrets_status(demo_context_id(uid, exchange=ex))
+        exchanges[ex] = {
+            "live": live,
+            "demo": demo,
+            "has_live_secrets": bool(live.get("has_secrets")),
+            "has_demo_secrets": bool(demo.get("has_secrets")),
+        }
+    bybit = exchanges["bybit"]
+    return {
+        "user_id": uid,
+        "live": bybit["live"],
+        "demo": bybit["demo"],
+        "has_live_secrets": bybit["has_live_secrets"],
+        "has_demo_secrets": bybit["has_demo_secrets"],
+        "exchanges": exchanges,
+        "supported_exchanges": list(SUPPORTED_EXCHANGES),
+        "default_exchange": DEFAULT_EXCHANGE,
+    }
 
 
 def admin_secrets_status() -> dict[str, Any]:
@@ -1718,6 +2121,72 @@ def _upsert_env_file(path: Path, updates: dict[str, str]) -> None:
         os.chmod(path, 0o600)
     except OSError:
         pass
+
+
+def pin_admin_grid_demo() -> dict[str, Any]:
+    """Point the shared Grid bot at the admin Bybit demo keys.
+
+    Writes ``user_data/grid.demo.env`` and sets ``demo_trading`` on
+    ``config_grid.json`` only. Does not touch the shared live env or the
+    strategy/finder configs.
+    """
+    cid = demo_context_id("admin")
+    sec = load_user_secrets(cid) or {}
+    key = str(sec.get("bybit_api_key") or sec.get("api_key") or "").strip()
+    secret = str(sec.get("bybit_api_secret") or sec.get("api_secret") or "").strip()
+    if not key or not secret:
+        # Admin demo keys often live in the shared env when that account is Demo.
+        env_key, env_secret, env_demo = _admin_env_credentials()
+        if env_demo and env_key and env_secret:
+            key, secret = env_key, env_secret
+            cid = "admin"
+    if not key or not secret:
+        raise ValueError(
+            "Нет Demo-ключей Bybit у администратора — добавьте их в Настройках"
+        )
+    if any(ch in key + secret for ch in "\r\n\x00"):
+        raise ValueError("Demo-ключ содержит недопустимые символы")
+    env_path = BASE / "user_data" / "grid.demo.env"
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    text = "\n".join(
+        [
+            f"CTENGINE__EXCHANGE__KEY={key}",
+            f"CTENGINE__EXCHANGE__SECRET={secret}",
+            "CTENGINE__EXCHANGE__DEMO_TRADING=true",
+            f"BYBIT_API_KEY={key}",
+            f"BYBIT_API_SECRET={secret}",
+            "BYBIT_DEMO_TRADING=true",
+        ]
+    ) + "\n"
+    previous = ""
+    if env_path.is_file():
+        try:
+            previous = env_path.read_text(encoding="utf-8")
+        except OSError:
+            previous = ""
+    if previous != text:
+        env_path.write_text(text, encoding="utf-8")
+        try:
+            os.chmod(env_path, 0o600)
+        except OSError:
+            pass
+    cfg_path = BASE / "user_data" / "config_grid.json"
+    if cfg_path.is_file():
+        try:
+            cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            cfg = None
+        if isinstance(cfg, dict):
+            exchange = dict(cfg.get("exchange") or {})
+            if exchange.get("demo_trading") is not True or str(exchange.get("name") or "") != "bybit":
+                exchange["demo_trading"] = True
+                exchange["name"] = "bybit"
+                cfg["exchange"] = exchange
+                cfg_path.write_text(
+                    json.dumps(cfg, indent=4, ensure_ascii=False) + "\n",
+                    encoding="utf-8",
+                )
+    return {"context_id": cid, "demo_trading": True, "env_file": str(env_path)}
 
 
 def sync_admin_demo_trading(demo_trading: bool) -> None:

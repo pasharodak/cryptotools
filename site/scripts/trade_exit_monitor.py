@@ -5,10 +5,12 @@ from __future__ import annotations
 import importlib
 import json
 import logging
+import math
 import sqlite3
 import sys
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -192,6 +194,7 @@ class TradeRow:
     enter_tag: str
     strategy: str
     leverage: float
+    open_date: str | None = None
     stop_loss_ratio: float | None = None
     take_profit_ratio: float | None = None
 
@@ -207,7 +210,7 @@ def load_open_trades(db_path) -> list[TradeRow]:
                 conn.execute(
                     """
                     SELECT id, pair, is_short, amount, open_rate, stake_amount,
-                           enter_tag, strategy, leverage, stop_loss_pct
+                           enter_tag, strategy, leverage, stop_loss_pct, open_date
                     FROM trades WHERE is_open = 1 ORDER BY id
                     """
                 )
@@ -243,6 +246,7 @@ def load_open_trades(db_path) -> list[TradeRow]:
                         enter_tag=str(r["enter_tag"] or ""),
                         strategy=str(r["strategy"] or ""),
                         leverage=float(r["leverage"] or 1),
+                        open_date=str(r["open_date"]) if r["open_date"] else None,
                         stop_loss_ratio=sl_ratio,
                         take_profit_ratio=meta.get("take_profit_ratio"),
                     )
@@ -261,16 +265,45 @@ def profit_ratio(trade: TradeRow, rate: float) -> float:
     return ((rate - trade.open_rate) / trade.open_rate) * lev
 
 
-def update_mark_pnl(db_path, trade_id: int, ratio: float, abs_pnl: float) -> None:
+def update_mark_pnl(
+    db_path,
+    trade_id: int,
+    ratio: float,
+    abs_pnl: float,
+    *,
+    mark: float | None = None,
+) -> None:
+    """Update mark PnL; also widen min_rate/max_rate when mark is known."""
     try:
         with sqlite3.connect(db_path) as conn:
-            conn.execute(
-                """
-                UPDATE trades SET close_profit = ?, close_profit_abs = ?
-                WHERE id = ? AND is_open = 1
-                """,
-                (ratio, abs_pnl, trade_id),
-            )
+            if mark is not None and mark > 0:
+                conn.execute(
+                    """
+                    UPDATE trades SET
+                        close_profit = ?,
+                        close_profit_abs = ?,
+                        max_rate = CASE
+                            WHEN max_rate IS NULL OR max_rate <= 0 THEN ?
+                            WHEN ? > max_rate THEN ?
+                            ELSE max_rate
+                        END,
+                        min_rate = CASE
+                            WHEN min_rate IS NULL OR min_rate <= 0 THEN ?
+                            WHEN ? < min_rate THEN ?
+                            ELSE min_rate
+                        END
+                    WHERE id = ? AND is_open = 1
+                    """,
+                    (ratio, abs_pnl, mark, mark, mark, mark, mark, mark, trade_id),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE trades SET close_profit = ?, close_profit_abs = ?
+                    WHERE id = ? AND is_open = 1
+                    """,
+                    (ratio, abs_pnl, trade_id),
+                )
             conn.commit()
     except sqlite3.Error:
         pass
@@ -283,8 +316,6 @@ def _is_test_panel_tag(user_id: str, tag: str, *, tenant_dir, load_json) -> bool
         HTF1H_IDS = frozenset()
     if tag in HTF1H_IDS:
         return False
-    if tag.endswith("TestStrategy"):
-        return True
     data = None
     try:
         import user_prefs as up
@@ -299,6 +330,119 @@ def _is_test_panel_tag(user_id: str, tag: str, *, tenant_dir, load_json) -> bool
     main = {str(x) for x in (data.get("main") or [])}
     hidden = {str(x) for x in (data.get("hidden") or [])}
     return tag not in main and tag not in hidden
+
+
+def _parse_time_close_leg(
+    *,
+    enabled: Any,
+    minutes_raw: Any,
+    tp_raw: Any,
+) -> dict[str, float] | None:
+    """One time-close leg (profit or loss). None = off / invalid."""
+    if enabled is not True:
+        return None
+    try:
+        minutes = float(minutes_raw or 0)
+        tp = float(tp_raw or 0)
+    except (TypeError, ValueError):
+        return None
+    if not (1 <= minutes <= 10080) or not minutes.is_integer() or not (0.005 <= tp <= 0.5):
+        return None
+    return {"minutes": minutes, "tp": tp}
+
+
+def _test_time_close_settings(user_id: str) -> dict[str, Any] | None:
+    """«Закрытие по истечению времени» тестового блока. None = оба варианта выкл."""
+    try:
+        import user_prefs as up
+
+        ts = up.load_test_settings(user_id)
+    except Exception:
+        return None
+    if not isinstance(ts, dict):
+        return None
+    profit = _parse_time_close_leg(
+        enabled=ts.get("time_close_enabled"),
+        minutes_raw=ts.get("time_close_minutes"),
+        tp_raw=ts.get("time_close_tp"),
+    )
+    loss = _parse_time_close_leg(
+        enabled=ts.get("time_close_loss_enabled"),
+        minutes_raw=ts.get("time_close_loss_minutes"),
+        tp_raw=ts.get("time_close_loss_tp"),
+    )
+    if profit is None and loss is None:
+        return None
+    return {"profit": profit, "loss": loss}
+
+
+def _strategy_time_close_settings(user_id: str) -> dict[str, Any] | None:
+    """«Закрытие по истечению времени» основного блока (per-user bot_limits)."""
+    try:
+        import user_prefs as up
+
+        data = up.load_bot_limits_payload(user_id)
+    except Exception:
+        return None
+    tc = data.get("strategy_time_close") if isinstance(data, dict) else None
+    if not isinstance(tc, dict):
+        return None
+    profit = _parse_time_close_leg(
+        enabled=tc.get("enabled"),
+        minutes_raw=tc.get("minutes"),
+        tp_raw=tc.get("tp"),
+    )
+    loss = _parse_time_close_leg(
+        enabled=tc.get("loss_enabled"),
+        minutes_raw=tc.get("loss_minutes"),
+        tp_raw=tc.get("loss_tp"),
+    )
+    if profit is None and loss is None:
+        return None
+    return {"profit": profit, "loss": loss}
+
+
+def _trade_age_minutes(open_date: str | None) -> float | None:
+    if not open_date:
+        return None
+    try:
+        opened = datetime.fromisoformat(str(open_date).strip())
+    except ValueError:
+        return None
+    if opened.tzinfo is not None:
+        opened = opened.astimezone(UTC).replace(tzinfo=None)
+    now = datetime.now(UTC).replace(tzinfo=None)
+    return (now - opened).total_seconds() / 60.0
+
+
+# Monitor ticks about every 30s. The window stays open a few extra minutes so
+# one slow pass cannot miss this trade's own deadline, and then closes.
+# A later price move must not time-close every older trade in the same pass.
+_TIME_CLOSE_GRACE_MINUTES = 5.0
+
+
+def time_close_window_open(
+    age_minutes: float | None,
+    after_minutes: float,
+    *,
+    grace_minutes: float = _TIME_CLOSE_GRACE_MINUTES,
+) -> bool:
+    """True only during this trade's own deadline window.
+
+    The window starts ``after_minutes`` after this trade's open and lasts
+    ``grace_minutes``. Before that, and after the grace, the leg does not fire.
+    """
+    if age_minutes is None:
+        return False
+    try:
+        start = float(after_minutes)
+        age = float(age_minutes)
+        grace = float(grace_minutes)
+    except (TypeError, ValueError):
+        return False
+    if grace <= 0:
+        return False
+    return start <= age < start + grace
 
 
 def _global_sl_tp(user_id: str, cfg: dict[str, Any]) -> tuple[float, float]:
@@ -485,6 +629,10 @@ def monitor_user_exits(user_id: str, ctx: dict[str, Any]) -> None:
     ex = get_exchange(user_id)
     if ex is None:
         return
+    time_close_test: dict[str, Any] | None = None
+    time_close_main: dict[str, Any] | None = None
+    time_close_test_loaded = False
+    time_close_main_loaded = False
     try:
         pos_map = ex.positions_map()
     except Exception as exc:
@@ -501,7 +649,7 @@ def monitor_user_exits(user_id: str, ctx: dict[str, Any]) -> None:
             mark = trade.open_rate
         ratio = profit_ratio(trade, mark)
         abs_pnl = ratio * (trade.stake_amount or 0)
-        update_mark_pnl(path, trade.id, ratio, abs_pnl)
+        update_mark_pnl(path, trade.id, ratio, abs_pnl, mark=float(mark) if mark else None)
 
         if not pos or float(pos.get("size") or 0) <= 0:
             close_rate = mark
@@ -616,6 +764,42 @@ def monitor_user_exits(user_id: str, ctx: dict[str, Any]) -> None:
             exit_reason = "roi_take_profit"
         elif sl < 0 and ratio <= sl:
             exit_reason = "stop_loss"
+
+        if not exit_reason and tag not in PA_TAGS:
+            is_test = _is_test_panel_tag(user_id, tag, tenant_dir=tenant_dir, load_json=load_json)
+            if is_test:
+                if not time_close_test_loaded:
+                    time_close_test = _test_time_close_settings(user_id)
+                    time_close_test_loaded = True
+                time_close = time_close_test
+            else:
+                if not time_close_main_loaded:
+                    time_close_main = _strategy_time_close_settings(user_id)
+                    time_close_main_loaded = True
+                time_close = time_close_main
+            # Price arithmetic can make equal profit/loss thresholds differ by a rounding bit.
+            # Each open trade is checked on its own clock (open_date + minutes),
+            # once, inside a short grace. Trades opened at different times do not
+            # share a deadline, and a trade past its window is left to SL/TP.
+            if time_close:
+                age = _trade_age_minutes(trade.open_date)
+                if age is not None:
+                    profit_leg = time_close.get("profit")
+                    loss_leg = time_close.get("loss")
+                    if (
+                        profit_leg
+                        and ratio > profit_leg["tp"]
+                        and not math.isclose(ratio, profit_leg["tp"], rel_tol=1e-12)
+                        and time_close_window_open(age, profit_leg["minutes"])
+                    ):
+                        exit_reason = "time_exit"
+                    elif (
+                        loss_leg
+                        and ratio < -loss_leg["tp"]
+                        and not math.isclose(ratio, -loss_leg["tp"], rel_tol=1e-12)
+                        and time_close_window_open(age, loss_leg["minutes"])
+                    ):
+                        exit_reason = "time_exit_loss"
 
         if not exit_reason and tag not in PA_TAGS:
             try:

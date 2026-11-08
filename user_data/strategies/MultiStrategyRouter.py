@@ -61,8 +61,8 @@ from ObvEmaCrossStrategy import ObvEmaCrossStrategy
 from PsaraFlipStrategy import PsaraFlipStrategy
 from SupertrendStrategy import SupertrendStrategy
 from TripleEmaStrategy import TripleEmaStrategy
-from Htf1hStrategies import HTF1H_CLASSES  # noqa: E402
-from htf1h_catalog import HTF1H_BY_ID, HTF1H_IDS, sltp_ratios  # noqa: E402
+# 1h clones retired from live registry; keep ids/helpers for history / residual exits.
+from htf1h_catalog import HTF1H_IDS, sltp_ratios  # noqa: E402
 
 _USER_DATA = Path(__file__).resolve().parent.parent
 # Prefer site/user_data/ml over simulation/ml when repo root is on PYTHONPATH.
@@ -224,7 +224,6 @@ STRATEGY_REGISTRY: dict[str, type[IStrategy]] = {
     "TripleEmaStrategy": TripleEmaStrategy,
     "FibPullbackStrategy": FibPullbackStrategy,
 }
-STRATEGY_REGISTRY.update(HTF1H_CLASSES)
 
 # Per-tag risk for ML pack — SL/ROI as in player_scenarios (sim test).
 TAG_RISK: dict[str, dict] = {
@@ -792,22 +791,6 @@ SCENARIO_BY_TAG: dict[str, dict[str, str]] = {
     },
 }
 
-for _htf_spec in HTF1H_BY_ID.values():
-    _htf_sl, _htf_tp = sltp_ratios(_htf_spec["id"])
-    TAG_RISK[_htf_spec["id"]] = {
-        "stoploss": _htf_sl,
-        "tp": _htf_tp,
-        "minimal_roi": {"0": _htf_tp},
-    }
-    SCENARIO_BY_TAG[_htf_spec["id"]] = {
-        "scenario_id": _htf_spec["scenario"],
-        "scan_type": "strategy",
-        "group": "htf1h",
-        "strategy": _htf_spec["id"],
-        "label": f"{_htf_spec['name']} · 1-часовые",
-    }
-del _htf_spec, _htf_sl, _htf_tp
-
 
 def load_enabled_map() -> dict[str, bool]:
     if not ENABLED_FILE.is_file():
@@ -1305,7 +1288,8 @@ class MultiStrategyRouter(IStrategy):
         except Exception:
             logger.exception("strategy open-elsewhere check failed for %s", pair)
 
-        inverted = load_inverted_map()
+        # Invert is per-user in trade-executor (UI «Инвертировать»), not from the
+        # shared enabled_strategies.json — otherwise admin invert would flip everyone.
         for sid in self._enabled_ids():
             if pair and not strategy_allows_pair(sid, pair):
                 continue
@@ -1315,11 +1299,7 @@ class MultiStrategyRouter(IStrategy):
 
             long_mask = df.get("enter_long", 0).fillna(0).astype(int) == 1
             short_mask = df.get("enter_short", 0).fillna(0).astype(int) == 1
-            if inverted.get(sid):
-                long_mask, short_mask = short_mask, long_mask
-                tag = f"{sid}{INV_TAG_SUFFIX}"
-            else:
-                tag = sid
+            tag = sid
 
             first_long = long_mask & (dataframe["enter_long"] != 1)
             first_short = short_mask & (dataframe["enter_short"] != 1)

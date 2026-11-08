@@ -27,6 +27,9 @@ KEY_BOT_LIMITS = "bot_limits"
 KEY_TEST_SETTINGS = "test_strategy_settings"
 KEY_MAX_PER = "max_open_trades_per_strategy"
 KEY_DUAL_HEDGE = "dual_hedge"
+KEY_TRADE_ON = "trade_on"  # all | bybit | binance — legacy single value
+KEY_TRADE_ON_MAIN = "trade_on_main"  # Strategies panel
+KEY_TRADE_ON_TEST = "trade_on_test"  # Test strategies panel
 # Shared Strategy stack (admin): desired StaticPairList — source of truth vs scanners.
 KEY_STRATEGY_WL = "strategy_pair_whitelist"
 KEY_STRATEGY_SCAN_POLICY = "strategy_scan_policy"
@@ -47,6 +50,12 @@ DEFAULT_TEST_SETTINGS: dict[str, Any] = {
     "stake_amount": 5.0,
     "stoploss": 0.02,
     "take_profit": 0.02,
+    "time_close_enabled": False,
+    "time_close_minutes": 60,
+    "time_close_tp": 0.013,
+    "time_close_loss_enabled": False,
+    "time_close_loss_minutes": 60,
+    "time_close_loss_tp": 0.013,
 }
 
 DEFAULT_STRATEGY_SCAN_POLICY: dict[str, Any] = {
@@ -280,6 +289,156 @@ def save_max_per_strategy(
         json_name="max_open_trades_per_strategy.json",
         base=base,
     )
+
+
+def load_trade_on(user_id: str, *, base: Path | None = None) -> str:
+    """Legacy single trade_on (fallback for panel-specific prefs).
+
+    Default ``bybit`` so existing users keep current behaviour.
+    """
+    uid = tm.parent_user_id_of_context(str(user_id))
+    raw = get_or_migrate(
+        uid,
+        KEY_TRADE_ON,
+        json_name="trade_on.json",
+        default={"exchange": tm.DEFAULT_TRADE_ON},
+        base=base,
+    )
+    if isinstance(raw, dict):
+        return tm.normalize_trade_on(
+            raw.get("exchange") or raw.get("trade_on") or tm.DEFAULT_TRADE_ON
+        )
+    return tm.normalize_trade_on(raw)
+
+
+def save_trade_on(
+    user_id: str, exchange: str, *, base: Path | None = None
+) -> dict[str, Any]:
+    """Write legacy trade_on and mirror into both panel prefs."""
+    uid = tm.parent_user_id_of_context(str(user_id))
+    value = tm.normalize_trade_on(exchange)
+    put(
+        uid,
+        KEY_TRADE_ON,
+        {"exchange": value},
+        json_name="trade_on.json",
+        base=base,
+    )
+    save_trade_on_main(uid, value, base=base)
+    save_trade_on_test(uid, value, base=base)
+    return {"exchange": value}
+
+
+def _load_panel_trade_on(
+    user_id: str,
+    *,
+    key: str,
+    json_name: str,
+    base: Path | None = None,
+) -> str:
+    uid = tm.parent_user_id_of_context(str(user_id))
+    legacy = load_trade_on(uid, base=base)
+    raw = get_or_migrate(
+        uid,
+        key,
+        json_name=json_name,
+        default={"exchange": legacy},
+        base=base,
+    )
+    if isinstance(raw, dict):
+        return tm.normalize_trade_on(
+            raw.get("exchange") or raw.get("trade_on") or legacy
+        )
+    return tm.normalize_trade_on(raw if raw is not None else legacy)
+
+
+def load_trade_on_main(user_id: str, *, base: Path | None = None) -> str:
+    """Exchanges for Strategies (main) panel."""
+    return _load_panel_trade_on(
+        user_id,
+        key=KEY_TRADE_ON_MAIN,
+        json_name="trade_on_main.json",
+        base=base,
+    )
+
+
+def load_trade_on_test(user_id: str, *, base: Path | None = None) -> str:
+    """Exchanges for Test strategies panel (Demo contexts)."""
+    return _load_panel_trade_on(
+        user_id,
+        key=KEY_TRADE_ON_TEST,
+        json_name="trade_on_test.json",
+        base=base,
+    )
+
+
+def save_trade_on_main(
+    user_id: str, exchange: str, *, base: Path | None = None
+) -> dict[str, Any]:
+    uid = tm.parent_user_id_of_context(str(user_id))
+    value = tm.normalize_trade_on(exchange)
+    return put(
+        uid,
+        KEY_TRADE_ON_MAIN,
+        {"exchange": value},
+        json_name="trade_on_main.json",
+        base=base,
+    )
+
+
+def save_trade_on_test(
+    user_id: str, exchange: str, *, base: Path | None = None
+) -> dict[str, Any]:
+    uid = tm.parent_user_id_of_context(str(user_id))
+    value = tm.normalize_trade_on(exchange)
+    return put(
+        uid,
+        KEY_TRADE_ON_TEST,
+        {"exchange": value},
+        json_name="trade_on_test.json",
+        base=base,
+    )
+
+
+def load_trade_on_panels(user_id: str, *, base: Path | None = None) -> dict[str, str]:
+    uid = tm.parent_user_id_of_context(str(user_id))
+    main = load_trade_on_main(uid, base=base)
+    test = load_trade_on_test(uid, base=base)
+    return {
+        "trade_on_main": main,
+        "trade_on_test": test,
+        # Back-compat mirror (main preferred).
+        "trade_on": main,
+    }
+
+
+def save_trade_on_panels(
+    user_id: str,
+    *,
+    trade_on_main: str | None = None,
+    trade_on_test: str | None = None,
+    trade_on: str | None = None,
+    base: Path | None = None,
+) -> dict[str, str]:
+    """Update one or both panel prefs. Legacy ``trade_on`` sets both."""
+    uid = tm.parent_user_id_of_context(str(user_id))
+    if trade_on is not None and trade_on_main is None and trade_on_test is None:
+        save_trade_on(uid, trade_on, base=base)
+        return load_trade_on_panels(uid, base=base)
+    if trade_on_main is not None:
+        save_trade_on_main(uid, trade_on_main, base=base)
+    if trade_on_test is not None:
+        save_trade_on_test(uid, trade_on_test, base=base)
+    # Keep legacy key in sync with main for older readers.
+    if trade_on_main is not None:
+        put(
+            uid,
+            KEY_TRADE_ON,
+            {"exchange": tm.normalize_trade_on(trade_on_main)},
+            json_name="trade_on.json",
+            base=base,
+        )
+    return load_trade_on_panels(uid, base=base)
 
 
 def load_dual_hedge(user_id: str, *, base: Path | None = None) -> dict[str, Any]:

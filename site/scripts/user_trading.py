@@ -22,11 +22,16 @@ DEFAULT_FLAGS = {
     "price_action": False,
 }
 
-RETIRED_BOTS = frozenset({"llm", "llm50", "cursor", "cursor50"})
+RETIRED_BOTS = frozenset({"llm", "llm50", "cursor", "cursor50", "price_action"})
 
 _ACTIVE_CACHE_LOCK = threading.Lock()
 _ACTIVE_CACHE: dict[str, Any] = {}
 _ACTIVE_CACHE_TTL_SEC = 15.0
+
+
+def invalidate_active_traders_cache() -> None:
+    with _ACTIVE_CACHE_LOCK:
+        _ACTIVE_CACHE.clear()
 
 
 def _path(user_id: str) -> Path:
@@ -91,8 +96,22 @@ def is_trading_enabled(user_id: str, bot: str = "strategy") -> bool:
     return bool(load_trading_flags(user_id).get(bot, False))
 
 
+def exchanges_for_trade_on(trade_on: str) -> list[str]:
+    """Expand ``all|bybit|binance`` to concrete exchange ids."""
+    ton = tm.normalize_trade_on(trade_on)
+    if ton == "all":
+        return list(tm.SUPPORTED_EXCHANGES)
+    return [tm.normalize_exchange(ton)]
+
+
 def list_active_traders(bot: str = "strategy") -> list[str]:
-    """Users with secrets + trading flag for the given bot."""
+    """Trading context ids with secrets + trading flag for the given bot.
+
+    Union of ``trade_on_main`` and ``trade_on_test`` exchanges (entry gate
+    filters per panel later). Flags are shared per live/demo mode on the
+    Bybit context; exchange contexts inherit them.
+    Legacy ``*_demo`` login rows are skipped.
+    """
     if bot in RETIRED_BOTS:
         return []
     now = time.monotonic()
@@ -101,18 +120,38 @@ def list_active_traders(bot: str = "strategy") -> list[str]:
         if hit and (now - float(hit["ts"])) < _ACTIVE_CACHE_TTL_SEC:
             return list(hit["ids"])
     out: list[str] = []
+    try:
+        import user_prefs as up
+    except Exception:
+        up = None  # type: ignore
     for user in tm.load_users():
         uid = str(user.get("id") or "")
         if not uid or not user.get("enabled", True):
             continue
-        if uid == "admin":
-            st = tm.admin_secrets_status()
-        else:
-            st = tm.secrets_status(uid)
-        if not st.get("has_secrets"):
+        if tm.is_demo_account(user):
             continue
-        if is_trading_enabled(uid, bot):
-            out.append(uid)
+        exchanges: list[str] = []
+        if up is not None:
+            try:
+                panels = up.load_trade_on_panels(uid)
+                seen: set[str] = set()
+                for ton in (panels.get("trade_on_main"), panels.get("trade_on_test")):
+                    for ex in exchanges_for_trade_on(str(ton or tm.DEFAULT_TRADE_ON)):
+                        if ex not in seen:
+                            seen.add(ex)
+                            exchanges.append(ex)
+            except Exception:
+                exchanges = exchanges_for_trade_on(tm.DEFAULT_TRADE_ON)
+        else:
+            exchanges = exchanges_for_trade_on(tm.DEFAULT_TRADE_ON)
+        live_flag = is_trading_enabled(tm.live_context_id(uid, exchange="bybit"), bot)
+        demo_flag_cid = tm.demo_context_id(uid, exchange="bybit")
+        demo_flag = is_trading_enabled(demo_flag_cid, bot)
+        for ex in exchanges:
+            if live_flag and tm.has_mode_secrets(uid, "live", exchange=ex):
+                out.append(tm.live_context_id(uid, exchange=ex))
+            if demo_flag and tm.has_mode_secrets(uid, "demo", exchange=ex):
+                out.append(tm.demo_context_id(uid, exchange=ex))
     with _ACTIVE_CACHE_LOCK:
         _ACTIVE_CACHE[bot] = {"ids": list(out), "ts": now}
     return out

@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """
-Scan Bybit USDT linear futures for true sideways (ranging) markets — Grid bot whitelist.
+Scan Bybit USDT linear futures for sideways markets — Grid bot.
+
+Checks the configured timeframe and, when that misses, the 1m channel.
+Each hit carries the channel edges: entry 7.5% inside, take profit 65% of
+the width, stop 50% of the width outside. How many names are kept follows
+the Grid bot max_open_trades («Боковиков»).
 
 Scanner v3 filters:
   - ADX below adx_max (weak trend) + ADX not rising fast
@@ -31,6 +36,11 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import talib.abstract as ta
+
+_STRATS = Path(__file__).resolve().parents[1] / "user_data" / "strategies"
+if str(_STRATS) not in sys.path:
+    sys.path.insert(0, str(_STRATS))
+from range_edge import channel_bounds, edge_prices  # noqa: E402
 
 BYBIT_TICKERS = "https://api.bybit.com/v5/market/tickers?category=linear"
 BYBIT_KLINE = "https://api.bybit.com/v5/market/kline"
@@ -309,6 +319,16 @@ def analyze_ranging(
     if fails:
         score *= 0.55  # near-miss penalty vs qualified pairs
 
+    levels: dict[str, Any] = {}
+    bounds = channel_bounds(df, int(cfg.get("lookback_candles", 96)))
+    if bounds:
+        range_low, range_high = bounds
+        levels = {
+            "range_low": round(range_low, 8),
+            "range_high": round(range_high, 8),
+            **{key: round(val, 8) for key, val in edge_prices(range_low, range_high).items()},
+        }
+
     return {
         "adx": round(last_adx, 2),
         "bb_width": round(last_bb, 4),
@@ -324,6 +344,7 @@ def analyze_ranging(
         "score": round(score, 6),
         "qualified": not fails,
         "fail_reasons": fails[:4],
+        **levels,
     }
 
 
@@ -417,6 +438,18 @@ def save_json(path: Path, data: Any) -> None:
     tmp.replace(path)
 
 
+def _tracked_slots(base: Path, cfg: dict[str, Any]) -> int:
+    """How many channels to keep: the Grid bot's max_open_trades, else scan max_pairs."""
+    try:
+        grid = json.loads((base / "user_data" / "config_grid.json").read_text(encoding="utf-8"))
+        slots = int(grid.get("max_open_trades") or 0)
+        if slots > 0:
+            return slots
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        pass
+    return max(0, int(cfg.get("max_pairs") or 0))
+
+
 def run_scan(dry_run: bool = False, verbose: bool = False) -> dict[str, Any]:
     base = ft_base()
     cfg = load_scan_config(base)
@@ -454,8 +487,8 @@ def run_scan(dry_run: bool = False, verbose: bool = False) -> dict[str, Any]:
 
     if verbose:
         print(
-            f"Ranging scan v3: {len(candidates)} pairs "
-            f"(ADX<{adx_max}, BB {bb_width_min:.1%}-{bb_width_max:.1%}, "
+            f"Ranging scan v4: {len(candidates)} pairs "
+            f"(1m and 5m, ADX<{adx_max}, BB {bb_width_min:.1%}-{bb_width_max:.1%}, "
             f"ATR, MTF={cfg.get('mtf_enabled', True)})..."
         )
 
@@ -466,8 +499,21 @@ def run_scan(dry_run: bool = False, verbose: bool = False) -> dict[str, Any]:
             df = fetch_klines(sym, interval, lookback + 15)
             df_htf = fetch_htf_klines(sym, cfg)
             metrics = analyze_ranging(df, cfg, df_htf=df_htf)
+            range_tf = str(cfg.get("timeframe") or "5m")
             if metrics is None or metrics["ranging_ratio"] < min_ratio:
+                metrics = None
+            # 5m missed: the same filters on the 1m channel.
+            if metrics is None and range_tf != "1m":
+                df1 = fetch_klines(sym, "1", lookback + 15)
+                cfg1 = dict(cfg)
+                cfg1["mtf_enabled"] = False
+                m1 = analyze_ranging(df1, cfg1, df_htf=None)
+                if m1 is not None and m1["ranging_ratio"] >= min_ratio:
+                    metrics = m1
+                    range_tf = "1m"
+            if metrics is None:
                 continue
+            metrics["range_tf"] = range_tf
             base_coin = sym[: -len("USDT")]
             score = metrics["score"]
             if base_coin in priority_bases:
@@ -483,7 +529,7 @@ def run_scan(dry_run: bool = False, verbose: bool = False) -> dict[str, Any]:
             if verbose:
                 pri = "*" if metrics["priority"] else ""
                 print(
-                    f"  OK{pri} {pair}: ADX={metrics['adx']} BBw={metrics['bb_width']:.3f} "
+                    f"  OK{pri} {pair} [{range_tf}]: ADX={metrics['adx']} BBw={metrics['bb_width']:.3f} "
                     f"ATR×={metrics['atr_ratio']:.2f} x={metrics['midline_crosses']:.0f} "
                     f"score={metrics['score']:.5f}"
                 )
@@ -493,7 +539,7 @@ def run_scan(dry_run: bool = False, verbose: bool = False) -> dict[str, Any]:
             time.sleep(0.055)
 
     results.sort(key=lambda x: x["score"], reverse=True)
-    max_pairs = int(cfg["max_pairs"])
+    max_pairs = _tracked_slots(base, cfg)
     selected = results[:max_pairs]
 
     keep_pairs: list[str] = []
@@ -520,7 +566,7 @@ def run_scan(dry_run: bool = False, verbose: bool = False) -> dict[str, Any]:
 
     report = {
         "scanned_at": datetime.now(UTC).isoformat(),
-        "scanner_version": 3,
+        "scanner_version": 4,
         "candidates_checked": len(candidates),
         "ranging_found": len(results),
         "selected_count": len(selected),

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import threading
 import time
@@ -32,11 +33,26 @@ def db_path() -> Path:
     return base / "control_plane.sqlite"
 
 
+def _ensure_db_mode(path: Path) -> None:
+    """Owner-only DB — never leave world-readable control-plane state."""
+    try:
+        if path.is_file():
+            os.chmod(path, 0o600)
+        for suffix in ("-wal", "-shm"):
+            side = Path(str(path) + suffix)
+            if side.is_file():
+                os.chmod(side, 0o600)
+    except OSError:
+        pass
+
+
 @contextmanager
 def _connect() -> Any:
     """Open SQLite and always close — Connection context mgr alone does not close FDs."""
-    conn = sqlite3.connect(str(db_path()), timeout=30, check_same_thread=False)
+    path = db_path()
+    conn = sqlite3.connect(str(path), timeout=30, check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    _ensure_db_mode(path)
     try:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA busy_timeout=5000")
@@ -53,6 +69,7 @@ def _connect() -> Any:
             conn.close()
         except Exception:
             pass
+        _ensure_db_mode(path)
 
 
 def init_db() -> None:

@@ -407,6 +407,8 @@ def _exit_reason_ru(reason: str) -> str:
         "trailing_stop_loss": "трейлинг-стоп",
         "exit_signal": "сигнал выхода",
         "custom_exit": "выход стратегии",
+        "time_exit": "закрытие прибыли по времени",
+        "time_exit_loss": "закрытие убытка по времени",
     }
     return mapping.get(reason, reason or "неизвестно")
 

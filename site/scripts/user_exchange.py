@@ -35,6 +35,8 @@ def _sign(secret: str, payload: str, timestamp: str, api_key: str, recv_window: 
 
 
 class UserBybitExchange:
+    exchange_id = "bybit"
+
     def __init__(self, api_key: str, api_secret: str, *, demo_trading: bool = False) -> None:
         self.api_key = api_key.strip()
         self.api_secret = api_secret.strip()
@@ -580,6 +582,144 @@ def fetch_public_klines(symbol: str, *, interval: str = "5", limit: int = 250) -
     return rows
 
 
+_KLINE_TF_MS = {"1": 60_000, "5": 300_000, "15": 900_000, "60": 3_600_000}
+_BINANCE_KLINE_IV = {"1": "1m", "5": "5m", "15": "15m", "60": "1h"}
+
+
+def _read_json_url(url: str, timeout: float = 20.0) -> Any:
+    req = urllib.request.Request(url, headers={"Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode())
+
+
+def _kline_point(ts: int, o: Any, h: Any, l: Any, c: Any, v: Any) -> dict[str, Any]:
+    return {
+        "t": int(ts),
+        "o": float(o),
+        "h": float(h),
+        "l": float(l),
+        "c": float(c),
+        "v": float(v or 0),
+    }
+
+
+def _bybit_klines_range(
+    symbol: str, interval: str, start_ms: int, end_ms: int, tf_ms: int
+) -> list[dict[str, Any]]:
+    """Public linear klines, oldest first. Windows stay under the 1000-bar page."""
+    out: dict[int, dict[str, Any]] = {}
+    cursor = int(start_ms)
+    end_ms = int(end_ms)
+    page_span = tf_ms * 900
+    for _ in range(12):
+        if cursor > end_ms:
+            break
+        window_end = min(end_ms, cursor + page_span - tf_ms)
+        qs = urllib.parse.urlencode(
+            {
+                "category": "linear",
+                "symbol": symbol,
+                "interval": interval,
+                "start": str(cursor),
+                "end": str(window_end),
+                "limit": "1000",
+            }
+        )
+        data = _read_json_url(f"{BYBIT_API}/v5/market/kline?{qs}")
+        if not isinstance(data, dict) or int(data.get("retCode", -1)) != 0:
+            msg = data.get("retMsg") if isinstance(data, dict) else "bybit kline"
+            raise RuntimeError(str(msg or "bybit kline"))
+        batch = ((data.get("result") or {}).get("list") or [])
+        newest: int | None = None
+        for row in batch:
+            if not isinstance(row, (list, tuple)) or len(row) < 5:
+                continue
+            ts = int(row[0])
+            if newest is None or ts > newest:
+                newest = ts
+            if start_ms <= ts <= end_ms:
+                vol = row[5] if len(row) > 5 else 0
+                out[ts] = _kline_point(ts, row[1], row[2], row[3], row[4], vol)
+        if newest is None:
+            cursor = window_end + tf_ms
+            continue
+        nxt = newest + tf_ms
+        cursor = nxt if nxt > cursor else window_end + tf_ms
+    return [out[k] for k in sorted(out)]
+
+
+def _binance_klines_range(
+    symbol: str, interval: str, start_ms: int, end_ms: int, tf_ms: int
+) -> list[dict[str, Any]]:
+    iv = _BINANCE_KLINE_IV[interval]
+    out: dict[int, dict[str, Any]] = {}
+    cursor = int(start_ms)
+    end_ms = int(end_ms)
+    for _ in range(8):
+        if cursor > end_ms:
+            break
+        qs = urllib.parse.urlencode(
+            {
+                "symbol": symbol,
+                "interval": iv,
+                "startTime": str(cursor),
+                "endTime": str(end_ms),
+                "limit": "1500",
+            }
+        )
+        data = _read_json_url(f"{BINANCE_FAPI}/fapi/v1/klines?{qs}")
+        if isinstance(data, dict):
+            raise RuntimeError(str(data.get("msg") or "binance kline"))
+        if not isinstance(data, list) or not data:
+            break
+        newest: int | None = None
+        for row in data:
+            if not isinstance(row, (list, tuple)) or len(row) < 5:
+                continue
+            ts = int(row[0])
+            if newest is None or ts > newest:
+                newest = ts
+            if start_ms <= ts <= end_ms:
+                vol = row[5] if len(row) > 5 else 0
+                out[ts] = _kline_point(ts, row[1], row[2], row[3], row[4], vol)
+        if newest is None:
+            break
+        nxt = newest + tf_ms
+        if nxt <= cursor:
+            break
+        cursor = nxt
+        if len(data) < 1500:
+            break
+    return [out[k] for k in sorted(out)]
+
+
+def fetch_klines_range(
+    pair: str, *, interval: str = "5", start_ms: int, end_ms: int
+) -> list[dict[str, Any]]:
+    """OHLCV for a time window. Bybit public klines, Binance USD-M if Bybit is empty."""
+    interval = str(interval or "5")
+    tf_ms = _KLINE_TF_MS.get(interval)
+    if tf_ms is None:
+        raise ValueError("bad interval")
+    symbol = ft_pair_to_symbol(pair)
+    start_ms = int(start_ms)
+    end_ms = int(end_ms)
+    if end_ms < start_ms:
+        raise ValueError("bad range")
+    errors: list[str] = []
+    for name, fn in (("bybit", _bybit_klines_range), ("binance", _binance_klines_range)):
+        try:
+            rows = fn(symbol, interval, start_ms, end_ms, tf_ms)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{name}: {exc}")
+            continue
+        if rows:
+            return rows
+    if errors:
+        raise RuntimeError("; ".join(errors)[:300])
+    return []
+
+
 def _public_get(path: str, params: dict[str, Any], *, timeout: float = 20.0) -> dict[str, Any]:
     qs = urllib.parse.urlencode(params)
     url = f"{BYBIT_API}{path}?{qs}"
@@ -602,3 +742,503 @@ def fetch_public_orderbook(symbol: str, *, limit: int = 50) -> dict[str, Any]:
         "/v5/market/orderbook",
         {"category": "linear", "symbol": symbol, "limit": int(limit)},
     )
+
+
+# ---------------------------------------------------------------------------
+# Binance USDT-M Futures (live + Demo Trading)
+# Live:  https://fapi.binance.com
+# Demo:  https://demo-fapi.binance.com  (keys from demo.binance.com API Management)
+# Spot Demo (demo-api.binance.com) is a different product — we trade USD-M futures.
+# Legacy testnet.binancefuture.com is obsolete for new Demo Trading keys.
+# ---------------------------------------------------------------------------
+
+BINANCE_FAPI = "https://fapi.binance.com"
+BINANCE_FAPI_DEMO = "https://demo-fapi.binance.com"
+
+
+class UserBinanceExchange:
+    """Binance USD-M futures client with the same surface used by trade_executor."""
+
+    exchange_id = "binance"
+
+    def __init__(self, api_key: str, api_secret: str, *, demo_trading: bool = False) -> None:
+        self.api_key = api_key.strip()
+        self.api_secret = api_secret.strip()
+        self.demo_trading = bool(demo_trading)
+        self.api_base = BINANCE_FAPI_DEMO if self.demo_trading else BINANCE_FAPI
+        self._time_offset_ms = 0
+        self._time_synced = False
+        self._api_key_info: dict[str, Any] | None = None
+        self._trade_block_reason: str | None | object = _UNCHECKED
+        self._filters: dict[str, dict[str, Any]] = {}
+        if not self.api_key or not self.api_secret:
+            raise ValueError("Binance API key/secret required")
+
+    def sync_time(self, *, force: bool = False) -> int:
+        if self._time_synced and not force:
+            return self._time_offset_ms
+        url = f"{self.api_base}/fapi/v1/time"
+        with urllib.request.urlopen(url, timeout=15) as resp:
+            data = json.loads(resp.read().decode())
+        server_ms = int(data.get("serverTime") or 0)
+        if not server_ms:
+            raise RuntimeError("binance time endpoint returned no timestamp")
+        local_ms = int(time.time() * 1000)
+        self._time_offset_ms = int(server_ms - local_ms)
+        self._time_synced = True
+        return self._time_offset_ms
+
+    def _timestamp_ms(self) -> int:
+        if not self._time_synced:
+            try:
+                self.sync_time()
+            except Exception:
+                pass
+        return int(time.time() * 1000) + int(self._time_offset_ms)
+
+    def _sign(self, query: str) -> str:
+        return hmac.new(self.api_secret.encode(), query.encode(), hashlib.sha256).hexdigest()
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+        signed: bool = True,
+        retries: int = 3,
+    ) -> Any:
+        last_err: Exception | None = None
+        for attempt in range(retries):
+            try:
+                if attempt > 0:
+                    try:
+                        self.sync_time(force=True)
+                    except Exception:
+                        pass
+                q = dict(params or {})
+                if signed:
+                    q["timestamp"] = self._timestamp_ms()
+                    q["recvWindow"] = 60000
+                qs = urllib.parse.urlencode(q, doseq=True)
+                headers = {"X-MBX-APIKEY": self.api_key}
+                if signed:
+                    qs = f"{qs}&signature={self._sign(qs)}" if qs else f"signature={self._sign('')}"
+                url = f"{self.api_base}{path}"
+                if method == "GET":
+                    req = urllib.request.Request(
+                        f"{url}?{qs}" if qs else url, headers=headers, method="GET"
+                    )
+                    body = None
+                else:
+                    req = urllib.request.Request(
+                        url,
+                        data=qs.encode(),
+                        headers={**headers, "Content-Type": "application/x-www-form-urlencoded"},
+                        method=method,
+                    )
+                    body = None
+                try:
+                    with urllib.request.urlopen(req, timeout=30) as resp:
+                        raw = resp.read().decode()
+                except urllib.error.HTTPError as http_exc:
+                    raw = http_exc.read().decode() if http_exc.fp else str(http_exc)
+                    try:
+                        err = json.loads(raw)
+                    except Exception:
+                        raise RuntimeError(raw or str(http_exc)) from http_exc
+                    msg = str(err.get("msg") or err)
+                    if "timestamp" in msg.lower():
+                        try:
+                            self.sync_time(force=True)
+                        except Exception:
+                            pass
+                    raise RuntimeError(msg) from http_exc
+                data = json.loads(raw) if raw else {}
+                if isinstance(data, dict) and data.get("code") not in (None, 0, 200) and "msg" in data:
+                    # Binance error payload
+                    raise RuntimeError(str(data.get("msg") or data))
+                return data
+            except (urllib.error.URLError, TimeoutError, RuntimeError) as exc:
+                last_err = exc
+                time.sleep(0.25 * (attempt + 1))
+        raise RuntimeError(str(last_err or "binance request failed"))
+
+    def instrument(self, symbol: str) -> dict[str, Any]:
+        if symbol in self._filters:
+            return self._filters[symbol]
+        data = self._request("GET", "/fapi/v1/exchangeInfo", params={}, signed=False)
+        for item in data.get("symbols") or []:
+            if str(item.get("symbol") or "") == symbol:
+                filt: dict[str, Any] = {"symbol": symbol}
+                for f in item.get("filters") or []:
+                    if f.get("filterType") == "LOT_SIZE":
+                        filt["stepSize"] = f.get("stepSize")
+                        filt["minQty"] = f.get("minQty")
+                    if f.get("filterType") == "MIN_NOTIONAL":
+                        filt["minNotional"] = f.get("notional") or f.get("minNotional")
+                self._filters[symbol] = filt
+                return filt
+        return {}
+
+    def last_price(self, symbol: str) -> float:
+        data = self._request(
+            "GET", "/fapi/v1/ticker/price", params={"symbol": symbol}, signed=False
+        )
+        return float(data.get("price") or 0)
+
+    def order_avg_price(
+        self,
+        symbol: str,
+        order_id: str,
+        *,
+        attempts: int = 10,
+        delay_s: float = 0.25,
+    ) -> float | None:
+        oid = str(order_id or "").strip()
+        if not oid:
+            return None
+        for attempt in range(max(1, attempts)):
+            try:
+                data = self._request(
+                    "GET",
+                    "/fapi/v1/order",
+                    params={"symbol": symbol, "orderId": oid},
+                )
+                avg = float(data.get("avgPrice") or 0)
+                if avg > 0:
+                    return avg
+            except Exception:
+                pass
+            if attempt + 1 < attempts:
+                time.sleep(delay_s * (1.0 + 0.15 * attempt))
+        return None
+
+    def latest_closed_pnl(
+        self,
+        symbol: str,
+        *,
+        attempts: int = 8,
+        delay_s: float = 0.3,
+    ) -> dict[str, Any] | None:
+        for attempt in range(max(1, attempts)):
+            try:
+                rows = self._request(
+                    "GET",
+                    "/fapi/v1/income",
+                    params={"symbol": symbol, "incomeType": "REALIZED_PNL", "limit": 5},
+                )
+                if isinstance(rows, list) and rows:
+                    row = rows[0]
+                    return {
+                        "avgExitPrice": 0,
+                        "closedPnl": row.get("income"),
+                        "raw": row,
+                    }
+            except Exception:
+                pass
+            if attempt + 1 < attempts:
+                time.sleep(delay_s * (1.0 + 0.15 * attempt))
+        return None
+
+    def fill_or_last_price(self, symbol: str, order_id: str | None) -> float:
+        if order_id:
+            fill = self.order_avg_price(symbol, str(order_id))
+            if fill and fill > 0:
+                return float(fill)
+        return float(self.last_price(symbol))
+
+    def resolve_close_result(
+        self,
+        symbol: str,
+        *,
+        order_id: str | None = None,
+        fallback_price: float | None = None,
+    ) -> dict[str, Any]:
+        price: float | None = None
+        if order_id:
+            fill = self.order_avg_price(symbol, str(order_id))
+            if fill and fill > 0:
+                price = float(fill)
+        profit_abs: float | None = None
+        closed = self.latest_closed_pnl(symbol)
+        if closed and closed.get("closedPnl") is not None:
+            try:
+                profit_abs = float(closed["closedPnl"])
+            except (TypeError, ValueError):
+                profit_abs = None
+        if price is None or price <= 0:
+            try:
+                price = (
+                    float(fallback_price)
+                    if fallback_price and fallback_price > 0
+                    else self.last_price(symbol)
+                )
+            except Exception:
+                price = float(fallback_price or 0)
+        return {"price": float(price or 0), "profit_abs": profit_abs, "closed_row": closed}
+
+    def query_api_key(self, *, force: bool = False) -> dict[str, Any]:
+        if self._api_key_info is not None and not force:
+            return self._api_key_info
+        try:
+            # demo-fapi / current USD-M API: account is v2 (v1 → "Path ... is invalid").
+            info = self._request("GET", "/fapi/v2/account", params={})
+            self._api_key_info = {
+                "readOnly": 0,
+                "note": "binance-futures",
+                "permissions": {"ContractTrade": ["Order", "Position"]},
+                "raw": info if isinstance(info, dict) else {},
+            }
+        except Exception as exc:
+            self._api_key_info = {
+                "readOnly": 0,
+                "note": f"probe_failed:{exc}",
+                "permissions": {"ContractTrade": ["Order", "Position"]},
+            }
+        return self._api_key_info
+
+    def trade_block_reason(self, *, force: bool = False) -> str | None:
+        if self._trade_block_reason is not _UNCHECKED and not force:
+            return self._trade_block_reason  # type: ignore[return-value]
+        reason: str | None = None
+        try:
+            self.query_api_key(force=force)
+        except Exception as exc:
+            reason = f"Binance API недоступен: {exc}"
+        self._trade_block_reason = reason
+        return reason
+
+    def set_leverage(self, symbol: str, leverage: float) -> None:
+        lev = max(1, min(int(leverage), 125))
+        try:
+            self._request(
+                "POST",
+                "/fapi/v1/leverage",
+                params={"symbol": symbol, "leverage": lev},
+            )
+        except RuntimeError as exc:
+            msg = str(exc).lower()
+            if "no need to change" in msg or "not modified" in msg:
+                return
+            if "permission" in msg:
+                return
+            raise
+
+    def _round_qty(self, symbol: str, qty: float) -> str:
+        info = self.instrument(symbol)
+        step = Decimal(str(info.get("stepSize") or "0.001"))
+        min_qty = Decimal(str(info.get("minQty") or "0.001"))
+        q = Decimal(str(max(qty, 0)))
+        if step > 0:
+            q = (q / step).to_integral_value(rounding=ROUND_DOWN) * step
+        if q < min_qty:
+            q = min_qty
+        return format(q.normalize() if q == q.to_integral() else q, "f")
+
+    @staticmethod
+    def stake_risk_to_price_move(ratio: float, leverage: float) -> float:
+        lev = max(float(leverage or 1.0), 1.0)
+        return abs(float(ratio)) / lev
+
+    def set_trading_stop(
+        self,
+        *,
+        pair: str,
+        is_short: bool,
+        open_rate: float,
+        leverage: float = 3.0,
+        stop_loss: float | None = None,
+        take_profit: float | None = None,
+    ) -> dict[str, Any]:
+        """Attach TP/SL via Binance algo orders (best-effort)."""
+        symbol = ft_pair_to_symbol(pair)
+        if open_rate <= 0:
+            raise RuntimeError(f"invalid open_rate for {symbol}")
+        placed: dict[str, Any] = {"ok": True, "symbol": symbol}
+        side = "BUY" if is_short else "SELL"  # close side
+        if stop_loss is not None and stop_loss < 0:
+            move = self.stake_risk_to_price_move(stop_loss, leverage)
+            sl_price = open_rate * (1 + move) if is_short else open_rate * (1 - move)
+            try:
+                self._request(
+                    "POST",
+                    "/fapi/v1/order",
+                    params={
+                        "symbol": symbol,
+                        "side": side,
+                        "type": "STOP_MARKET",
+                        "stopPrice": str(round(sl_price, 8)),
+                        "closePosition": "true",
+                        "workingType": "CONTRACT_PRICE",
+                    },
+                )
+                placed["stopLoss"] = str(round(sl_price, 8))
+            except Exception as exc:
+                placed["stopLoss_error"] = str(exc)
+        if take_profit is not None and take_profit > 0:
+            move = self.stake_risk_to_price_move(take_profit, leverage)
+            tp_price = open_rate * (1 - move) if is_short else open_rate * (1 + move)
+            try:
+                self._request(
+                    "POST",
+                    "/fapi/v1/order",
+                    params={
+                        "symbol": symbol,
+                        "side": side,
+                        "type": "TAKE_PROFIT_MARKET",
+                        "stopPrice": str(round(tp_price, 8)),
+                        "closePosition": "true",
+                        "workingType": "CONTRACT_PRICE",
+                    },
+                )
+                placed["takeProfit"] = str(round(tp_price, 8))
+            except Exception as exc:
+                placed["takeProfit_error"] = str(exc)
+        if "stopLoss" not in placed and "takeProfit" not in placed:
+            return {"ok": False, "reason": "no_sl_tp", **placed}
+        return placed
+
+    def market_entry(
+        self,
+        *,
+        pair: str,
+        side: str,
+        stake_usdt: float,
+        leverage: float = 3.0,
+        stop_loss: float | None = None,
+        take_profit: float | None = None,
+    ) -> dict[str, Any]:
+        block = self.trade_block_reason()
+        if block:
+            raise RuntimeError(block)
+        symbol = ft_pair_to_symbol(pair)
+        side_l = side.lower()
+        is_short = side_l in ("short", "sell")
+        bn_side = "SELL" if is_short else "BUY"
+        price = self.last_price(symbol)
+        if price <= 0:
+            raise RuntimeError(f"invalid price for {symbol}")
+        self.set_leverage(symbol, leverage)
+        qty = (float(stake_usdt) * float(leverage)) / price
+        qty_str = self._round_qty(symbol, qty)
+        result = self._request(
+            "POST",
+            "/fapi/v1/order",
+            params={
+                "symbol": symbol,
+                "side": bn_side,
+                "type": "MARKET",
+                "quantity": qty_str,
+            },
+        )
+        order_id = str(result.get("orderId") or "")
+        fill = float(self.fill_or_last_price(symbol, order_id))
+        sl_set = None
+        tp_set = None
+        try:
+            if (stop_loss is not None and stop_loss < 0) or (
+                take_profit is not None and take_profit > 0
+            ):
+                anchored = self.set_trading_stop(
+                    pair=pair,
+                    is_short=is_short,
+                    open_rate=fill if fill > 0 else price,
+                    leverage=leverage,
+                    stop_loss=stop_loss,
+                    take_profit=take_profit,
+                )
+                sl_set = anchored.get("stopLoss")
+                tp_set = anchored.get("takeProfit")
+        except Exception:
+            pass
+        return {
+            "symbol": symbol,
+            "pair": pair,
+            "side": side_l,
+            "order_id": order_id,
+            "price": fill,
+            "qty": qty_str,
+            "stake_usdt": float(stake_usdt),
+            "leverage": float(leverage),
+            "stop_loss": sl_set,
+            "take_profit": tp_set,
+        }
+
+    def positions_map(self) -> dict[tuple[str, str], dict[str, Any]]:
+        out: dict[tuple[str, str], dict[str, Any]] = {}
+        rows = self._request("GET", "/fapi/v2/positionRisk", params={})
+        if not isinstance(rows, list):
+            return out
+        for p in rows:
+            amt = float(p.get("positionAmt") or 0)
+            if abs(amt) <= 0:
+                continue
+            sym = str(p.get("symbol") or "")
+            key_side = "sell" if amt < 0 else "buy"
+            # import_positions reads the Bybit field names.
+            out[(sym, key_side)] = {
+                **p,
+                "size": abs(amt),
+                "side": "Sell" if amt < 0 else "Buy",
+                "avgPrice": p.get("entryPrice") or p.get("avgPrice") or 0,
+                "positionIM": (
+                    p.get("isolatedWallet")
+                    or p.get("isolatedMargin")
+                    or p.get("positionInitialMargin")
+                    or 0
+                ),
+                "createdTime": p.get("updateTime") or p.get("createdTime"),
+            }
+        return out
+
+    def market_close(self, *, pair: str, is_short: bool, qty: float | None = None) -> dict[str, Any]:
+        symbol = ft_pair_to_symbol(pair)
+        pos_side = "sell" if is_short else "buy"
+        positions = self.positions_map()
+        pos = positions.get((symbol, pos_side))
+        if not pos:
+            return {"closed": False, "reason": "no_position"}
+        size = float(pos.get("size") or 0)
+        if size <= 0:
+            return {"closed": False, "reason": "zero_size"}
+        close_qty = float(qty) if qty and qty > 0 else size
+        close_qty = min(close_qty, size)
+        qty_str = self._round_qty(symbol, close_qty)
+        bn_side = "BUY" if is_short else "SELL"
+        result = self._request(
+            "POST",
+            "/fapi/v1/order",
+            params={
+                "symbol": symbol,
+                "side": bn_side,
+                "type": "MARKET",
+                "quantity": qty_str,
+                "reduceOnly": "true",
+            },
+        )
+        order_id = str(result.get("orderId") or "")
+        resolved = self.resolve_close_result(symbol, order_id=order_id)
+        out: dict[str, Any] = {
+            "closed": True,
+            "symbol": symbol,
+            "order_id": order_id,
+            "price": float(resolved["price"]),
+            "qty": qty_str,
+        }
+        if resolved.get("profit_abs") is not None:
+            out["profit_abs"] = float(resolved["profit_abs"])
+        return out
+
+
+def make_user_exchange(
+    exchange: str,
+    api_key: str,
+    api_secret: str,
+    *,
+    demo_trading: bool = False,
+) -> UserBybitExchange | UserBinanceExchange:
+    ex = (exchange or "bybit").strip().lower()
+    if ex == "binance":
+        return UserBinanceExchange(api_key, api_secret, demo_trading=demo_trading)
+    return UserBybitExchange(api_key, api_secret, demo_trading=demo_trading)

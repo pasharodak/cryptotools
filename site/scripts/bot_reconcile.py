@@ -269,6 +269,8 @@ def _spawn_windows(args: list[str], log_tag: str) -> tuple[bool, str]:
     env = os.environ.copy()
     env.setdefault("CT_BASE", str(BASE))
     env.setdefault("CT_ENV", str(BASE / ".env"))
+    if any("config_grid.json" in arg for arg in args):
+        _overlay_env_file(env, BASE / "user_data" / "grid.demo.env")
     try:
         # Detached process
         creationflags = 0
@@ -454,7 +456,153 @@ def refresh_observed(user_id: str, bot: str) -> dict[str, Any]:
     )
 
 
+_GRID_DEMO_DROPIN = Path("/etc/systemd/system/cryptotools-grid.service.d/10-demo.conf")
+
+
+def _grid_demo_dropin_body(env_path: Path) -> str:
+    return f"[Service]\nEnvironmentFile={env_path}\n"
+
+
+def _read_grid_demo_dropin() -> str | None:
+    try:
+        return _GRID_DEMO_DROPIN.read_text(encoding="utf-8")
+    except OSError:
+        pass
+    if IS_WINDOWS:
+        return None
+    try:
+        res = subprocess.run(
+            ["sudo", "-n", "cat", str(_GRID_DEMO_DROPIN)],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if res.returncode != 0:
+        return None
+    return res.stdout
+
+
+def _install_grid_demo_dropin(env_path: Path) -> str:
+    """Return installed, unchanged, or failed.
+
+    A later EnvironmentFile on cryptotools-grid overrides the shared live keys.
+    Strategy and Finder keep the live env.
+    """
+    if IS_WINDOWS:
+        return "unchanged"
+    body = _grid_demo_dropin_body(env_path)
+    current = _read_grid_demo_dropin()
+    if current == body:
+        return "unchanged"
+    try:
+        _GRID_DEMO_DROPIN.parent.mkdir(parents=True, exist_ok=True)
+        _GRID_DEMO_DROPIN.write_text(body, encoding="utf-8")
+        return "installed"
+    except OSError:
+        logger.debug("grid demo drop-in direct write failed", exc_info=True)
+    try:
+        mk = subprocess.run(
+            ["sudo", "-n", "mkdir", "-p", str(_GRID_DEMO_DROPIN.parent)],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+        if mk.returncode != 0:
+            return "failed"
+        wr = subprocess.run(
+            ["sudo", "-n", "tee", str(_GRID_DEMO_DROPIN)],
+            input=body,
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+        if wr.returncode != 0:
+            return "failed"
+    except (OSError, subprocess.SubprocessError):
+        return "failed"
+    if _read_grid_demo_dropin() != body:
+        return "failed"
+    return "installed"
+
+
+def _grid_demo_env_changed(env_path: Path) -> bool:
+    marker = BASE / "user_data" / "grid.demo.applied"
+    try:
+        if not marker.is_file() or not env_path.is_file():
+            return True
+        return env_path.stat().st_mtime > marker.stat().st_mtime + 0.001
+    except OSError:
+        return True
+
+
+def _mark_grid_demo_applied() -> None:
+    marker = BASE / "user_data" / "grid.demo.applied"
+    try:
+        marker.write_text("ok\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def prepare_admin_grid_demo() -> tuple[bool, str]:
+    """Pin demo keys, then reload the shared Grid unit so those keys win."""
+    try:
+        info = tm.pin_admin_grid_demo()
+    except ValueError as exc:
+        return False, str(exc)
+    env_path = Path(str(info.get("env_file") or ""))
+    if IS_WINDOWS or not env_path:
+        return True, ""
+    status = _install_grid_demo_dropin(env_path)
+    if status == "failed":
+        return False, (
+            "Grid не переключён на Demo: нет прав записать "
+            "/etc/systemd/system/cryptotools-grid.service.d/10-demo.conf. "
+            "Ключи записаны в user_data/grid.demo.env."
+        )
+    if status == "installed":
+        rel = _systemctl("daemon-reload")
+        if rel.returncode != 0:
+            return False, (rel.stderr or rel.stdout or "daemon-reload failed").strip()
+    if status == "installed" or _grid_demo_env_changed(env_path):
+        st = _systemctl("is-active", "cryptotools-grid")
+        if (st.stdout or "").strip() == "active":
+            res = _systemctl("restart", "cryptotools-grid")
+            if res.returncode != 0:
+                return False, (
+                    res.stderr or res.stdout or "restart cryptotools-grid failed"
+                ).strip()
+        _mark_grid_demo_applied()
+    return True, ""
+
+
+def _overlay_env_file(env: dict[str, str], path: Path) -> None:
+    if not path.is_file():
+        return
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return
+    for line in text.splitlines():
+        raw = line.strip()
+        if not raw or raw.startswith("#") or "=" not in raw:
+            continue
+        key, val = raw.split("=", 1)
+        key = key.strip()
+        if key:
+            env[key] = val
+
+
 def apply_enable(user_id: str, bot: str) -> tuple[bool, str]:
+    if bot == "grid" and user_id == "admin":
+        ok, err = prepare_admin_grid_demo()
+        if not ok:
+            cp.update_observed(user_id, bot, process_up=False, last_error=err)
+            return False, err
     user_trading.save_trading_flags(user_id, {bot: True})
     ok, err = ensure_process(user_id, bot)
     if not ok:

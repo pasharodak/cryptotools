@@ -29,7 +29,13 @@ import trade_exit_monitor  # noqa: E402
 import user_trading  # noqa: E402
 import pair_entry_guard  # noqa: E402
 from reconcile_positions import archive_trade_in_db  # noqa: E402
-from user_exchange import UserBybitExchange, fetch_public_klines, ft_pair_to_symbol  # noqa: E402
+from user_exchange import (  # noqa: E402
+    UserBybitExchange,
+    UserBinanceExchange,
+    fetch_public_klines,
+    ft_pair_to_symbol,
+    make_user_exchange,
+)
 
 try:
     from ml.gate import allow_trade_entry, get_live_ml_gate  # noqa: E402
@@ -65,7 +71,7 @@ log = logging.getLogger("trade_executor")
 
 _running = True
 _processed: set[str] = set()
-_exchanges: dict[str, UserBybitExchange] = {}
+_exchanges: dict[str, UserBybitExchange | UserBinanceExchange] = {}
 _ohlcv_cache: dict[str, tuple[float, Any]] = {}
 _pair_entry_locks: dict[str, threading.Lock] = defaultdict(threading.Lock)
 # (monotonic_ts, category) — for STATUS “why no trades” summary in UI logs
@@ -83,6 +89,8 @@ def _skip_category(reason: str) -> str:
         return "ML gate"
     if "whitelist" in r:
         return "whitelist"
+    if "биржа" in r and "выключена" in r:
+        return "trade_on"
     if "выключена" in r or "enabled" in r:
         return "strategy off"
     if "лимит" in r or "max_open" in r:
@@ -94,6 +102,12 @@ def _skip_category(reason: str) -> str:
     if "stoploss" in r or "order fail" in r:
         return "биржа/ордер"
     return "другое"
+
+
+def _is_quiet_trade_on_skip(reason: str) -> bool:
+    """Exchange not selected for this panel — expected; don't spam SKIP lines."""
+    r = (reason or "").lower()
+    return "биржа" in r and "выключена" in r
 
 
 def _record_skip(reason: str) -> None:
@@ -186,6 +200,24 @@ def load_enabled(user_id: str) -> dict[str, bool]:
         return {str(k): bool(v) for k, v in enabled.items()}
 
 
+def load_inverted(user_id: str) -> dict[str, bool]:
+    """Per-user long↔short invert flags (UI «Инвертировать»)."""
+    try:
+        import user_prefs as up
+
+        payload = up.load_enabled_payload(user_id)
+        inverted = payload.get("inverted") if isinstance(payload, dict) else {}
+        if not isinstance(inverted, dict):
+            return {}
+        return {str(k): bool(v) for k, v in inverted.items()}
+    except Exception:
+        data = load_json(tenant_dir(user_id) / "enabled_strategies.json", {})
+        inverted = data.get("inverted") if isinstance(data, dict) else {}
+        if not isinstance(inverted, dict):
+            return {}
+        return {str(k): bool(v) for k, v in inverted.items()}
+
+
 def _strategy_base_id(sid: str) -> str:
     raw = str(sid or "")
     while True:
@@ -203,6 +235,47 @@ def _normalize_signal_side(side: str) -> str:
     if raw in {"short", "sell"}:
         return "short"
     return "long"
+
+
+def _flip_side(side: str) -> str:
+    return "short" if _normalize_signal_side(side) == "long" else "long"
+
+
+def _tag_has_suffix(tag: str, suffix: str) -> bool:
+    t = str(tag or "").lower()
+    s = str(suffix or "").lower()
+    return bool(s) and s in t
+
+
+def apply_user_strategy_invert(user_id: str, ev: dict[str, Any]) -> dict[str, Any]:
+    """Copy of strategy entry signal with this user's invert preference applied.
+
+    Shared signal-engine publishes the natural strategy side (no global invert).
+    Older feeds may still carry ``:inv`` from the previous shared-router behavior —
+    those are normalized back to the natural side before the user flag is applied.
+    """
+    bot = str(ev.get("bot") or "strategy")
+    if bot != "strategy":
+        return ev
+    out = dict(ev)
+    raw_sid = str(out.get("strategy_id") or "")
+    raw_tag = str(out.get("entry_tag") or raw_sid)
+    base = _strategy_base_id(raw_sid) or _strategy_base_id(raw_tag)
+    if not base:
+        return out
+    signal_was_inv = _tag_has_suffix(raw_tag, ":inv") or _tag_has_suffix(raw_sid, ":inv")
+    has_hedge = _tag_has_suffix(raw_tag, ":hedge") or _tag_has_suffix(raw_sid, ":hedge")
+    side = _normalize_signal_side(out.get("side"))
+    natural_side = _flip_side(side) if signal_was_inv else side
+    want_inv = bool(load_inverted(user_id).get(base, False))
+    final_side = _flip_side(natural_side) if want_inv else natural_side
+    tag = f"{base}:inv" if want_inv else base
+    if has_hedge:
+        tag = f"{tag}:hedge"
+    out["side"] = final_side
+    out["strategy_id"] = base
+    out["entry_tag"] = tag
+    return out
 
 
 def _normalize_allowed_side(value: Any) -> str:
@@ -271,31 +344,31 @@ def load_test_settings(user_id: str) -> dict[str, Any]:
 
 
 def load_test_strategy_ids(user_id: str) -> set[str]:
-    """Test-panel strategy ids from per-user placement (not in main, not hidden)."""
+    """Test-panel strategy ids from shared placement (parent login), not in main/hidden."""
+    owner = tm.parent_user_id_of_context(user_id)
     try:
         import user_prefs as up
 
-        placement = up.load_placement(user_id)
+        placement = up.load_placement(owner)
         main = {str(x) for x in (placement.get("main") or [])}
         hidden = {str(x) for x in (placement.get("hidden") or [])}
-        # Prefer enabled map keys + known registry via enabled payload / fallback
+        # Enabled map is per trading context; union with parent for catalog breadth.
         payload = up.load_enabled_payload(user_id)
         catalog = set((payload.get("enabled") or {}).keys())
         if not catalog:
             catalog = set(load_enabled(user_id).keys())
-        # Also include any class currently known from open trades / defaults
-        for sid in list(catalog):
+        try:
+            parent_payload = up.load_enabled_payload(owner)
+            catalog |= set((parent_payload.get("enabled") or {}).keys())
+        except Exception:
             pass
-        # Build from all strategies that appear in enabled payload + placement-aware defaults
-        from pathlib import Path
-
         strat_dir = Path(__file__).resolve().parent.parent / "user_data" / "strategies"
         if strat_dir.is_dir():
             for p in strat_dir.glob("*Strategy.py"):
                 catalog.add(p.stem)
         return {sid for sid in catalog if sid not in main and sid not in hidden}
     except Exception:
-        path = tenant_dir(user_id) / "strategy_ui_placement.json"
+        path = tenant_dir(owner) / "strategy_ui_placement.json"
         data = load_json(path, {})
         main = {str(x) for x in (data.get("main") or [])} if isinstance(data, dict) else set()
         hidden = {str(x) for x in (data.get("hidden") or [])} if isinstance(data, dict) else set()
@@ -495,32 +568,31 @@ def ensure_trades_db(user_id: str) -> Path:
     return path
 
 
-def get_exchange(user_id: str) -> UserBybitExchange | None:
+def get_exchange(user_id: str) -> UserBybitExchange | UserBinanceExchange | None:
     if user_id in _exchanges:
         return _exchanges[user_id]
     key = ""
     secret = ""
     demo_trading = False
+    exchange_id = tm.context_exchange(user_id) if user_id != "admin" else "bybit"
     if user_id == "admin":
         blob = tm._load_secrets_blob("admin")
         key = str(blob.get("bybit_api_key") or "").strip()
         secret = str(blob.get("bybit_api_secret") or "").strip()
         demo_trading = bool(tm._as_bool(blob.get("bybit_demo_trading")))
+        exchange_id = str(blob.get("exchange") or "bybit")
         if not key or not secret:
             key, secret, demo_trading = tm._admin_env_credentials()
+            exchange_id = "bybit"
     else:
         sec = tm.load_user_secrets(user_id)
         if sec:
-            key = str(sec.get("bybit_api_key") or "").strip()
-            secret = str(sec.get("bybit_api_secret") or "").strip()
-            demo_trading = str(sec.get("bybit_demo_trading") or "").strip().lower() in (
-                "1",
-                "true",
-                "t",
-                "yes",
-                "y",
-                "on",
-            ) or sec.get("bybit_demo_trading") is True
+            key = str(sec.get("bybit_api_key") or sec.get("api_key") or "").strip()
+            secret = str(sec.get("bybit_api_secret") or sec.get("api_secret") or "").strip()
+            demo_trading = tm._as_bool(sec.get("bybit_demo_trading")) or tm.is_demo_context_id(
+                user_id
+            )
+            exchange_id = str(sec.get("exchange") or tm.context_exchange(user_id))
         if not key or not secret:
             env_path = tenant_dir(user_id) / ".env"
             if env_path.is_file():
@@ -531,27 +603,41 @@ def get_exchange(user_id: str) -> UserBybitExchange | None:
                     k, v = line.split("=", 1)
                     k = k.strip()
                     v = v.strip().strip('"').strip("'")
-                    if k == "BYBIT_API_KEY" and not key:
+                    if k in ("BYBIT_API_KEY", "BINANCE_API_KEY", "CTENGINE__EXCHANGE__KEY") and not key:
                         key = v
-                    elif k == "BYBIT_API_SECRET" and not secret:
+                    elif (
+                        k in ("BYBIT_API_SECRET", "BINANCE_API_SECRET", "CTENGINE__EXCHANGE__SECRET")
+                        and not secret
+                    ):
                         secret = v
-                    elif k in ("BYBIT_DEMO_TRADING", "CTENGINE__EXCHANGE__DEMO_TRADING"):
+                    elif k in (
+                        "BYBIT_DEMO_TRADING",
+                        "CTENGINE__EXCHANGE__DEMO_TRADING",
+                        "BINANCE_DEMO_TRADING",
+                    ):
                         demo_trading = v.lower() in ("1", "true", "t", "yes", "y", "on")
+                    elif k == "CT_EXCHANGE":
+                        exchange_id = v.lower() or exchange_id
+        if not exchange_id:
+            exchange_id = tm.context_exchange(user_id)
     if not key or not secret:
         return None
     try:
-        ex = UserBybitExchange(key, secret, demo_trading=demo_trading)
+        ex = make_user_exchange(
+            exchange_id, key, secret, demo_trading=demo_trading
+        )
         try:
             skew = ex.sync_time()
             log.info(
-                "bybit time sync user=%s demo=%s skew_ms=%s base=%s",
+                "%s time sync user=%s demo=%s skew_ms=%s base=%s",
+                exchange_id,
                 user_id,
                 demo_trading,
                 skew,
                 ex.api_base,
             )
         except Exception as exc:
-            log.warning("bybit time sync failed user=%s: %s", user_id, exc)
+            log.warning("%s time sync failed user=%s: %s", exchange_id, user_id, exc)
     except ValueError:
         return None
     _exchanges[user_id] = ex
@@ -568,6 +654,31 @@ def count_open_by_panel(user_id: str, *, test: bool) -> int:
         with sqlite3.connect(path) as conn:
             rows = conn.execute(
                 "SELECT enter_tag, strategy FROM trades WHERE is_open=1"
+            ).fetchall()
+    except sqlite3.Error:
+        return 0
+    n = 0
+    for enter_tag, strategy in rows:
+        tag = trade_exit_monitor.base_enter_tag(str(enter_tag or strategy or ""))
+        is_test = tag in test_ids
+        if is_test == test:
+            n += 1
+    return n
+
+
+def count_open_on_pair_by_panel(user_id: str, pair: str, *, test: bool) -> int:
+    """Open trades on ``pair`` belonging to main or test panel only."""
+    if not pair:
+        return 0
+    test_ids = load_test_strategy_ids(user_id)
+    path = db_path(user_id)
+    if not path.is_file():
+        return 0
+    try:
+        with sqlite3.connect(path) as conn:
+            rows = conn.execute(
+                "SELECT enter_tag, strategy FROM trades WHERE is_open=1 AND pair=?",
+                (pair,),
             ).fetchall()
     except sqlite3.Error:
         return 0
@@ -772,116 +883,32 @@ def _cursor50_skip_reason(user_id: str, ev: dict[str, Any]) -> str | None:
     return None
 
 
-def _price_action_open_count(user_id: str) -> int:
-    path = db_path(user_id)
-    if not path.is_file():
-        return 0
-    try:
-        with sqlite3.connect(path) as conn:
-            row = conn.execute(
-                """
-                SELECT COUNT(*) FROM trades
-                WHERE is_open=1 AND (
-                    enter_tag LIKE 'PaTrendPullback%'
-                    OR enter_tag LIKE 'PaLiquiditySweep%'
-                    OR strategy IN ('PaTrendPullback', 'PaLiquiditySweep')
-                )
-                """
-            ).fetchone()
-    except sqlite3.Error:
-        return 0
-    return int(row[0] if row else 0)
+def uses_demo_api(user_id: str) -> bool:
+    """True when this context sends orders to a Demo API.
 
-
-def _price_action_skip_reason(user_id: str, ev: dict[str, Any]) -> str | None:
-    import price_action_settings
-
-    pair = str(ev.get("pair") or "")
-    side = str(ev.get("side") or "long")
-    settings = price_action_settings.load(user_id)
-    if pair not in set(settings["pairs"]):
-        return f"Price Action не торгует {pair or '?'}"
-    setup = str(ev.get("setup") or "")
-    if not setup:
-        tag = str(ev.get("strategy_id") or ev.get("enter_tag") or "")
-        setup = price_action_settings.setup_for_tag(tag)
-    if setup in price_action_settings.SETUP_FLAGS and not price_action_settings.setup_enabled(
-        settings, setup
-    ):
-        label = price_action_settings.SETUP_LABELS.get(setup, setup)
-        return f"Price Action: сетап {label} выключен"
-    raw_score = ev.get("score")
-    if raw_score is None:
-        ind = ev.get("indicators") if isinstance(ev.get("indicators"), dict) else {}
-        raw_score = str(ind.get("pa_score") or "").split("/", 1)[0]
+    ``{uid}__demo`` contexts are always demo. Admin is special: the house
+    Bybit keys live on user id ``admin`` (not ``admin__demo``) and may
+    themselves be Bybit demo keys.
+    """
+    if tm.is_demo_context_id(user_id):
+        return True
+    if user_id != "admin":
+        return False
     try:
-        score = int(float(raw_score))
-    except (TypeError, ValueError):
-        return "Price Action: в сигнале нет скора"
-    if score < int(settings["min_score"]):
-        return f"Price Action скор {score}/8 ниже порога {settings['min_score']}/8"
-    try:
-        rr_net = float(ev.get("rr_net"))
-    except (TypeError, ValueError):
-        return "Price Action: в сигнале нет R/R"
-    if rr_net < float(settings["min_rr"]):
-        return f"Price Action R/R {rr_net:.2f} ниже порога {settings['min_rr']:.2f}"
-    try:
-        spread = float(ev.get("spread_pct"))
-    except (TypeError, ValueError):
-        return "Price Action: в сигнале нет спреда"
-    if spread > float(settings["max_spread_pct"]):
-        return f"Price Action спред {spread:.3f}% выше {settings['max_spread_pct']:.3f}%"
-    try:
-        depth = float(ev.get("depth_usdt"))
-    except (TypeError, ValueError):
-        depth = 0.0
-    if depth < float(settings["min_depth_usdt"]):
-        return (
-            f"Price Action глубина ${depth:,.0f} ниже "
-            f"${float(settings['min_depth_usdt']):,.0f}"
-        )
-    try:
-        risk_pct = float(ev.get("risk_pct"))
-    except (TypeError, ValueError):
-        risk_pct = 999.0
-    if risk_pct > float(settings["max_risk_pct"]):
-        return f"Price Action риск {risk_pct:.2f}% выше {settings['max_risk_pct']:.2f}%"
-    try:
-        entry = float(ev.get("rate") or ev.get("entry") or 0)
-        sl_price = float(ev.get("sl_price") or 0)
-        tp_price = float(ev.get("tp1_price") or 0)
-    except (TypeError, ValueError):
-        return "Price Action: нет цен входа/стопа/тейка"
-    if entry <= 0 or sl_price <= 0 or tp_price <= 0:
-        return "Price Action: нет цен входа/стопа/тейка"
-    if price_action_settings.trade_ratios(
-        entry, sl_price, tp_price, float(settings["leverage"])
-    ) is None:
-        return "Price Action: некорректные стоп/тейк"
-    cap = int(settings["max_open_trades"])
-    if cap <= 0:
-        return "Price Action: макс. сделок = 0"
-    open_n = _price_action_open_count(user_id)
-    if open_n >= cap:
-        return f"Price Action лимит открытых сделок {open_n}/{cap}"
-    if count_open_on_pair(user_id, pair) > 0:
-        return f"уже есть открытая сделка по {pair} в БД"
-    try:
-        if exchange_has_position(user_id, pair, side):
-            return f"на бирже уже есть позиция {side} по {pair}"
-    except Exception as exc:
-        return f"не удалось проверить позиции на бирже: {exc}"
-    busy = pair_entry_guard.busy_reason(
-        pair,
-        side,
-        bot="price_action",
-        tenant_id=user_id,
-        check_bybit=(user_id == "admin"),
+        blob = tm._load_secrets_blob("admin")
+    except Exception:
+        blob = {}
+    has_blob = bool(
+        str(blob.get("bybit_api_key") or "").strip()
+        and str(blob.get("bybit_api_secret") or "").strip()
     )
-    if busy:
-        return busy
-    return None
+    if has_blob:
+        return bool(tm._as_bool(blob.get("bybit_demo_trading")))
+    try:
+        _key, _secret, demo = tm._admin_env_credentials()
+    except Exception:
+        return False
+    return bool(demo)
 
 
 def skip_reason(user_id: str, ev: dict[str, Any]) -> str | None:
@@ -892,8 +919,6 @@ def skip_reason(user_id: str, ev: dict[str, Any]) -> str | None:
     bot = str(ev.get("bot") or "")
     if bot in user_trading.RETIRED_BOTS:
         return f"{bot} выведен из торговли"
-    if bot == "price_action":
-        return _price_action_skip_reason(user_id, ev)
     if bot == "llm":
         return _llm_skip_reason(user_id, ev)
     if str(ev.get("bot") or "") == "llm50":
@@ -907,22 +932,81 @@ def skip_reason(user_id: str, ev: dict[str, Any]) -> str | None:
     enabled = load_enabled(user_id)
     if not enabled:
         return f"пустой enabled_strategies для {user_id}"
-    if not enabled.get(sid, False):
-        return f"стратегия {sid} выключена у пользователя"
     base_sid = _strategy_base_id(sid)
+    if not enabled.get(base_sid, False) and not enabled.get(sid, False):
+        return f"стратегия {base_sid or sid} выключена у пользователя"
     allowed_side = load_entry_sides(user_id).get(base_sid, "both")
     blocked_side = entry_side_skip(allowed_side, side, base_sid or sid)
     if blocked_side:
         return blocked_side
-    if sid in ADX_LONG_ONLY_TAGS and side.lower() in ("short", "sell"):
-        return f"{sid}: shorts отключены (только long)"
+    if base_sid in ADX_LONG_ONLY_TAGS and side.lower() in ("short", "sell"):
+        return f"{base_sid}: shorts отключены (только long)"
     if not pair:
         return "нет pair в сигнале"
     blocked = pair_block_reason(user_id, sid, pair)
     if blocked:
         return blocked
-    if count_open_on_pair(user_id, pair) > 0:
-        return f"уже есть открытая сделка по {pair} в БД"
+
+    limits = load_limits(user_id)
+    test_ids = load_test_strategy_ids(user_id)
+    panel_sid = base_sid or sid
+    is_test_panel = panel_sid in test_ids
+    owner = tm.parent_user_id_of_context(user_id)
+    ctx_ex = tm.context_exchange(user_id) if user_id != "admin" else "bybit"
+    try:
+        import user_prefs as up
+
+        trade_panels = up.load_trade_on_panels(owner)
+    except Exception:
+        trade_panels = {
+            "trade_on_main": tm.DEFAULT_TRADE_ON,
+            "trade_on_test": tm.DEFAULT_TRADE_ON,
+        }
+
+    # Panel trade_on first — expected skips, quiet in per-signal logs.
+    if is_test_panel:
+        if not uses_demo_api(user_id):
+            return "тестовые стратегии только на Demo API"
+        allowed_ex = set(
+            user_trading.exchanges_for_trade_on(
+                str(trade_panels.get("trade_on_test") or tm.DEFAULT_TRADE_ON)
+            )
+        )
+        if ctx_ex not in allowed_ex:
+            return (
+                f"тестовые: биржа {ctx_ex} выключена "
+                f"(trade_on_test={trade_panels.get('trade_on_test')})"
+            )
+        test_cap = int(limits.get("test_max_open_trades") or 0)
+        if test_cap <= 0:
+            return "max_open_trades=0 для тестовых (лимит выключен/ноль)"
+        test_open = count_open_by_panel(user_id, test=True)
+        if test_open >= test_cap:
+            return f"лимит тестовых стратегий {test_open}/{test_cap}"
+        per = int(limits.get("test_max_per_strategy") or 0)
+    else:
+        allowed_ex = set(
+            user_trading.exchanges_for_trade_on(
+                str(trade_panels.get("trade_on_main") or tm.DEFAULT_TRADE_ON)
+            )
+        )
+        if ctx_ex not in allowed_ex:
+            return (
+                f"основные: биржа {ctx_ex} выключена "
+                f"(trade_on_main={trade_panels.get('trade_on_main')})"
+            )
+        main_cap = int(limits.get("max_open_trades") or 0)
+        if main_cap <= 0:
+            return "max_open_trades=0 (лимит сделок выключен/ноль)"
+        main_open = count_open_by_panel(user_id, test=False)
+        if main_open >= main_cap:
+            return f"лимит открытых сделок {main_open}/{main_cap}"
+        per = limits["max_per_strategy"]
+
+    # Main and test panels may share a pair (independent slot pools).
+    if count_open_on_pair_by_panel(user_id, pair, test=is_test_panel) > 0:
+        panel_label = "тестовых" if is_test_panel else "основных"
+        return f"уже есть открытая сделка по {pair} в БД ({panel_label})"
     try:
         if exchange_has_position(user_id, pair, side):
             return f"на бирже уже есть позиция {side} по {pair}"
@@ -938,24 +1022,6 @@ def skip_reason(user_id: str, ev: dict[str, Any]) -> str | None:
     )
     if busy:
         return busy
-    limits = load_limits(user_id)
-    test_ids = load_test_strategy_ids(user_id)
-    if sid in test_ids:
-        test_cap = int(limits.get("test_max_open_trades") or 0)
-        if test_cap <= 0:
-            return "max_open_trades=0 для тестовых (лимит выключен/ноль)"
-        test_open = count_open_by_panel(user_id, test=True)
-        if test_open >= test_cap:
-            return f"лимит тестовых стратегий {test_open}/{test_cap}"
-        per = int(limits.get("test_max_per_strategy") or 0)
-    else:
-        main_cap = int(limits.get("max_open_trades") or 0)
-        if main_cap <= 0:
-            return "max_open_trades=0 (лимит сделок выключен/ноль)"
-        main_open = count_open_by_panel(user_id, test=False)
-        if main_open >= main_cap:
-            return f"лимит открытых сделок {main_open}/{main_cap}"
-        per = limits["max_per_strategy"]
     if per > 0:
         tag_n = count_open_trades(user_id, tag=sid)
         if tag_n >= per:
@@ -978,6 +1044,7 @@ def should_enter(user_id: str, ev: dict[str, Any]) -> bool:
 
 
 def execute_for_user(user_id: str, ev: dict[str, Any]) -> None:
+    ev = apply_user_strategy_invert(user_id, ev)
     pair = str(ev.get("pair") or "")
     side = str(ev.get("side") or "long")
     lock_key = f"{user_id}:{pair}:{side.lower()}"
@@ -985,14 +1052,16 @@ def execute_for_user(user_id: str, ev: dict[str, Any]) -> None:
         reason = skip_reason(user_id, ev)
         if reason is not None:
             _record_skip(reason)
-            log.info(
-                "SKIP user=%s %s %s tag=%s — %s",
-                user_id,
-                side,
-                pair or "?",
-                ev.get("strategy_id") or "?",
-                reason,
-            )
+            # trade_on off for this panel: expected — STATUS reminder only, no SKIP spam
+            if not _is_quiet_trade_on_skip(reason):
+                log.info(
+                    "SKIP user=%s %s %s tag=%s — %s",
+                    user_id,
+                    side,
+                    pair or "?",
+                    ev.get("entry_tag") or ev.get("strategy_id") or "?",
+                    reason,
+                )
             return
         ex = get_exchange(user_id)
         if ex is None:
@@ -1025,8 +1094,6 @@ def execute_for_user(user_id: str, ev: dict[str, Any]) -> None:
             claim_bot = "cursor"
         elif bot_name == "cursor50":
             claim_bot = "cursor50"
-        elif bot_name == "price_action":
-            claim_bot = "price_action"
         else:
             claim_bot = "strategy"
         ok_claim, claim_reason = pair_entry_guard.claim_pair(
@@ -1062,29 +1129,11 @@ def execute_for_user(user_id: str, ev: dict[str, Any]) -> None:
             stake = float(cursor_settings.load(user_id)["stake_amount"])
         elif bot_name == "cursor50":
             stake = float(ev.get("stake_usdt") or 0)
-        elif bot_name == "price_action":
-            import price_action_settings
-
-            pa = price_action_settings.load(user_id)
-            stake = float(pa["stake_amount"])
-            leverage = float(pa["leverage"])
         else:
             stake = _strategy_stake(user_id, tag, cfg)
         if bot_name in {"llm50", "cursor50"}:
             sl = float(ev.get("stop_loss_ratio"))
             tp = float(ev.get("take_profit_ratio"))
-        elif bot_name == "price_action":
-            ratios = price_action_settings.trade_ratios(
-                float(ev.get("rate") or 0),
-                float(ev.get("sl_price") or 0),
-                float(ev.get("tp1_price") or 0),
-                leverage,
-            )
-            if ratios is None:
-                pair_entry_guard.release_pair(claim_bot, pair, side, tenant_id=user_id)
-                _record_skip("Price Action: некорректные стоп/тейк")
-                return
-            sl, tp = ratios
         else:
             sl, tp = trade_exit_monitor.risk_thresholds(
                 user_id,
@@ -1518,6 +1567,7 @@ def insert_trade_row(
                 close_profit, close_profit_abs, stake_amount,
                 amount, amount_requested, open_date,
                 stop_loss, stop_loss_pct, initial_stop_loss, initial_stop_loss_pct,
+                max_rate, min_rate,
                 strategy, enter_tag, timeframe, trading_mode, leverage,
                 is_short, is_stop_loss_trailing, realized_profit, interest_rate, record_version
             ) VALUES (
@@ -1526,6 +1576,7 @@ def insert_trade_row(
                 NULL, NULL, ?,
                 ?, ?, ?,
                 ?, ?, ?, ?,
+                ?, ?,
                 ?, ?, '5m', 'futures', ?,
                 ?, 0, 0, 0, 2
             )
@@ -1543,6 +1594,8 @@ def insert_trade_row(
                 sl_pct,
                 sl_price,
                 sl_pct,
+                open_rate,
+                open_rate,
                 strategy_id,
                 entry_tag,
                 leverage,
@@ -1787,7 +1840,7 @@ def process_event(ev: dict[str, Any]) -> None:
         _processed.add(eid)
         return
     bot = str(ev.get("bot") or "strategy")
-    if bot not in ("strategy", "llm", "llm50", "cursor", "cursor50", "price_action"):
+    if bot not in ("strategy", "llm", "llm50", "cursor", "cursor50"):
         bot = "strategy"
     users = user_trading.list_active_traders(bot)
     target = str(ev.get("user_id") or "")
@@ -1815,6 +1868,42 @@ def _exit_ctx() -> dict[str, Any]:
     }
 
 
+def _trade_on_status_note(user_id: str) -> str | None:
+    """One-line reminder when this context's exchange is off for main and/or test."""
+    try:
+        import user_prefs as up
+
+        owner = tm.parent_user_id_of_context(user_id)
+        panels = up.load_trade_on_panels(owner)
+        ctx_ex = tm.context_exchange(user_id) if user_id != "admin" else "bybit"
+        main_on = set(
+            user_trading.exchanges_for_trade_on(
+                str(panels.get("trade_on_main") or tm.DEFAULT_TRADE_ON)
+            )
+        )
+        test_on = set(
+            user_trading.exchanges_for_trade_on(
+                str(panels.get("trade_on_test") or tm.DEFAULT_TRADE_ON)
+            )
+        )
+        bits: list[str] = []
+        if ctx_ex not in main_on:
+            bits.append(
+                f"основные не входят на {ctx_ex} "
+                f"(trade_on_main={panels.get('trade_on_main')}; "
+                f"включите {ctx_ex} или all в панели Основных)"
+            )
+        if uses_demo_api(user_id) and ctx_ex not in test_on:
+            bits.append(
+                f"тестовые не входят на {ctx_ex} "
+                f"(trade_on_test={panels.get('trade_on_test')}; "
+                f"включите {ctx_ex} или all в панели Тестовых)"
+            )
+        return "; ".join(bits) if bits else None
+    except Exception:
+        return None
+
+
 def _log_idle_status(traders: list[str]) -> None:
     """Periodic why-nothing-trades summary (every ~60s) — visible in UI → Логи → Исполнитель."""
     if not traders:
@@ -1832,6 +1921,9 @@ def _log_idle_status(traders: list[str]) -> None:
         feed_ok = False
     skips = _skip_summary(300.0)
     for uid in traders:
+        note = _trade_on_status_note(uid)
+        if note:
+            log.info("STATUS user=%s: НАПОМИНАНИЕ — %s", uid, note)
         ex = get_exchange(uid)
         if ex is None:
             log.warning("STATUS user=%s: нет Bybit API-ключей — сделки не открываются", uid)
