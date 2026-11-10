@@ -63,6 +63,7 @@ from SupertrendStrategy import SupertrendStrategy
 from TripleEmaStrategy import TripleEmaStrategy
 # 1h clones retired from live registry; keep ids/helpers for history / residual exits.
 from htf1h_catalog import HTF1H_IDS, sltp_ratios  # noqa: E402
+from entry_constraints import cap_reached, test_ids, uses_full_pair_universe  # noqa: E402
 
 _USER_DATA = Path(__file__).resolve().parent.parent
 # Prefer site/user_data/ml over simulation/ml when repo root is on PYTHONPATH.
@@ -196,15 +197,11 @@ def load_test_strategy_tags() -> frozenset[str]:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return _FALLBACK_TEST_STRATEGY_TAGS
-    main = {str(x) for x in (data.get("main") or [])}
-    hidden = {str(x) for x in (data.get("hidden") or [])}
     # Prefer full registry so promoted live strategies in the test panel get test limits.
     catalog = set(STRATEGY_REGISTRY.keys()) if STRATEGY_REGISTRY else set(_FALLBACK_TEST_STRATEGY_TAGS)
     if not catalog:
         catalog = set(_FALLBACK_TEST_STRATEGY_TAGS)
-    return frozenset(
-        sid for sid in catalog if sid not in main and sid not in hidden and sid not in HTF1H_IDS
-    )
+    return test_ids(catalog, data, htf_ids=HTF1H_IDS)
 
 
 # Deprecated name kept for imports; prefer load_test_strategy_tags().
@@ -867,8 +864,6 @@ def _pair_policy() -> dict[str, set[str] | None]:
         if not isinstance(enabled, dict):
             return
         placement = _read_user_json(user_dir / "strategy_ui_placement.json")
-        main = {str(x) for x in (placement.get("main") or [])}
-        hidden = {str(x) for x in (placement.get("hidden") or [])}
         stored_pairs = enabled_doc.get("pairs") if isinstance(enabled_doc.get("pairs"), dict) else {}
         for sid, on in enabled.items():
             if not on:
@@ -876,7 +871,7 @@ def _pair_policy() -> dict[str, set[str] | None]:
             sid = str(sid)
             if policy.get(sid) is None and sid in policy:
                 continue
-            if sid not in main and sid not in hidden:
+            if uses_full_pair_universe(sid, placement):
                 policy[sid] = None
                 continue
             bucket = policy.get(sid)
@@ -1602,7 +1597,7 @@ class MultiStrategyRouter(IStrategy):
         if test_tag:
             test_cfg = load_test_strategy_settings(self.config)
             test_cap = int(test_cfg.get("max_open_trades") or 0)
-            if test_cap <= 0 or count_open_test_trades() >= test_cap:
+            if cap_reached(count_open_test_trades(), test_cap):
                 return False
             per_test = int(test_cfg.get("max_open_trades_per_strategy") or 0)
             if per_test > 0 and tag and count_open_trades_for_tag(tag) >= per_test:

@@ -1913,6 +1913,7 @@ function isTestCatalogEntry(s) {
 /** Demo/test lane for trades & stats: not copied into placement.main. */
 function isTestLaneStrategy(s) {
   if (!s || isHtfStrategy(s)) return false;
+  if (s.ui_panel === "test" || s.ui_panel === "main") return s.ui_panel === "test";
   if (s.in_main != null) return !s.in_main;
   if (s.show_on_main === true) return false;
   return strategyUiPanel(s) === "test" || isBirthTestStrategy(s);
@@ -6278,7 +6279,7 @@ function updateBotSettingsSummaries() {
   const grid = BOTS.grid;
   setSettingsSummary(
     "grid-settings-summary",
-    `боковиков ${grid.maxTrades} · stake ${grid.stakeAmount} USDT · развернуть`
+    `боковиков ${grid.maxTrades} · stake ${grid.stakeAmount} USDT · SL −15% · развернуть`
   );
   setSettingsSummary(
     "bybitgrid-settings-summary",

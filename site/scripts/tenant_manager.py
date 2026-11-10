@@ -30,6 +30,28 @@ from urllib.request import Request, urlopen
 
 from cryptography.fernet import Fernet, InvalidToken
 
+from trading_context import (
+    BINANCE_CONTEXT_SUFFIX,
+    DEFAULT_EXCHANGE,
+    DEFAULT_TRADE_ON,
+    DEMO_CONTEXT_SUFFIX,
+    SUPPORTED_EXCHANGES,
+    TradingContext,
+    context_exchange,
+    context_mode,
+    demo_context_id,
+    exchange_context_id,
+    flag_context_id,
+    is_demo_context_id,
+    iter_user_contexts,
+    live_context_id,
+    normalize_account_mode,
+    normalize_exchange,
+    normalize_trade_on,
+    parent_user_id_of_context,
+    trading_context_id,
+)
+
 log = logging.getLogger("tenant_manager")
 
 # ---------------------------------------------------------------------------
@@ -319,142 +341,6 @@ def real_admin_id(user: Optional[dict[str, Any]]) -> Optional[str]:
         return None
     imp = user.get("_imp_by")
     return str(imp) if imp else None
-
-
-DEMO_CONTEXT_SUFFIX = "__demo"
-BINANCE_CONTEXT_SUFFIX = "__binance"
-SUPPORTED_EXCHANGES = ("bybit", "binance")
-DEFAULT_EXCHANGE = "bybit"
-DEFAULT_TRADE_ON = "bybit"  # existing users keep Bybit-only behaviour
-
-
-def is_demo_context_id(context_id: Optional[str]) -> bool:
-    """True for internal demo trading context ids (``…__demo``)."""
-    cid = str(context_id or "")
-    return bool(cid.endswith(DEMO_CONTEXT_SUFFIX) and len(cid) > len(DEMO_CONTEXT_SUFFIX))
-
-
-def normalize_exchange(exchange: Any, *, default: str = DEFAULT_EXCHANGE) -> str:
-    raw = str(exchange or "").strip().lower()
-    if raw in SUPPORTED_EXCHANGES:
-        return raw
-    return default
-
-
-def normalize_trade_on(value: Any, *, default: str = DEFAULT_TRADE_ON) -> str:
-    raw = str(value or "").strip().lower()
-    if raw in ("all", "bybit", "binance"):
-        return raw
-    return default
-
-
-def context_exchange(context_id: str) -> str:
-    """``bybit`` | ``binance`` for a trading context id."""
-    cid = str(context_id or "")
-    if is_demo_context_id(cid):
-        cid = cid[: -len(DEMO_CONTEXT_SUFFIX)]
-    if cid.endswith(BINANCE_CONTEXT_SUFFIX):
-        return "binance"
-    return "bybit"
-
-
-def parent_user_id_of_context(context_id: str) -> str:
-    """Login user id for a trading context (strips ``__demo`` / ``__binance``)."""
-    cid = str(context_id or "").strip()
-    if is_demo_context_id(cid):
-        cid = cid[: -len(DEMO_CONTEXT_SUFFIX)]
-    if cid.endswith(BINANCE_CONTEXT_SUFFIX):
-        cid = cid[: -len(BINANCE_CONTEXT_SUFFIX)]
-    return cid
-
-
-def exchange_context_id(
-    user_id: str,
-    *,
-    exchange: Any = DEFAULT_EXCHANGE,
-    mode: Any = "live",
-) -> str:
-    """Trading context: bybit live=``{uid}``, demo=``{uid}__demo``;
-    binance live=``{uid}__binance``, demo=``{uid}__binance__demo``.
-    """
-    uid = parent_user_id_of_context(str(user_id or "").strip())
-    if not uid:
-        raise ValueError("user_id required")
-    ex = normalize_exchange(exchange)
-    m = normalize_account_mode(mode, default="live")
-    if ex == "binance":
-        base = f"{uid}{BINANCE_CONTEXT_SUFFIX}"
-    else:
-        base = uid
-    if m == "demo":
-        return f"{base}{DEMO_CONTEXT_SUFFIX}"
-    return base
-
-
-def demo_context_id(user_id: str, *, exchange: Any = DEFAULT_EXCHANGE) -> str:
-    """Internal demo trading context (not a loginable account)."""
-    return exchange_context_id(user_id, exchange=exchange, mode="demo")
-
-
-def live_context_id(user_id: str, *, exchange: Any = DEFAULT_EXCHANGE) -> str:
-    return exchange_context_id(user_id, exchange=exchange, mode="live")
-
-
-def context_mode(context_id: str) -> str:
-    """``live`` | ``demo`` for a trading context id."""
-    return "demo" if is_demo_context_id(context_id) else "live"
-
-
-def normalize_account_mode(mode: Any, *, default: str = "live") -> str:
-    raw = str(mode or "").strip().lower()
-    if raw in ("live", "demo", "all"):
-        return raw
-    return default
-
-
-def trading_context_id(
-    user_id: str,
-    mode: Any = "live",
-    *,
-    exchange: Any = DEFAULT_EXCHANGE,
-) -> str:
-    """Resolve live/demo trading context id for a login user (+ exchange)."""
-    return exchange_context_id(user_id, exchange=exchange, mode=mode)
-
-
-def flag_context_id(context_id: str) -> str:
-    """Bybit live/demo context that owns shared trading flags for a mode."""
-    uid = parent_user_id_of_context(context_id)
-    return exchange_context_id(uid, exchange="bybit", mode=context_mode(context_id))
-
-
-def iter_user_contexts(
-    user_id: str,
-    *,
-    modes: Optional[list[str]] = None,
-    exchanges: Optional[list[str]] = None,
-) -> list[str]:
-    """Return trading context ids for a login user (exchanges × modes)."""
-    uid = parent_user_id_of_context(str(user_id or "").strip())
-    want_modes = modes or ["live", "demo"]
-    want_ex = exchanges or list(SUPPORTED_EXCHANGES)
-    out: list[str] = []
-    for ex in want_ex:
-        nex = normalize_exchange(ex, default="")
-        if nex not in SUPPORTED_EXCHANGES:
-            continue
-        for m in want_modes:
-            nm = normalize_account_mode(m, default="")
-            if nm not in ("live", "demo"):
-                continue
-            out.append(exchange_context_id(uid, exchange=nex, mode=nm))
-    seen: set[str] = set()
-    uniq: list[str] = []
-    for cid in out:
-        if cid and cid not in seen:
-            seen.add(cid)
-            uniq.append(cid)
-    return uniq
 
 
 def account_kind(user: Optional[dict[str, Any]]) -> str:

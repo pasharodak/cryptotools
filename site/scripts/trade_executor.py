@@ -28,6 +28,8 @@ import tenant_manager as tm  # noqa: E402
 import trade_exit_monitor  # noqa: E402
 import user_trading  # noqa: E402
 import pair_entry_guard  # noqa: E402
+import entry_constraints  # noqa: E402
+import entry_policy  # noqa: E402
 from reconcile_positions import archive_trade_in_db  # noqa: E402
 from user_exchange import (  # noqa: E402
     UserBybitExchange,
@@ -106,8 +108,7 @@ def _skip_category(reason: str) -> str:
 
 def _is_quiet_trade_on_skip(reason: str) -> bool:
     """Exchange not selected for this panel — expected; don't spam SKIP lines."""
-    r = (reason or "").lower()
-    return "биржа" in r and "выключена" in r
+    return entry_policy.is_quiet_skip(reason)
 
 
 def _record_skip(reason: str) -> None:
@@ -350,8 +351,6 @@ def load_test_strategy_ids(user_id: str) -> set[str]:
         import user_prefs as up
 
         placement = up.load_placement(owner)
-        main = {str(x) for x in (placement.get("main") or [])}
-        hidden = {str(x) for x in (placement.get("hidden") or [])}
         # Enabled map is per trading context; union with parent for catalog breadth.
         payload = up.load_enabled_payload(user_id)
         catalog = set((payload.get("enabled") or {}).keys())
@@ -366,14 +365,13 @@ def load_test_strategy_ids(user_id: str) -> set[str]:
         if strat_dir.is_dir():
             for p in strat_dir.glob("*Strategy.py"):
                 catalog.add(p.stem)
-        return {sid for sid in catalog if sid not in main and sid not in hidden}
+        return set(entry_constraints.test_ids(catalog, placement))
     except Exception:
         path = tenant_dir(owner) / "strategy_ui_placement.json"
         data = load_json(path, {})
-        main = {str(x) for x in (data.get("main") or [])} if isinstance(data, dict) else set()
-        hidden = {str(x) for x in (data.get("hidden") or [])} if isinstance(data, dict) else set()
         fallback = set(load_enabled(user_id).keys())
-        return {sid for sid in fallback if sid not in main and sid not in hidden}
+        placement_doc = data if isinstance(data, dict) else {}
+        return set(entry_constraints.test_ids(fallback, placement_doc))
 
 
 def load_limits(user_id: str) -> dict[str, int]:
@@ -913,130 +911,11 @@ def uses_demo_api(user_id: str) -> bool:
 
 def skip_reason(user_id: str, ev: dict[str, Any]) -> str | None:
     """Human-readable why this signal will not open a trade (None = allowed)."""
-    sid = str(ev.get("strategy_id") or "")
-    pair = str(ev.get("pair") or "")
-    side = str(ev.get("side") or "long")
-    bot = str(ev.get("bot") or "")
-    if bot in user_trading.RETIRED_BOTS:
-        return f"{bot} выведен из торговли"
-    if bot == "llm":
-        return _llm_skip_reason(user_id, ev)
-    if str(ev.get("bot") or "") == "llm50":
-        return _llm50_skip_reason(user_id, ev)
-    if str(ev.get("bot") or "") == "cursor":
-        return _cursor_skip_reason(user_id, ev)
-    if str(ev.get("bot") or "") == "cursor50":
-        return _cursor50_skip_reason(user_id, ev)
-    if not sid:
-        return "нет strategy_id в сигнале"
-    enabled = load_enabled(user_id)
-    if not enabled:
-        return f"пустой enabled_strategies для {user_id}"
-    base_sid = _strategy_base_id(sid)
-    if not enabled.get(base_sid, False) and not enabled.get(sid, False):
-        return f"стратегия {base_sid or sid} выключена у пользователя"
-    allowed_side = load_entry_sides(user_id).get(base_sid, "both")
-    blocked_side = entry_side_skip(allowed_side, side, base_sid or sid)
-    if blocked_side:
-        return blocked_side
-    if base_sid in ADX_LONG_ONLY_TAGS and side.lower() in ("short", "sell"):
-        return f"{base_sid}: shorts отключены (только long)"
-    if not pair:
-        return "нет pair в сигнале"
-    blocked = pair_block_reason(user_id, sid, pair)
-    if blocked:
-        return blocked
+    decision = entry_policy.evaluate_entry(user_id, ev)
+    if isinstance(decision, entry_policy.Allowed):
+        return None
+    return decision.reason
 
-    limits = load_limits(user_id)
-    test_ids = load_test_strategy_ids(user_id)
-    panel_sid = base_sid or sid
-    is_test_panel = panel_sid in test_ids
-    owner = tm.parent_user_id_of_context(user_id)
-    ctx_ex = tm.context_exchange(user_id) if user_id != "admin" else "bybit"
-    try:
-        import user_prefs as up
-
-        trade_panels = up.load_trade_on_panels(owner)
-    except Exception:
-        trade_panels = {
-            "trade_on_main": tm.DEFAULT_TRADE_ON,
-            "trade_on_test": tm.DEFAULT_TRADE_ON,
-        }
-
-    # Panel trade_on first — expected skips, quiet in per-signal logs.
-    if is_test_panel:
-        if not uses_demo_api(user_id):
-            return "тестовые стратегии только на Demo API"
-        allowed_ex = set(
-            user_trading.exchanges_for_trade_on(
-                str(trade_panels.get("trade_on_test") or tm.DEFAULT_TRADE_ON)
-            )
-        )
-        if ctx_ex not in allowed_ex:
-            return (
-                f"тестовые: биржа {ctx_ex} выключена "
-                f"(trade_on_test={trade_panels.get('trade_on_test')})"
-            )
-        test_cap = int(limits.get("test_max_open_trades") or 0)
-        if test_cap <= 0:
-            return "max_open_trades=0 для тестовых (лимит выключен/ноль)"
-        test_open = count_open_by_panel(user_id, test=True)
-        if test_open >= test_cap:
-            return f"лимит тестовых стратегий {test_open}/{test_cap}"
-        per = int(limits.get("test_max_per_strategy") or 0)
-    else:
-        allowed_ex = set(
-            user_trading.exchanges_for_trade_on(
-                str(trade_panels.get("trade_on_main") or tm.DEFAULT_TRADE_ON)
-            )
-        )
-        if ctx_ex not in allowed_ex:
-            return (
-                f"основные: биржа {ctx_ex} выключена "
-                f"(trade_on_main={trade_panels.get('trade_on_main')})"
-            )
-        main_cap = int(limits.get("max_open_trades") or 0)
-        if main_cap <= 0:
-            return "max_open_trades=0 (лимит сделок выключен/ноль)"
-        main_open = count_open_by_panel(user_id, test=False)
-        if main_open >= main_cap:
-            return f"лимит открытых сделок {main_open}/{main_cap}"
-        per = limits["max_per_strategy"]
-
-    # Main and test panels may share a pair (independent slot pools).
-    if count_open_on_pair_by_panel(user_id, pair, test=is_test_panel) > 0:
-        panel_label = "тестовых" if is_test_panel else "основных"
-        return f"уже есть открытая сделка по {pair} в БД ({panel_label})"
-    try:
-        if exchange_has_position(user_id, pair, side):
-            return f"на бирже уже есть позиция {side} по {pair}"
-    except Exception as exc:
-        return f"не удалось проверить позиции на бирже: {exc}"
-    # Cross-bot first-wins (Finder/Grid/Strategy share one Bybit account for admin).
-    busy = pair_entry_guard.busy_reason(
-        pair,
-        side,
-        bot="strategy",
-        tenant_id=user_id,
-        check_bybit=(user_id == "admin"),
-    )
-    if busy:
-        return busy
-    if per > 0:
-        tag_n = count_open_trades(user_id, tag=sid)
-        if tag_n >= per:
-            return f"лимит на стратегию {sid}: {tag_n}/{per}"
-    if not ml_allows(user_id, ev):
-        raw = ev.get("ml") if isinstance(ev.get("ml"), dict) else {}
-        min_conf = _ml_min_conf(
-            user_id, sid, ev.get("scenario") if isinstance(ev.get("scenario"), dict) else None
-        )
-        return (
-            f"ML gate отклонил: pred={raw.get('predicted') or '?'} "
-            f"profit_conf={float(raw.get('confidence_profit') or 0)*100:.1f}% "
-            f"min={min_conf*100:.0f}%"
-        )
-    return None
 
 
 def should_enter(user_id: str, ev: dict[str, Any]) -> bool:
@@ -1049,18 +928,18 @@ def execute_for_user(user_id: str, ev: dict[str, Any]) -> None:
     side = str(ev.get("side") or "long")
     lock_key = f"{user_id}:{pair}:{side.lower()}"
     with _pair_entry_locks[lock_key]:
-        reason = skip_reason(user_id, ev)
-        if reason is not None:
-            _record_skip(reason)
+        decision = entry_policy.evaluate_entry(user_id, ev)
+        if isinstance(decision, entry_policy.Skipped):
+            _record_skip(decision.reason)
             # trade_on off for this panel: expected — STATUS reminder only, no SKIP spam
-            if not _is_quiet_trade_on_skip(reason):
+            if not decision.quiet:
                 log.info(
                     "SKIP user=%s %s %s tag=%s — %s",
                     user_id,
                     side,
                     pair or "?",
                     ev.get("entry_tag") or ev.get("strategy_id") or "?",
-                    reason,
+                    decision.reason,
                 )
             return
         ex = get_exchange(user_id)

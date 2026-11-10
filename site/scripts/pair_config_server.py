@@ -309,6 +309,8 @@ from htf1h_catalog import (  # noqa: E402
     snap_sl_pct,
     snap_tp_pct,
 )
+import pair_config_routes  # noqa: E402
+from placement_lanes import panel_for  # noqa: E402
 
 AVAILABLE_STRATEGIES = [
     {
@@ -816,21 +818,13 @@ def ensure_strategy_ui_placement() -> dict[str, Any]:
 
 
 def effective_ui_panel(sid: str, placement: dict[str, Any] | None = None) -> str:
-    """Return 'main' | 'htf1h' | 'test' | 'hidden'.
+    """Return 'main' | 'test' | 'hidden'.
 
     1h strategies are retired from live UI (always hidden). Regular strategies
     use main vs test via placement.
     """
     p = placement if placement is not None else ensure_strategy_ui_placement()
-    main = set(p.get("main") or [])
-    hidden = set(p.get("hidden") or [])
-    if sid in HTF1H_IDS:
-        return "hidden"
-    if sid in hidden:
-        return "hidden"
-    if sid in main:
-        return "main"
-    return "test"
+    return panel_for(sid, p, htf_ids=HTF1H_IDS)
 
 
 def is_effective_test_strategy(sid: str, placement: dict[str, Any] | None = None) -> bool:
@@ -8189,12 +8183,13 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/") or "/"
         method = self.command.upper()
+        _audience, target = pair_config_routes.classify(method, path)
 
         # Unauthenticated endpoints
-        if method == "GET" and path == "/health":
+        if target == "health":
             self._json(200, {"ok": True})
             return
-        if method == "POST" and path == "/auth/login":
+        if target == "login":
             ip = _client_ip(self)
             if _login_blocked(ip):
                 self._json(429, {"error": "too many login attempts — try again later"})
@@ -8234,7 +8229,7 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         # Telegram Mini App: login via validated WebApp initData for linked chat_id
-        if method == "POST" and path == "/auth/telegram-webapp":
+        if target == "telegram":
             import telegram_links as tg_links
 
             ip = _client_ip(self)
@@ -8292,18 +8287,18 @@ class Handler(BaseHTTPRequestHandler):
         self.user = user
         ctx_token = tc.set_request_user(user)
         try:
-            if path.startswith("/bot-proxy/") or path == "/bot-proxy":
+            if target == "bot_proxy":
                 self._handle_bot_proxy(path, parsed)
                 return
-            if method == "GET":
+            if target == "get":
                 self._handle_get(path, parsed)
-            elif method == "POST":
+            elif target == "post":
                 self._handle_post(path, parsed)
-            elif method == "PUT":
+            elif target == "put":
                 self._handle_put(path, parsed)
-            elif method == "PATCH":
+            elif target == "patch":
                 self._handle_patch(path, parsed)
-            elif method == "DELETE":
+            elif target == "delete":
                 self._handle_delete(path, parsed)
             else:
                 self._json(405, {"error": "method not allowed"})

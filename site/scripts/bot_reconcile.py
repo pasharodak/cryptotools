@@ -15,6 +15,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+import bot_orchestrator
 import control_plane as cp
 import tenant_manager as tm
 import user_trading
@@ -384,9 +385,13 @@ def ensure_process_windows(user_id: str, bot: str) -> tuple[bool, str]:
 
 
 def ensure_process(user_id: str, bot: str) -> tuple[bool, str]:
-    if IS_WINDOWS:
-        return ensure_process_windows(user_id, bot)
-    return ensure_process_linux(user_id, bot)
+    return bot_orchestrator.ensure_with_adapter(
+        user_id,
+        bot,
+        windows=IS_WINDOWS,
+        linux=ensure_process_linux,
+        win=ensure_process_windows,
+    )
 
 
 def refresh_observed(user_id: str, bot: str) -> dict[str, Any]:
@@ -597,117 +602,13 @@ def _overlay_env_file(env: dict[str, str], path: Path) -> None:
             env[key] = val
 
 
+
 def apply_enable(user_id: str, bot: str) -> tuple[bool, str]:
-    if bot == "grid" and user_id == "admin":
-        ok, err = prepare_admin_grid_demo()
-        if not ok:
-            cp.update_observed(user_id, bot, process_up=False, last_error=err)
-            return False, err
-    user_trading.save_trading_flags(user_id, {bot: True})
-    ok, err = ensure_process(user_id, bot)
-    if not ok:
-        cp.update_observed(user_id, bot, process_up=False, last_error=err)
-        return False, err
-
-    if _shared_strategy(bot):
-        # Shared strategy: trading flag is enough; keep signal-engine running.
-        for _ in range(15):
-            if ping_bot(8081):
-                break
-            time.sleep(0.4)
-        # Skip /start if already running — avoids reload flap.
-        if show_config_state(8081) not in _RUNNING_LIKE_STATES:
-            ctbot_start_stop(8081, "start")
-    else:
-        port = bot_port(user_id, bot)
-        for _ in range(15):
-            if port_open(port):
-                break
-            time.sleep(0.4)
-        st = show_config_state(port) if port_open(port) else "unknown"
-        # unknown = API timeout while process is up (Finder exchange backoff /
-        # accept queue full). Calling /start here caused endless reload flaps.
-        if st in _RUNNING_LIKE_STATES or st == "unknown":
-            pass
-        elif st in ("stopped", "paused"):
-            started, start_err = ctbot_start_stop(port, "start")
-            if not started:
-                cp.update_observed(
-                    user_id, bot, process_up=True, trading_state="stopped", last_error=start_err
-                )
-                return False, start_err
-        elif not port_open(port):
-            # Unit may already be active; do not hammer a wedged API.
-            pass
-        else:
-            started, start_err = ctbot_start_stop(port, "start")
-            if not started:
-                cp.update_observed(
-                    user_id, bot, process_up=True, trading_state="stopped", last_error=start_err
-                )
-                return False, start_err
-
-    snap = refresh_observed(user_id, bot)
-    cp.append_event(user_id, "bot.status", snap, bot=bot)
-    try:
-        import telegram_links as tg_links
-
-        tg_links.notify_user(
-            user_id,
-            tg_links.format_bot_event_ru(action="start", bot=bot, user_id=user_id),
-            kind="bot_start",
-        )
-    except Exception:
-        pass
-    return True, ""
+    return bot_orchestrator.enable(user_id, bot)
 
 
 def apply_disable(user_id: str, bot: str) -> tuple[bool, str]:
-    user_trading.save_trading_flags(user_id, {bot: False})
-
-    if _shared_strategy(bot):
-        # Shared: only flag off — leave signal process running for other users.
-        snap = refresh_observed(user_id, bot)
-        cp.append_event(user_id, "bot.status", snap, bot=bot)
-        try:
-            import telegram_links as tg_links
-
-            tg_links.notify_user(
-                user_id,
-                tg_links.format_bot_event_ru(
-                    action="stop",
-                    bot=bot,
-                    user_id=user_id,
-                    detail="Автоторговля стратегиями выключена",
-                ),
-                kind="bot_stop",
-            )
-        except Exception:
-            pass
-        return True, ""
-
-    port = bot_port(user_id, bot)
-    if port_open(port):
-        ok, err = ctbot_start_stop(port, "stop")
-        if not ok:
-            cp.update_observed(user_id, bot, process_up=True, last_error=err)
-            snap = refresh_observed(user_id, bot)
-            cp.append_event(user_id, "bot.status", snap, bot=bot)
-            return False, err
-
-    snap = refresh_observed(user_id, bot)
-    cp.append_event(user_id, "bot.status", snap, bot=bot)
-    try:
-        import telegram_links as tg_links
-
-        tg_links.notify_user(
-            user_id,
-            tg_links.format_bot_event_ru(action="stop", bot=bot, user_id=user_id),
-            kind="bot_stop",
-        )
-    except Exception:
-        pass
-    return True, ""
+    return bot_orchestrator.disable(user_id, bot)
 
 
 def process_command(cmd: dict[str, Any]) -> None:
@@ -717,17 +618,15 @@ def process_command(cmd: dict[str, Any]) -> None:
     action = str(cmd["action"])
     try:
         if action == "enable":
-            ok, err = apply_enable(user_id, bot)
+            ok, err = bot_orchestrator.apply(user_id, bot, True)
         elif action == "disable":
-            ok, err = apply_disable(user_id, bot)
+            ok, err = bot_orchestrator.apply(user_id, bot, False)
         elif action == "reconcile":
             desired = cp.get_desired(user_id, bot)
             if desired is None:
                 ok, err = True, ""
-            elif desired:
-                ok, err = apply_enable(user_id, bot)
             else:
-                ok, err = apply_disable(user_id, bot)
+                ok, err = bot_orchestrator.apply(user_id, bot, bool(desired))
         else:
             ok, err = False, f"unknown action {action}"
         cp.finish_command(cmd_id, ok=ok, error=err or None)
