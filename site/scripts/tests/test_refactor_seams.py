@@ -1,15 +1,21 @@
 """Behavior locks for the deepened seams. Expected values are literals."""
 
 from __future__ import annotations
+import sys
+from pathlib import Path as _BootstrapPath
+
+_scripts_root = _BootstrapPath(__file__).resolve().parents[1]
+if str(_scripts_root) not in sys.path:
+    sys.path.insert(0, str(_scripts_root))
 
 import unittest
 
-import bot_orchestrator
-import entry_constraints
-import entry_policy
-import pair_config_routes
-import placement_lanes
-import trading_context
+import control.bot_orchestrator as bot_orchestrator
+import trading.entry_constraints as entry_constraints
+import trading.entry_policy as entry_policy
+import control.pair_config_routes as pair_config_routes
+import trading.placement_lanes as placement_lanes
+import tenants.trading_context as trading_context
 
 
 class PlacementLaneTests(unittest.TestCase):

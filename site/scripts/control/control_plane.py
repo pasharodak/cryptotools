@@ -1,0 +1,760 @@
+#!/usr/bin/env python3
+"""Bot control-plane: desired state + outbox + events (SQLite)."""
+from __future__ import annotations
+import sys
+from pathlib import Path as _BootstrapPath
+
+_scripts_root = _BootstrapPath(__file__).resolve().parents[1]
+if str(_scripts_root) not in sys.path:
+    sys.path.insert(0, str(_scripts_root))
+
+import json
+import os
+import sqlite3
+import threading
+import time
+from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any, Callable
+
+import tenants.tenant_manager as tm
+
+BOTS = ("strategy", "grid", "finder")
+ERROR_AFTER_SEC = 180
+
+_DB_LOCK = threading.RLock()
+_LISTENERS: list[Callable[[dict[str, Any]], None]] = []
+_LISTENERS_LOCK = threading.Lock()
+_INITED = False
+
+
+def _now_iso() -> str:
+    return datetime.now(tz=UTC).isoformat()
+
+
+def db_path() -> Path:
+    base = Path(tm.BASE) / "user_data"
+    base.mkdir(parents=True, exist_ok=True)
+    return base / "control_plane.sqlite"
+
+
+def _ensure_db_mode(path: Path) -> None:
+    """Owner-only DB — never leave world-readable control-plane state."""
+    try:
+        if path.is_file():
+            os.chmod(path, 0o600)
+        for suffix in ("-wal", "-shm"):
+            side = Path(str(path) + suffix)
+            if side.is_file():
+                os.chmod(side, 0o600)
+    except OSError:
+        pass
+
+
+@contextmanager
+def _connect() -> Any:
+    """Open SQLite and always close — Connection context mgr alone does not close FDs."""
+    path = db_path()
+    conn = sqlite3.connect(str(path), timeout=30, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    _ensure_db_mode(path)
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
+        yield conn
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        _ensure_db_mode(path)
+
+
+def init_db() -> None:
+    global _INITED
+    with _DB_LOCK:
+        with _connect() as conn:
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS bot_desired (
+                    user_id TEXT NOT NULL,
+                    bot TEXT NOT NULL,
+                    enabled INTEGER NOT NULL DEFAULT 0,
+                    updated_at TEXT NOT NULL,
+                    updated_by TEXT,
+                    PRIMARY KEY (user_id, bot)
+                );
+                CREATE TABLE IF NOT EXISTS bot_observed (
+                    user_id TEXT NOT NULL,
+                    bot TEXT NOT NULL,
+                    process_up INTEGER NOT NULL DEFAULT 0,
+                    trading_state TEXT NOT NULL DEFAULT 'unknown',
+                    port INTEGER,
+                    last_error TEXT,
+                    last_seen_at TEXT,
+                    starting_since TEXT,
+                    PRIMARY KEY (user_id, bot)
+                );
+                CREATE TABLE IF NOT EXISTS bot_commands (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL,
+                    bot TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    finished_at TEXT,
+                    error TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_bot_commands_pending
+                    ON bot_commands(status, id);
+                CREATE TABLE IF NOT EXISTS bot_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL,
+                    bot TEXT,
+                    event_type TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_bot_events_id ON bot_events(id);
+                CREATE TABLE IF NOT EXISTS app_settings (
+                    key TEXT PRIMARY KEY,
+                    value_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    updated_by TEXT
+                );
+                CREATE TABLE IF NOT EXISTS user_settings (
+                    user_id TEXT NOT NULL,
+                    key TEXT NOT NULL,
+                    value_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (user_id, key)
+                );
+                CREATE INDEX IF NOT EXISTS idx_user_settings_user
+                    ON user_settings(user_id);
+                """
+            )
+            conn.commit()
+        _INITED = True
+        threading.Thread(target=_maybe_daily_prune, name="bot-events-prune", daemon=True).start()
+
+
+def ensure_init() -> None:
+    if not _INITED:
+        init_db()
+
+
+def get_app_setting(key: str, default: Any = None) -> Any:
+    """Read JSON value from app_settings (control_plane.sqlite)."""
+    ensure_init()
+    with _DB_LOCK:
+        with _connect() as conn:
+            row = conn.execute(
+                "SELECT value_json FROM app_settings WHERE key = ?",
+                (str(key),),
+            ).fetchone()
+    if not row:
+        return default
+    try:
+        return json.loads(row["value_json"])
+    except (TypeError, json.JSONDecodeError):
+        return default
+
+
+def set_app_setting(
+    key: str,
+    value: Any,
+    *,
+    updated_by: str | None = None,
+) -> Any:
+    """Upsert JSON value into app_settings; returns the stored value."""
+    ensure_init()
+    payload = json.dumps(value, ensure_ascii=False)
+    now = _now_iso()
+    with _DB_LOCK:
+        with _connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO app_settings(key, value_json, updated_at, updated_by)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    value_json = excluded.value_json,
+                    updated_at = excluded.updated_at,
+                    updated_by = excluded.updated_by
+                """,
+                (str(key), payload, now, updated_by),
+            )
+            conn.commit()
+    return value
+
+
+def delete_app_setting(key: str) -> bool:
+    ensure_init()
+    with _DB_LOCK:
+        with _connect() as conn:
+            cur = conn.execute("DELETE FROM app_settings WHERE key = ?", (str(key),))
+            conn.commit()
+            return cur.rowcount > 0
+
+
+def get_user_setting(user_id: str, key: str, default: Any = None) -> Any:
+    """Read JSON value from user_settings for a tenant/admin id."""
+    ensure_init()
+    uid = str(user_id or "").strip()
+    if not uid:
+        return default
+    with _DB_LOCK:
+        with _connect() as conn:
+            row = conn.execute(
+                "SELECT value_json FROM user_settings WHERE user_id = ? AND key = ?",
+                (uid, str(key)),
+            ).fetchone()
+    if not row:
+        return default
+    try:
+        return json.loads(row["value_json"])
+    except (TypeError, json.JSONDecodeError):
+        return default
+
+
+def set_user_setting(user_id: str, key: str, value: Any) -> Any:
+    """Upsert JSON value into user_settings; returns the stored value."""
+    ensure_init()
+    uid = str(user_id or "").strip()
+    if not uid:
+        raise ValueError("user_id required")
+    payload = json.dumps(value, ensure_ascii=False)
+    now = _now_iso()
+    with _DB_LOCK:
+        with _connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO user_settings(user_id, key, value_json, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(user_id, key) DO UPDATE SET
+                    value_json = excluded.value_json,
+                    updated_at = excluded.updated_at
+                """,
+                (uid, str(key), payload, now),
+            )
+            conn.commit()
+    return value
+
+
+def has_user_setting(user_id: str, key: str) -> bool:
+    ensure_init()
+    uid = str(user_id or "").strip()
+    if not uid:
+        return False
+    with _DB_LOCK:
+        with _connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM user_settings WHERE user_id = ? AND key = ? LIMIT 1",
+                (uid, str(key)),
+            ).fetchone()
+    return row is not None
+
+
+def list_user_ids_with_setting(key: str) -> list[str]:
+    ensure_init()
+    with _DB_LOCK:
+        with _connect() as conn:
+            rows = conn.execute(
+                "SELECT user_id FROM user_settings WHERE key = ?",
+                (str(key),),
+            ).fetchall()
+    return [str(r["user_id"]) for r in rows]
+
+
+def delete_user_setting(user_id: str, key: str) -> bool:
+    ensure_init()
+    with _DB_LOCK:
+        with _connect() as conn:
+            cur = conn.execute(
+                "DELETE FROM user_settings WHERE user_id = ? AND key = ?",
+                (str(user_id), str(key)),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
+
+def add_listener(cb: Callable[[dict[str, Any]], None]) -> None:
+    with _LISTENERS_LOCK:
+        _LISTENERS.append(cb)
+
+
+def remove_listener(cb: Callable[[dict[str, Any]], None]) -> None:
+    with _LISTENERS_LOCK:
+        try:
+            _LISTENERS.remove(cb)
+        except ValueError:
+            pass
+
+
+def _emit(event: dict[str, Any]) -> None:
+    with _LISTENERS_LOCK:
+        listeners = list(_LISTENERS)
+    for cb in listeners:
+        try:
+            cb(event)
+        except Exception:
+            pass
+
+
+def append_event(
+    user_id: str,
+    event_type: str,
+    payload: dict[str, Any],
+    *,
+    bot: str | None = None,
+) -> dict[str, Any]:
+    ensure_init()
+    created = _now_iso()
+    body = json.dumps(payload, ensure_ascii=False)
+    with _DB_LOCK:
+        with _connect() as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO bot_events(user_id, bot, event_type, payload_json, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (user_id, bot, event_type, body, created),
+            )
+            eid = int(cur.lastrowid)
+            conn.commit()
+    event = {
+        "id": eid,
+        "user_id": user_id,
+        "bot": bot,
+        "type": event_type,
+        "payload": payload,
+        "created_at": created,
+    }
+    _emit(event)
+    return event
+
+
+_BOT_EVENTS_MAX_AGE_DAYS = 7
+_BOT_EVENTS_MAX_ROWS = 200_000
+_BOT_EVENTS_PRUNE_KEY = "bot_events_last_prune_at"
+
+
+def prune_events(
+    *,
+    max_age_days: int = _BOT_EVENTS_MAX_AGE_DAYS,
+    max_rows: int = _BOT_EVENTS_MAX_ROWS,
+    batch_size: int = 50_000,
+) -> int:
+    """Trim bot_events: drop rows older than max_age_days, then cap total rows.
+
+    Batched DELETEs keep each write lock short; returns rows removed.
+    """
+    ensure_init()
+    cutoff = (datetime.now(tz=UTC) - timedelta(days=max_age_days)).isoformat()
+    removed = 0
+    with _DB_LOCK:
+        with _connect() as conn:
+            while True:
+                cur = conn.execute(
+                    """
+                    DELETE FROM bot_events WHERE id IN (
+                        SELECT id FROM bot_events WHERE created_at < ?
+                        ORDER BY id LIMIT ?
+                    )
+                    """,
+                    (cutoff, batch_size),
+                )
+                removed += cur.rowcount
+                conn.commit()
+                if cur.rowcount < batch_size:
+                    break
+            excess = (
+                conn.execute("SELECT COUNT(*) FROM bot_events").fetchone()[0] - max_rows
+            )
+            while excess > 0:
+                cur = conn.execute(
+                    """
+                    DELETE FROM bot_events WHERE id IN (
+                        SELECT id FROM bot_events ORDER BY id LIMIT ?
+                    )
+                    """,
+                    (min(excess, batch_size),),
+                )
+                removed += cur.rowcount
+                conn.commit()
+                excess -= cur.rowcount
+                if cur.rowcount == 0:
+                    break
+    return removed
+
+
+def _maybe_daily_prune() -> None:
+    """prune_events at most once per day; marker written before work starts."""
+    try:
+        last = get_app_setting(_BOT_EVENTS_PRUNE_KEY)
+        if isinstance(last, str):
+            try:
+                if datetime.fromisoformat(last) > datetime.now(tz=UTC) - timedelta(hours=24):
+                    return
+            except ValueError:
+                pass
+        set_app_setting(_BOT_EVENTS_PRUNE_KEY, _now_iso())
+        prune_events()
+    except Exception:
+        pass
+
+
+def get_desired(user_id: str, bot: str) -> bool | None:
+    ensure_init()
+    with _DB_LOCK:
+        with _connect() as conn:
+            row = conn.execute(
+                "SELECT enabled FROM bot_desired WHERE user_id=? AND bot=?",
+                (user_id, bot),
+            ).fetchone()
+    if row is None:
+        return None
+    return bool(row["enabled"])
+
+
+def set_desired(
+    user_id: str,
+    bot: str,
+    enabled: bool,
+    *,
+    updated_by: str | None = None,
+    enqueue: bool = True,
+) -> dict[str, Any]:
+    ensure_init()
+    if bot not in BOTS:
+        raise ValueError(f"invalid bot: {bot}")
+    now = _now_iso()
+    with _DB_LOCK:
+        with _connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO bot_desired(user_id, bot, enabled, updated_at, updated_by)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(user_id, bot) DO UPDATE SET
+                    enabled=excluded.enabled,
+                    updated_at=excluded.updated_at,
+                    updated_by=excluded.updated_by
+                """,
+                (user_id, bot, 1 if enabled else 0, now, updated_by),
+            )
+            cmd_id = None
+            if enqueue:
+                action = "enable" if enabled else "disable"
+                cur = conn.execute(
+                    """
+                    INSERT INTO bot_commands(user_id, bot, action, status, attempts, created_at)
+                    VALUES (?, ?, ?, 'pending', 0, ?)
+                    """,
+                    (user_id, bot, action, now),
+                )
+                cmd_id = int(cur.lastrowid)
+            if enabled:
+                conn.execute(
+                    """
+                    INSERT INTO bot_observed(user_id, bot, process_up, trading_state, starting_since, last_seen_at)
+                    VALUES (?, ?, 0, 'unknown', ?, ?)
+                    ON CONFLICT(user_id, bot) DO UPDATE SET
+                        starting_since=COALESCE(bot_observed.starting_since, excluded.starting_since),
+                        last_error=NULL
+                    """,
+                    (user_id, bot, now, now),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO bot_observed(user_id, bot, process_up, trading_state, starting_since, last_seen_at)
+                    VALUES (?, ?, 0, 'unknown', NULL, ?)
+                    ON CONFLICT(user_id, bot) DO UPDATE SET starting_since=NULL
+                    """,
+                    (user_id, bot, now),
+                )
+            conn.commit()
+    snap = snapshot_bot(user_id, bot)
+    append_event(
+        user_id,
+        "bot.status",
+        snap,
+        bot=bot,
+    )
+    if enqueue and cmd_id is not None:
+        append_event(
+            user_id,
+            "bot.command",
+            {"id": cmd_id, "bot": bot, "action": "enable" if enabled else "disable", "status": "pending"},
+            bot=bot,
+        )
+    return snap
+
+
+def update_observed(
+    user_id: str,
+    bot: str,
+    *,
+    process_up: bool | None = None,
+    trading_state: str | None = None,
+    port: int | None = None,
+    last_error: str | None = None,
+    clear_error: bool = False,
+    clear_starting: bool = False,
+) -> dict[str, Any]:
+    ensure_init()
+    now = _now_iso()
+    with _DB_LOCK:
+        with _connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM bot_observed WHERE user_id=? AND bot=?",
+                (user_id, bot),
+            ).fetchone()
+            if row is None:
+                conn.execute(
+                    """
+                    INSERT INTO bot_observed(
+                        user_id, bot, process_up, trading_state, port, last_error, last_seen_at, starting_since
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+                    """,
+                    (
+                        user_id,
+                        bot,
+                        1 if process_up else 0,
+                        trading_state or "unknown",
+                        port,
+                        None if clear_error else last_error,
+                        now,
+                    ),
+                )
+            else:
+                pu = int(row["process_up"]) if process_up is None else (1 if process_up else 0)
+                ts = trading_state if trading_state is not None else row["trading_state"]
+                pt = port if port is not None else row["port"]
+                err = row["last_error"]
+                if clear_error:
+                    err = None
+                elif last_error is not None:
+                    err = last_error
+                starting = None if clear_starting else row["starting_since"]
+                if trading_state == "running":
+                    starting = None
+                conn.execute(
+                    """
+                    UPDATE bot_observed SET
+                        process_up=?, trading_state=?, port=?, last_error=?,
+                        last_seen_at=?, starting_since=?
+                    WHERE user_id=? AND bot=?
+                    """,
+                    (pu, ts, pt, err, now, starting, user_id, bot),
+                )
+            conn.commit()
+    return snapshot_bot(user_id, bot)
+
+
+def derive_status(desired: bool, observed: dict[str, Any] | None) -> str:
+    obs = observed or {}
+    process_up = bool(obs.get("process_up"))
+    trading = str(obs.get("trading_state") or "unknown").lower()
+    last_error = obs.get("last_error")
+    starting_since = obs.get("starting_since")
+    # reload_config / reloading = bot is up and applying config (whitelist/scan), not cold start.
+    running_like = trading in ("running", "reload_config", "reloading")
+    if not desired:
+        if process_up and running_like:
+            return "STOPPING"
+        return "OFF"
+    if process_up and running_like:
+        return "RUNNING"
+    if last_error and starting_since:
+        try:
+            started = datetime.fromisoformat(str(starting_since))
+            if (datetime.now(tz=UTC) - started).total_seconds() >= ERROR_AFTER_SEC:
+                return "ERROR"
+        except ValueError:
+            pass
+    if last_error and not process_up and not starting_since:
+        return "ERROR"
+    return "STARTING"
+
+
+def snapshot_bot(user_id: str, bot: str) -> dict[str, Any]:
+    ensure_init()
+    with _DB_LOCK:
+        with _connect() as conn:
+            drow = conn.execute(
+                "SELECT * FROM bot_desired WHERE user_id=? AND bot=?",
+                (user_id, bot),
+            ).fetchone()
+            orow = conn.execute(
+                "SELECT * FROM bot_observed WHERE user_id=? AND bot=?",
+                (user_id, bot),
+            ).fetchone()
+    desired = bool(drow["enabled"]) if drow else False
+    observed = None
+    if orow:
+        observed = {
+            "process_up": bool(orow["process_up"]),
+            "trading_state": orow["trading_state"],
+            "port": orow["port"],
+            "last_error": orow["last_error"],
+            "last_seen_at": orow["last_seen_at"],
+            "starting_since": orow["starting_since"],
+        }
+    status = derive_status(desired, observed)
+    return {
+        "user_id": user_id,
+        "bot": bot,
+        "enabled": desired,
+        "desired": desired,
+        "status": status,
+        "observed": observed
+        or {
+            "process_up": False,
+            "trading_state": "unknown",
+            "port": None,
+            "last_error": None,
+            "last_seen_at": None,
+            "starting_since": None,
+        },
+        "updated_at": drow["updated_at"] if drow else None,
+    }
+
+
+def snapshot_all(user_id: str) -> dict[str, Any]:
+    bots = {b: snapshot_bot(user_id, b) for b in BOTS}
+    return {"user_id": user_id, "bots": bots}
+
+
+def claim_pending_commands(limit: int = 8) -> list[dict[str, Any]]:
+    ensure_init()
+    out: list[dict[str, Any]] = []
+    with _DB_LOCK:
+        with _connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM bot_commands
+                WHERE status='pending'
+                ORDER BY id ASC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+            for row in rows:
+                cur = conn.execute(
+                    """
+                    UPDATE bot_commands
+                    SET status='running', attempts=attempts+1
+                    WHERE id=? AND status='pending'
+                    """,
+                    (row["id"],),
+                )
+                if cur.rowcount:
+                    out.append(dict(row))
+            conn.commit()
+    return out
+
+
+def finish_command(cmd_id: int, *, ok: bool, error: str | None = None) -> None:
+    ensure_init()
+    now = _now_iso()
+    with _DB_LOCK:
+        with _connect() as conn:
+            row = conn.execute(
+                "SELECT user_id, bot, action FROM bot_commands WHERE id=?",
+                (cmd_id,),
+            ).fetchone()
+            conn.execute(
+                """
+                UPDATE bot_commands
+                SET status=?, finished_at=?, error=?
+                WHERE id=?
+                """,
+                ("done" if ok else "failed", now, error, cmd_id),
+            )
+            conn.commit()
+    if row:
+        append_event(
+            str(row["user_id"]),
+            "bot.command",
+            {
+                "id": cmd_id,
+                "bot": row["bot"],
+                "action": row["action"],
+                "status": "done" if ok else "failed",
+                "error": error,
+            },
+            bot=str(row["bot"]),
+        )
+
+
+def events_since(user_id: str, after_id: int = 0, limit: int = 100) -> list[dict[str, Any]]:
+    ensure_init()
+    with _DB_LOCK:
+        with _connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM bot_events
+                WHERE user_id=? AND id>?
+                ORDER BY id ASC
+                LIMIT ?
+                """,
+                (user_id, after_id, limit),
+            ).fetchall()
+    out = []
+    for row in rows:
+        try:
+            payload = json.loads(row["payload_json"])
+        except json.JSONDecodeError:
+            payload = {}
+        out.append(
+            {
+                "id": row["id"],
+                "user_id": row["user_id"],
+                "bot": row["bot"],
+                "type": row["event_type"],
+                "payload": payload,
+                "created_at": row["created_at"],
+            }
+        )
+    return out
+
+
+def seed_from_trading_flags() -> None:
+    """One-time-ish seed: copy trading_enabled.json into bot_desired when missing."""
+    ensure_init()
+    import control.user_trading as user_trading
+
+    users = ["admin"]
+    for u in tm.load_users():
+        uid = str(u.get("id") or "")
+        if uid and uid not in users:
+            users.append(uid)
+    for uid in users:
+        flags = user_trading.load_trading_flags(uid)
+        for bot in BOTS:
+            if get_desired(uid, bot) is not None:
+                continue
+            set_desired(uid, bot, bool(flags.get(bot, False)), updated_by="seed", enqueue=False)
+
+
+def sync_flags_from_desired(user_id: str) -> dict[str, bool]:
+    """Write trading_enabled.json from bot_desired (all bots)."""
+    import control.user_trading as user_trading
+
+    flags = {}
+    for bot in BOTS:
+        d = get_desired(user_id, bot)
+        if d is None:
+            flags[bot] = bool(user_trading.DEFAULT_FLAGS.get(bot, False))
+        else:
+            flags[bot] = bool(d)
+    return user_trading.save_trading_flags(user_id, flags)

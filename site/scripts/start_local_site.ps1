@@ -55,12 +55,12 @@ function Start-Bg([string]$Name, [string]$FilePath, [string[]]$ArgumentList, [st
 
 try {
     if (-not $SkipPairConfig) {
-        $procs += Start-Bg "pair-config" $Py @((Join-Path $PSScriptRoot "pair_config_server.py")) $SiteRoot
+        $procs += Start-Bg "pair-config" $Py @((Join-Path $PSScriptRoot "control\pair_config_server.py")) $SiteRoot
         Start-Sleep -Seconds 2
     }
 
     $procs += Start-Bg "gateway" $Py @(
-        (Join-Path $PSScriptRoot "local_site_gateway.py"),
+        (Join-Path $PSScriptRoot "tools\local_site_gateway.py"),
         "--host", $HostAddr,
         "--port", "$Port"
     ) $SiteRoot
@@ -82,7 +82,7 @@ try {
             Write-Warning "signal-engine skipped (ctbot or config_signal_engine.json missing)"
         }
         $procs += Start-Bg "trade-executor" $Py @(
-            (Join-Path $PSScriptRoot "trade_executor.py")
+            (Join-Path $PSScriptRoot "trading\trade_executor.py")
         ) $SiteRoot
         $gridCfg = Join-Path $SiteRoot "user_data\config_grid.json"
         if ((Test-Path $ctbot) -and (Test-Path $gridCfg)) {

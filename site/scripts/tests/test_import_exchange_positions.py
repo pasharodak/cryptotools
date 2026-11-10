@@ -1,11 +1,17 @@
 """Reconcile must call the venue named by the trading context."""
 from __future__ import annotations
+import sys
+from pathlib import Path as _BootstrapPath
+
+_scripts_root = _BootstrapPath(__file__).resolve().parents[1]
+if str(_scripts_root) not in sys.path:
+    sys.path.insert(0, str(_scripts_root))
 
 import unittest
 from unittest.mock import patch
 
-import import_exchange_positions as iep
-from user_exchange import UserBinanceExchange, UserBybitExchange
+import exchange.import_exchange_positions as iep
+from exchange.user_exchange import UserBinanceExchange, UserBybitExchange
 
 
 class LoadExchangeTests(unittest.TestCase):

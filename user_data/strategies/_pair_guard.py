@@ -26,7 +26,7 @@ def claim_entry(bot: str, pair: str, side: str) -> bool:
     """Claim pair for bot. Fail-closed: import/errors deny entry."""
     try:
         _ensure_scripts_path()
-        from pair_entry_guard import allow_entry  # noqa: WPS433
+        from trading.pair_entry_guard import allow_entry  # noqa: WPS433
     except Exception as exc:  # noqa: BLE001
         logger.warning("pair_entry_guard unavailable (%s) — DENY entry", exc)
         return False
@@ -43,7 +43,7 @@ def pair_open_elsewhere(bot: str, pair: str) -> bool:
         return False
     try:
         _ensure_scripts_path()
-        from pair_entry_guard import pairs_blocked_for  # noqa: WPS433
+        from trading.pair_entry_guard import pairs_blocked_for  # noqa: WPS433
     except Exception as exc:  # noqa: BLE001
         logger.warning("pair open-elsewhere check unavailable: %s", exc)
         return False
@@ -58,7 +58,7 @@ def pair_busy(pair: str, side: str, *, bot: str | None = None) -> str | None:
     """Return busy reason, or a deny string if guard is unavailable (fail-closed)."""
     try:
         _ensure_scripts_path()
-        from pair_entry_guard import busy_reason  # noqa: WPS433
+        from trading.pair_entry_guard import busy_reason  # noqa: WPS433
     except Exception as exc:  # noqa: BLE001
         logger.warning("pair_entry_guard busy check unavailable: %s — DENY", exc)
         return f"pair_entry_guard недоступен: {exc}"

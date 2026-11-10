@@ -62,8 +62,8 @@ from PsaraFlipStrategy import PsaraFlipStrategy
 from SupertrendStrategy import SupertrendStrategy
 from TripleEmaStrategy import TripleEmaStrategy
 # 1h clones retired from live registry; keep ids/helpers for history / residual exits.
-from htf1h_catalog import HTF1H_IDS, sltp_ratios  # noqa: E402
-from entry_constraints import cap_reached, test_ids, uses_full_pair_universe  # noqa: E402
+from control.htf1h_catalog import HTF1H_IDS, sltp_ratios  # noqa: E402
+from trading.entry_constraints import cap_reached, test_ids, uses_full_pair_universe  # noqa: E402
 
 _USER_DATA = Path(__file__).resolve().parent.parent
 # Prefer site/user_data/ml over simulation/ml when repo root is on PYTHONPATH.
@@ -154,7 +154,7 @@ def _publish_shared_entry_signal(
     scripts = _ROOT / "scripts"
     if str(scripts) not in sys.path:
         sys.path.insert(0, str(scripts))
-    from signal_bus import publish_entry_signal  # noqa: WPS433
+    from trading.signal_bus import publish_entry_signal  # noqa: WPS433
 
     publish_entry_signal(
         pair=pair,
@@ -1171,8 +1171,8 @@ class MultiStrategyRouter(IStrategy):
         # Per-user filtering happens in trade_executor.
         if is_signal_only(self.config):
             try:
-                import user_prefs as up
-                import user_trading as ut
+                import control.user_prefs as up
+                import control.user_trading as ut
 
                 traders = ut.list_active_traders("strategy")
                 return up.union_enabled_strategy_ids(

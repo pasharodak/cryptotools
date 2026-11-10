@@ -1,23 +1,14 @@
-#!/usr/bin/env python3
-"""Patch stoploss in ctengine configs without touching other fields."""
-import json
+"""Compatibility entry. Implementation: tools/patch_stoploss.py"""
+from __future__ import annotations
+
+import runpy
 import sys
 from pathlib import Path
 
-BASE = Path(sys.argv[1] if len(sys.argv) > 1 else "/home/cryptotools/app")
-STOP = float(sys.argv[2]) if len(sys.argv) > 2 else -0.05
+_TARGET = Path(__file__).resolve().parent / "tools" / "patch_stoploss.py"
 
-for name in ("config.json", "config_strategy.json", "config_grid.json"):
-    path = BASE / "user_data" / name
-    if not path.is_file():
-        print(f"skip {name}")
-        continue
-    data = json.loads(path.read_text(encoding="utf-8"))
-    old = data.get("stoploss")
-    data["stoploss"] = STOP
-    tmp = path.with_suffix(".json.tmp")
-    with tmp.open("w", encoding="utf-8") as fh:
-        json.dump(data, fh, indent=4, ensure_ascii=False)
-        fh.write("\n")
-    tmp.replace(path)
-    print(f"{name}: {old} -> {STOP}")
+if __name__ == "__main__":
+    sys.argv[0] = str(_TARGET)
+    runpy.run_path(str(_TARGET), run_name="__main__")
+else:
+    raise ImportError("patch_stoploss moved to tools.patch_stoploss. Import tools.patch_stoploss.")
