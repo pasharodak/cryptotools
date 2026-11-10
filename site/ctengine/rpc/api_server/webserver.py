@@ -123,6 +123,8 @@ class ApiServer(RPCHandler):
     _config: Config = {}
     # websocket message stuff
     _message_stream: MessageStream | None = None
+    # "trader is not running" is expected while STOPPED — log once, not every poll.
+    _trader_not_running_logged: bool = False
 
     def __new__(cls, *args, **kwargs):
         """
@@ -194,7 +196,17 @@ class ApiServer(RPCHandler):
             ApiServer._message_stream.publish(msg)
 
     def handle_rpc_exception(self, request, exc):
-        logger.error(f"API Error calling: {exc}")
+        message = str(getattr(exc, "message", None) or exc)
+        if "trader is not running" in message.lower():
+            if not ApiServer._trader_not_running_logged:
+                ApiServer._trader_not_running_logged = True
+                logger.warning(
+                    "API: trader is not running — further identical errors suppressed until /start"
+                )
+            else:
+                logger.debug("API Error calling: %s (%s)", exc, request.url.path)
+        else:
+            logger.error(f"API Error calling: {exc}")
         return JSONResponse(
             status_code=502, content={"error": f"Error querying {request.url.path}: {exc.message}"}
         )

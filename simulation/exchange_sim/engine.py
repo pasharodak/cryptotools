@@ -73,7 +73,7 @@ class SimulationEngine:
 
     def place_market(self, symbol: str, side: str, qty: float) -> SimOrder:
         px = self._price(symbol)
-        fee = qty * px * 0.00055
+        fee = qty * px * 0.001
         oid = str(uuid.uuid4())[:16]
         order = SimOrder(oid, symbol, side, qty, px, "Filled", "Market")
         self.orders.append(order)
@@ -103,7 +103,7 @@ class SimulationEngine:
             pnl = (px - pos.entry_price) * close_qty
         else:
             pnl = (pos.entry_price - px) * close_qty
-        fee = close_qty * px * 0.00055
+        fee = close_qty * px * 0.001
         self.closed_pnl += pnl - fee
         self.wallet_usdt -= fee
         pos.size -= close_qty

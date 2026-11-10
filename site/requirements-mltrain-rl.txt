@@ -1,0 +1,5 @@
+gymnasium
+sb3-contrib; sys_platform != 'darwin' or platform_machine != 'x86_64'
+stable-baselines3; sys_platform != 'darwin' or platform_machine != 'x86_64'
+torch; sys_platform != 'darwin' or platform_machine != 'x86_64'
+tqdm

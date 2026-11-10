@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # CryptoTools VPS cutover: migrate from /home/freqtrade/freqtrade -> /home/cryptotools/app
+# Historical one-off script. Requires deploy/*.service and nginx config staged separately:
+# those artifacts are not tracked in this repository.
 set -euo pipefail
 OLD_USER=freqtrade
 OLD_APP=/home/freqtrade/freqtrade

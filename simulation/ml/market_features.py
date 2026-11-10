@@ -10,9 +10,16 @@ import pandas as pd
 
 from simulation.exchange_sim.datastore import HistoricalDatastore
 
-TREND_12H_BARS_BY_TF = {"5m": 144, "15m": 48, "1h": 12}
-TREND_24H_BARS_BY_TF = {"5m": 288, "15m": 96, "1h": 24}
-TREND_48H_BARS_BY_TF = {"5m": 576, "15m": 192, "1h": 48}
+TREND_12H_BARS_BY_TF = {"5m": 144, "15m": 48, "1h": 12, "4h": 3}
+TREND_24H_BARS_BY_TF = {"5m": 288, "15m": 96, "1h": 24, "4h": 6}
+TREND_48H_BARS_BY_TF = {"5m": 576, "15m": 192, "1h": 48, "4h": 12}
+BAR_TIMEDELTA = {
+    "1m": pd.Timedelta(minutes=1),
+    "5m": pd.Timedelta(minutes=5),
+    "15m": pd.Timedelta(minutes=15),
+    "1h": pd.Timedelta(hours=1),
+    "4h": pd.Timedelta(hours=4),
+}
 
 
 def trend_12h_bars(timeframe: str = "5m") -> int:
@@ -29,6 +36,21 @@ def trend_48h_bars(timeframe: str = "5m") -> int:
 
 def min_indicator_warmup(timeframe: str = "5m") -> int:
     return max(30, trend_48h_bars(timeframe) + 1)
+
+
+def bar_timedelta(timeframe: str) -> pd.Timedelta:
+    return BAR_TIMEDELTA.get(timeframe, pd.Timedelta(minutes=5))
+
+
+def closed_bar_position(index: pd.DatetimeIndex, ts: pd.Timestamp, timeframe: str) -> int:
+    """Last bar whose close is at or before ts.
+
+    Candle indexes are open times. The bar that opens at ts is still forming,
+    so its high, low, close and volume are not known yet.
+    """
+    closed_by = ts - bar_timedelta(timeframe)
+    pos = index.get_indexer([closed_by], method="pad")
+    return int(pos[0])
 
 
 # Baseline pack features (prod / historical experiments).
@@ -220,7 +242,7 @@ class MarketFeatureStore:
         except FileNotFoundError:
             self._frames[key] = None  # type: ignore[assignment]
             return None
-        ind = compute_indicator_frame(ohlcv)
+        ind = compute_indicator_frame(ohlcv, timeframe=timeframe)
         self._frames[key] = ind
         return ind
 
@@ -232,10 +254,10 @@ class MarketFeatureStore:
         if ind is None or ind.empty:
             return empty
         ts = pd.Timestamp(open_ms, unit="ms", tz="UTC")
-        idx = ind.index.get_indexer([ts], method="pad")
-        if idx[0] < 0:
+        pos = closed_bar_position(ind.index, ts, timeframe)
+        if pos < 0:
             return empty
-        row = ind.iloc[idx[0]]
+        row = ind.iloc[pos]
         out: dict[str, float] = {}
         for col in MARKET_FEATURES:
             val = row.get(col)
@@ -258,10 +280,10 @@ class MarketFeatureStore:
                 continue
             for idx, row in grp.iterrows():
                 ts = pd.Timestamp(int(row["open_ms"]), unit="ms", tz="UTC")
-                pos = ind.index.get_indexer([ts], method="pad")
-                if pos[0] < 0:
+                pos = closed_bar_position(ind.index, ts, tf_str)
+                if pos < 0:
                     continue
-                vals = ind.iloc[pos[0]]
+                vals = ind.iloc[pos]
                 for col in MARKET_FEATURES:
                     v = vals.get(col)
                     if v is not None and not pd.isna(v):

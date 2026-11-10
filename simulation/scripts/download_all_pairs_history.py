@@ -44,6 +44,11 @@ def main() -> int:
     ap.add_argument("--timerange", default=DEFAULT_TIMERANGE)
     ap.add_argument("--batch-size", type=int, default=10)
     ap.add_argument("--pairs-source", choices=("all", "prod200"), default="all")
+    ap.add_argument(
+        "--append",
+        action="store_true",
+        help="Extend candles forward from the last stored bar. Omits --prepend, which disables appending.",
+    )
     args = ap.parse_args()
 
     pairs = collect_pairs(ROOT, source=args.pairs_source)
@@ -71,8 +76,9 @@ def main() -> int:
             args.timerange,
             "--trading-mode",
             "futures",
-            "--prepend",
         ]
+        if not args.append:
+            cmd.append("--prepend")
         print(f"batch {i}/{len(batches)} · {len(batch)} pairs", flush=True)
         r = subprocess.run(cmd, cwd=str(ROOT))
         if r.returncode != 0:

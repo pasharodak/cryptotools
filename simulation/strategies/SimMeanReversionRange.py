@@ -20,7 +20,7 @@ from pandas import DataFrame  # noqa: E402
 class SimMeanReversionRange(_LiteBase):
     """Range mean-reversion — ADX<25, no BB squeeze, exit at midline."""
 
-    stoploss = -0.02
+    stoploss = -0.014
     minimal_roi = {"0": 0.025, "60": 0.015, "180": 0.008, "720": 0}
     pair_cooldown_minutes = 360
     adx_max = 25
@@ -79,7 +79,7 @@ class SimMeanReversionRange(_LiteBase):
 class BollingerRsiTestStrategy(SimMeanReversionRange):
     """UI test clone of #33: 1x, SL -3%, no RSI/range chase, custom exit."""
 
-    stoploss = -0.03
+    stoploss = -0.006
     minimal_roi = {'0': 0.012, '60': 0.008, '180': 0.005, '480': 0.0}
     pair_cooldown_minutes = 180
     sim_leverage = 1.0

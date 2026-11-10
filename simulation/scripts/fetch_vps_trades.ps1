@@ -1,6 +1,6 @@
-# Fetch live trade DBs from VPS (read-only) for counterfactual replay
+﻿# Fetch live trade DBs from VPS (read-only) for counterfactual replay
 param(
-    [string]$VpsHost = "root@77.222.35.209",
+    [string]$VpsHost = "root@194.163.149.122",
     [string]$SshKey = "D:\cryptotools\site\deploy\id_rsa\id_rsa",
     [string]$RemoteBase = "/home/cryptotools/app"
 )

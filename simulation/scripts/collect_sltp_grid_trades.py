@@ -148,6 +148,12 @@ def summarize_cached(tr_path: Path, te_path: Path, sid: str, tp: float, sl: floa
     }
 
 
+def _pair_chunks(pairs: list[str], batch: int) -> list[list[str]]:
+    if batch <= 0 or batch >= len(pairs):
+        return [pairs]
+    return [pairs[i : i + batch] for i in range(0, len(pairs), batch)]
+
+
 def collect_one(
     mgr: Any,
     *,
@@ -160,7 +166,10 @@ def collect_one(
     sl_pct: float,
     cache_dir: Path,
     force: bool = False,
+    pair_batch: int = 0,
 ) -> dict[str, Any]:
+    import gc
+
     tr_path, te_path = cache_paths(cache_dir, sid, tp_pct, sl_pct)
     if not force:
         hit = summarize_cached(tr_path, te_path, sid, tp_pct, sl_pct)
@@ -178,15 +187,32 @@ def collect_one(
     t0 = time.time()
     isolate = f"sl{tag_pct(sl_pct)}_tp{tag_pct(tp_pct)}"
     try:
-        train_tr, test_tr = collect_train_test_trades(
-            mgr,
-            sid,
-            pairs,
-            datadir,
-            train_range=train_range,
-            test_range=test_range,
-            isolate_key=isolate,
-        )
+        train_tr: list[dict[str, Any]] = []
+        test_tr: list[dict[str, Any]] = []
+        chunks = _pair_chunks(pairs, int(pair_batch or 0))
+        for ci, chunk in enumerate(chunks, 1):
+            if len(chunks) > 1:
+                print(
+                    f"  [{sid}] pair-batch {ci}/{len(chunks)} n={len(chunk)}",
+                    flush=True,
+                )
+            tr, te = collect_train_test_trades(
+                mgr,
+                sid,
+                chunk,
+                datadir,
+                train_range=train_range,
+                test_range=test_range,
+                isolate_key=f"{isolate}_b{ci}" if len(chunks) > 1 else isolate,
+            )
+            train_tr.extend(tr)
+            test_tr.extend(te)
+            # Drop heavy instance payloads so peak RAM stays low across batches.
+            try:
+                mgr.instances = []
+            except Exception:
+                pass
+            gc.collect()
         save_json(tr_path, train_tr)
         save_json(te_path, test_tr)
         elapsed = round(time.time() - t0, 1)
@@ -205,6 +231,8 @@ def collect_one(
             "stoploss": -abs(sl_pct) / 100.0,
             "minimal_roi": {"0": abs(tp_pct) / 100.0},
             "worker_pid": os.getpid(),
+            "pair_batch": int(pair_batch or 0),
+            "n_pair_chunks": len(chunks),
         }
     except Exception as exc:
         return {
@@ -262,6 +290,7 @@ def _worker_job(payload: dict[str, Any]) -> dict[str, Any]:
         sl_pct=sl,
         cache_dir=cache_dir,
         force=bool(payload.get("force")),
+        pair_batch=int(payload.get("pair_batch") or 0),
     )
 
 
@@ -350,6 +379,12 @@ def main() -> int:
         type=int,
         default=4,
         help="parallel process workers (1 = sequential). Default 4.",
+    )
+    ap.add_argument(
+        "--pair-batch",
+        type=int,
+        default=0,
+        help="backtest pairs in chunks of N (lowers peak RAM; 0 = all pairs at once)",
     )
     args = ap.parse_args()
 
@@ -463,6 +498,7 @@ def main() -> int:
                 sl_pct=sl,
                 cache_dir=cache_dir,
                 force=args.force,
+                pair_batch=args.pair_batch,
             )
             results_map[job_key(sid, tp, sl)] = row
             completed += 1
@@ -484,6 +520,7 @@ def main() -> int:
                 "test_range": args.test_range,
                 "cache_dir": str(cache_dir),
                 "force": bool(args.force),
+                "pair_batch": int(args.pair_batch or 0),
             }
             for sid, tp, sl in to_run
         ]

@@ -20,7 +20,7 @@ from simulation.strategies.LiteFinanceStrategies import _LiteBase
 class AltVolumeBreakoutStrategy(_LiteBase):
     """Active-coin Donchian breakout with volume/ATR pulse filter."""
 
-    stoploss = -0.015
+    stoploss = -0.009
     minimal_roi = {"0": 0.012, "25": 0.006, "75": 0}
     pair_cooldown_minutes = 45
     startup_candle_count = 80
@@ -75,7 +75,7 @@ class AltVolumeBreakoutStrategy(_LiteBase):
 class LiquiditySweepReclaimStrategy(_LiteBase):
     """Liquidity sweep (wick beyond swing) + reclaim close — candle proxy for 'прострел'."""
 
-    stoploss = -0.012
+    stoploss = -0.006
     minimal_roi = {"0": 0.009, "20": 0.0045, "60": 0}
     pair_cooldown_minutes = 40
     startup_candle_count = 80
@@ -137,17 +137,18 @@ class LiquiditySweepReclaimStrategy(_LiteBase):
 
 
 class AltVolumeBreakoutTestStrategy(AltVolumeBreakoutStrategy):
-    """UI test clone of #31: 1x, SL -3%, no RSI/range chase, custom exit."""
+    """UI test clone of #31: tighter chase, long-only (short SL −3% Aug 15)."""
 
-    stoploss = -0.03
-    minimal_roi = {'0': 0.012, '60': 0.008, '180': 0.005, '480': 0.0}
+    stoploss = -0.014
+    minimal_roi = {"0": 0.02, "60": 0.012, "180": 0.008, "480": 0.0}
     pair_cooldown_minutes = 180
     sim_leverage = 1.0
-    rsi_long_max = 65
-    rsi_short_min = 35
+    rsi_long_max = 60
+    rsi_short_min = 40
     range_lookback_1h = 12
-    max_long_range_pos = 0.75
-    min_short_range_pos = 0.25
+    max_long_range_pos = 0.65
+    min_short_range_pos = 0.35
+    allow_short_entries = False
 
     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         dataframe = super().populate_indicators(dataframe, metadata)
@@ -166,6 +167,8 @@ class AltVolumeBreakoutTestStrategy(AltVolumeBreakoutStrategy):
         late_short = (rsi <= self.rsi_short_min) | (pos <= self.min_short_range_pos)
         dataframe.loc[late_long, "enter_long"] = 0
         dataframe.loc[late_short, "enter_short"] = 0
+        if not self.allow_short_entries:
+            dataframe["enter_short"] = 0
         return dataframe
 
     def leverage(self, pair, current_time, current_rate, proposed_leverage, max_leverage, entry_tag, side, **kwargs):

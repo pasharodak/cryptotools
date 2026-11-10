@@ -1,0 +1,6 @@
+cmaes
+filelock
+optuna>4.0.0
+scikit-learn
+# keep scipy in sync with scipy-stubs in requirements-dev.txt
+scipy>=1.17,<1.18

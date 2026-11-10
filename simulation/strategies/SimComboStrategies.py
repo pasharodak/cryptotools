@@ -14,7 +14,7 @@ class EmaRsiAtrComboStrategy(_LiteBase):
     """EMA trend + RSI pullback entry + ATR regime (classic 3-question kit)."""
 
     # Trend profile: slightly wider TP vs SL (expectancy via R:R)
-    stoploss = -0.018
+    stoploss = -0.012
     minimal_roi = {"0": 0.014, "50": 0.007, "150": 0}
     pair_cooldown_minutes = 110
 
@@ -55,7 +55,7 @@ class EmaRsiAtrComboStrategy(_LiteBase):
 class AdxMacdVolComboStrategy(_LiteBase):
     """ADX regime + MACD hist flip + volume confirmation (trend family)."""
 
-    stoploss = -0.02
+    stoploss = -0.014
     minimal_roi = {"0": 0.016, "60": 0.008, "180": 0}
     pair_cooldown_minutes = 120
 
@@ -91,7 +91,7 @@ class BbRsiAdxMeanRevComboStrategy(_LiteBase):
     """BB fade + RSI extreme + ADX chop filter (mean-rev only in range regime)."""
 
     # Mean-rev profile: tighter TP, need high WR
-    stoploss = -0.014
+    stoploss = -0.008
     minimal_roi = {"0": 0.009, "35": 0.0045, "90": 0}
     pair_cooldown_minutes = 80
 
@@ -131,7 +131,7 @@ class BbRsiAdxMeanRevComboStrategy(_LiteBase):
 class SupertrendRsiObvComboStrategy(_LiteBase):
     """Supertrend direction + RSI not extreme + OBV slope (trend + volume)."""
 
-    stoploss = -0.019
+    stoploss = -0.013
     minimal_roi = {"0": 0.015, "55": 0.0075, "160": 0}
     pair_cooldown_minutes = 115
     startup_candle_count = 60
@@ -188,7 +188,7 @@ class SupertrendRsiObvComboStrategy(_LiteBase):
 class DonchianAdxVolComboStrategy(_LiteBase):
     """Donchian breakout + ADX trend filter + volume spike (breakout family)."""
 
-    stoploss = -0.022
+    stoploss = -0.016
     minimal_roi = {"0": 0.018, "70": 0.009, "200": 0}
     pair_cooldown_minutes = 140
     startup_candle_count = 60
@@ -229,7 +229,7 @@ class DonchianAdxVolComboStrategy(_LiteBase):
 class StochCmfEmaComboStrategy(_LiteBase):
     """EMA bias + Stoch timing + CMF money-flow confirm (confluence stack)."""
 
-    stoploss = -0.016
+    stoploss = -0.01
     minimal_roi = {"0": 0.012, "45": 0.006, "130": 0}
     pair_cooldown_minutes = 100
 
@@ -284,7 +284,7 @@ class StochCmfEmaComboStrategy(_LiteBase):
 class HmaPpoAtrComboStrategy(_LiteBase):
     """Hull MA trend + PPO momentum cross + ATR expansion filter."""
 
-    stoploss = -0.018
+    stoploss = -0.012
     minimal_roi = {"0": 0.014, "50": 0.007, "150": 0}
     pair_cooldown_minutes = 110
 
@@ -325,7 +325,7 @@ class HmaPpoAtrComboStrategy(_LiteBase):
 class KeltnerStochVolComboStrategy(_LiteBase):
     """Keltner breakout + Stoch not overbought/oversold trap + volume."""
 
-    stoploss = -0.02
+    stoploss = -0.014
     minimal_roi = {"0": 0.015, "55": 0.0075, "160": 0}
     pair_cooldown_minutes = 120
 
@@ -361,7 +361,7 @@ class KeltnerStochVolComboStrategy(_LiteBase):
 class DonchianAdxVolComboTestStrategy(DonchianAdxVolComboStrategy):
     """UI test clone of #8: 1x, SL -3%, no RSI/range chase, custom exit."""
 
-    stoploss = -0.03
+    stoploss = -0.006
     minimal_roi = {'0': 0.012, '60': 0.008, '180': 0.005, '480': 0.0}
     pair_cooldown_minutes = 180
     sim_leverage = 1.0

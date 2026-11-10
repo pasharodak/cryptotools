@@ -13,7 +13,7 @@ from simulation.strategies.LiteFinanceStrategies import _LiteBase
 class ScalpEmaCrossStrategy(_LiteBase):
     """#1 EMA 8/21 cross — classic momentum scalp with volume."""
 
-    stoploss = -0.01
+    stoploss = -0.004
     minimal_roi = {"0": 0.008, "20": 0.004, "60": 0}
     pair_cooldown_minutes = 60
 
@@ -43,7 +43,7 @@ class ScalpEmaCrossStrategy(_LiteBase):
 class ScalpRsiReclaimStrategy(_LiteBase):
     """#2 RSI reclaim — fade extremes after RSI returns from oversold/overbought."""
 
-    stoploss = -0.012
+    stoploss = -0.006
     minimal_roi = {"0": 0.009, "25": 0.0045, "70": 0}
     pair_cooldown_minutes = 75
 
@@ -71,7 +71,7 @@ class ScalpRsiReclaimStrategy(_LiteBase):
 class ScalpBbBounceStrategy(_LiteBase):
     """#3 Bollinger bounce — fade outer band touches in non-trending chop."""
 
-    stoploss = -0.011
+    stoploss = -0.005
     minimal_roi = {"0": 0.008, "30": 0.004, "80": 0}
     pair_cooldown_minutes = 90
 
@@ -100,7 +100,7 @@ class ScalpBbBounceStrategy(_LiteBase):
 class ScalpStochStrategy(_LiteBase):
     """#4 Stochastic cross — %K/%D flip in extreme zones (14,3,3)."""
 
-    stoploss = -0.01
+    stoploss = -0.004
     minimal_roi = {"0": 0.0075, "20": 0.0035, "55": 0}
     pair_cooldown_minutes = 60
 
@@ -131,7 +131,7 @@ class ScalpStochStrategy(_LiteBase):
 class ScalpMacdHistStrategy(_LiteBase):
     """#5 MACD histogram flip — hist crosses zero with EMA trend filter."""
 
-    stoploss = -0.012
+    stoploss = -0.006
     minimal_roi = {"0": 0.009, "30": 0.0045, "90": 0}
     pair_cooldown_minutes = 75
 
@@ -163,7 +163,7 @@ class ScalpMacdHistStrategy(_LiteBase):
 class ScalpEmaCrossTestStrategy(ScalpEmaCrossStrategy):
     """UI test clone of #4: 1x, SL -3%, no RSI/range chase, custom exit."""
 
-    stoploss = -0.03
+    stoploss = -0.006
     minimal_roi = {'0': 0.012, '60': 0.008, '180': 0.005, '480': 0.0}
     pair_cooldown_minutes = 180
     sim_leverage = 1.0

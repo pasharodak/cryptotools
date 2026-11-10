@@ -39,10 +39,15 @@ site/deploy/id_rsa/
 # Local sync staging / bulky model archives
 _prod_sync/
 archives/
+export/
 
 user_data/users.json
 user_data/secrets/
 user_data/tenants/
 user_data/data/
 user_data/logs/
+user_data/grid.demo.env
+user_data/grid.demo.applied
+site/user_data/grid.demo.env
+site/user_data/grid.demo.applied
 

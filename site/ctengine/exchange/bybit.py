@@ -86,11 +86,34 @@ class Bybit(Exchange):
         """
         try:
             if not self._config["dry_run"]:
+                demo = bool(self._config.get("exchange", {}).get("demo_trading", False))
                 if self.trading_mode == TradingMode.FUTURES:
-                    hedge_mode = bool(self._config.get("hedge_mode", False))
-                    position_mode = self._api.set_position_mode(hedge_mode)
-                    self._log_exchange_response("set_position_mode", position_mode)
-                is_unified = self._api.is_unified_enabled()
+                    try:
+                        hedge_mode = bool(self._config.get("hedge_mode", False))
+                        position_mode = self._api.set_position_mode(hedge_mode)
+                        self._log_exchange_response("set_position_mode", position_mode)
+                    except ccxt.PermissionDenied as e:
+                        # Demo API keys often lack account-transfer permissions used by
+                        # some private probes; one-way mode is fine to keep.
+                        if not demo:
+                            raise
+                        logger.warning(
+                            "Bybit demo: skip set_position_mode (%s). Continuing.", e
+                        )
+                try:
+                    is_unified = self._api.is_unified_enabled()
+                except ccxt.PermissionDenied as e:
+                    # query-api needs Transfer/Withdrawal perms; Demo keys usually lack them.
+                    # Demo Trading accounts are Unified Trading Account (UTA).
+                    if not demo:
+                        raise
+                    logger.warning(
+                        "Bybit demo: is_unified_enabled permission denied (%s). "
+                        "Assuming unified account.",
+                        e,
+                    )
+                    self.unified_account = True
+                    return
                 # Returns a tuple of bools, first for margin, second for Account
                 if is_unified and len(is_unified) > 1 and is_unified[1]:
                     self.unified_account = True

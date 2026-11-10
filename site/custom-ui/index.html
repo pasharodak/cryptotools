@@ -3,12 +3,47 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <meta name="theme-color" content="#0f1419" />
   <meta name="mobile-web-app-capable" content="yes" />
   <title>CriptoTools — панель управления</title>
   <link rel="icon" type="image/png" href="bitcoin-icon.png?v=20260801" />
   <link rel="apple-touch-icon" href="bitcoin-icon.png?v=20260801" />
-  <link rel="stylesheet" href="styles.css?v=20260815r" />
+  <link rel="stylesheet" href="styles.css?v=20261108bot" />
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script>
+    (function () {
+      var tg = window.Telegram && window.Telegram.WebApp;
+      if (!tg || !tg.initData) return;
+      try { tg.ready(); } catch (e) {}
+      try { tg.expand(); } catch (e) {}
+      try { if (tg.disableVerticalSwipes) tg.disableVerticalSwipes(); } catch (e) {}
+      try { tg.setHeaderColor("#0b1017"); } catch (e) {}
+      try { tg.setBackgroundColor("#0b1017"); } catch (e) {}
+      try { if (tg.setBottomBarColor) tg.setBottomBarColor("#0b1017"); } catch (e) {}
+      document.documentElement.classList.add("tg-webapp");
+      function applyTelegramChrome() {
+        var sa = tg.safeAreaInset || {};
+        var cs = tg.contentSafeAreaInset || {};
+        var root = document.documentElement;
+        root.style.setProperty("--safe-top", Math.max(sa.top || 0, cs.top || 0) + "px");
+        root.style.setProperty("--safe-bottom", Math.max(sa.bottom || 0, cs.bottom || 0) + "px");
+        root.style.setProperty("--safe-left", Math.max(sa.left || 0, cs.left || 0) + "px");
+        root.style.setProperty("--safe-right", Math.max(sa.right || 0, cs.right || 0) + "px");
+        var h = tg.viewportStableHeight || tg.viewportHeight || 0;
+        if (h) root.style.setProperty("--tg-viewport-height", h + "px");
+      }
+      applyTelegramChrome();
+      if (tg.onEvent) {
+        tg.onEvent("viewportChanged", applyTelegramChrome);
+        tg.onEvent("safeAreaChanged", applyTelegramChrome);
+        tg.onEvent("contentSafeAreaChanged", applyTelegramChrome);
+      }
+      document.addEventListener("DOMContentLoaded", function () {
+        document.body.classList.add("tg-webapp");
+      });
+    })();
+  </script>
 </head>
 <body>
   <div id="login-screen" class="screen">
@@ -19,7 +54,10 @@
         </span>
         <h1>CriptoTools</h1>
       </div>
-      <p class="muted">Тестовые и основные стратегии · Grid · Bybit Grid</p>
+      <p class="muted">Стратегии</p>
+      <p id="login-tg-hint" class="muted strategy-desc hidden">
+        Открыто из Telegram. Если чат привязан в Настройках → Telegram, вход будет без логина и пароля.
+      </p>
       <label>Логин<input id="login-user" type="text" autocomplete="username" /></label>
       <label>Пароль<input id="login-pass" type="password" autocomplete="current-password" /></label>
       <button id="login-btn" class="btn primary">Войти</button>
@@ -28,6 +66,7 @@
   </div>
 
   <div id="app-screen" class="screen hidden">
+    <a class="skip-link" href="#main-content">Перейти к содержимому</a>
     <div id="secrets-banner" class="secrets-banner hidden" role="status">
       Добавьте ключи Bybit в Настройках — без них боты пользователя не запустятся.
     </div>
@@ -44,7 +83,7 @@
             </span>
             <span class="brand-copy">
               <h1>CriptoTools</h1>
-              <p class="muted topbar-sub" id="max-trades-hint">Стратегии · Grid · Bybit Grid · ML gate</p>
+              <p class="muted topbar-sub" id="max-trades-hint">Стратегии</p>
             </span>
           </button>
         </div>
@@ -65,62 +104,82 @@
         <p class="muted menu-desc">Аналитика, справка и настройки панели</p>
         <div class="topbar-actions">
           <div class="toolbar-row toolbar-main">
-            <div class="nav-group" role="group" aria-label="Аналитика">
-              <button id="stats-btn" class="btn btn-nav" type="button" title="Статистика">
+            <div class="nav-dropdown" data-nav-dropdown>
+              <button
+                type="button"
+                class="btn btn-nav nav-dropdown-toggle"
+                aria-expanded="false"
+                aria-haspopup="true"
+                aria-controls="nav-menu-analytics"
+                title="Аналитика"
+              >
                 <span class="nav-glyph" aria-hidden="true">◈</span>
-                <span class="lbl-full">Статистика</span>
-                <span class="lbl-short">Стат</span>
+                <span class="lbl-full">Аналитика</span>
+                <span class="nav-chevron" aria-hidden="true">▾</span>
               </button>
-              <button id="pnl-dashboard-btn" class="btn btn-nav" type="button" data-block="dashboard" title="Дашборд PnL">
-                <span class="nav-glyph" aria-hidden="true">◎</span>
-                <span class="lbl-full">Дашборд</span>
-                <span class="lbl-short">PnL</span>
-              </button>
-              <button id="rating-btn" class="btn btn-nav" type="button" data-block="rating" title="Рейтинг">
-                <span class="nav-glyph" aria-hidden="true">★</span>
-                <span class="lbl-full">Рейтинг</span>
-                <span class="lbl-short">Топ</span>
-              </button>
-              <button id="history-btn" class="btn btn-nav" type="button" data-block="history" title="История сделок">
-                <span class="nav-glyph" aria-hidden="true">☰</span>
-                <span class="lbl-full">История</span>
-                <span class="lbl-short">Ист</span>
-              </button>
+              <div class="nav-dropdown-menu" id="nav-menu-analytics" role="menu" hidden>
+                <button id="stats-btn" class="btn btn-nav nav-dropdown-item" type="button" role="menuitem" title="Статистика">
+                  <span class="nav-glyph" aria-hidden="true">◈</span>
+                  <span class="lbl-full">Статистика</span>
+                </button>
+                <button id="pnl-dashboard-btn" class="btn btn-nav nav-dropdown-item" type="button" role="menuitem" data-block="dashboard" title="Дашборд PnL">
+                  <span class="nav-glyph" aria-hidden="true">◎</span>
+                  <span class="lbl-full">Дашборд</span>
+                </button>
+                <button id="rating-btn" class="btn btn-nav nav-dropdown-item" type="button" role="menuitem" data-block="rating" title="Рейтинг">
+                  <span class="nav-glyph" aria-hidden="true">★</span>
+                  <span class="lbl-full">Рейтинг</span>
+                </button>
+                <button id="history-btn" class="btn btn-nav nav-dropdown-item" type="button" role="menuitem" data-block="history" title="История сделок">
+                  <span class="nav-glyph" aria-hidden="true">☰</span>
+                  <span class="lbl-full">История</span>
+                </button>
+                <button id="charts-btn" class="btn btn-nav nav-dropdown-item" type="button" role="menuitem" data-block="history" title="Графики сделок">
+                  <span class="nav-glyph" aria-hidden="true">▦</span>
+                  <span class="lbl-full">Графики</span>
+                </button>
+                <button id="report-btn" class="btn btn-nav nav-dropdown-item" type="button" role="menuitem" data-block="report" title="Отчёт по сделкам">
+                  <span class="nav-glyph" aria-hidden="true">✎</span>
+                  <span class="lbl-full">Отчёт</span>
+                </button>
+              </div>
             </div>
-            <div class="nav-group" role="group" aria-label="Справка">
-              <button id="info-btn" class="btn btn-nav" type="button" title="Инфо по стратегиям">
+            <div class="nav-dropdown" data-nav-dropdown>
+              <button
+                type="button"
+                class="btn btn-nav nav-dropdown-toggle"
+                aria-expanded="false"
+                aria-haspopup="true"
+                aria-controls="nav-menu-help"
+                title="Справка"
+              >
                 <span class="nav-glyph" aria-hidden="true">ⓘ</span>
-                <span class="lbl-full">Инфо</span>
-                <span class="lbl-short">Инфо</span>
+                <span class="lbl-full">Справка</span>
+                <span class="nav-chevron" aria-hidden="true">▾</span>
               </button>
-              <button id="guide-btn" class="btn btn-nav" type="button" title="Инструкция">
-                <span class="nav-glyph" aria-hidden="true">▸</span>
-                <span class="lbl-full">Инструкция</span>
-                <span class="lbl-short">Гайд</span>
-              </button>
-              <button id="changelog-btn" class="btn btn-nav" type="button" title="Изменения">
-                <span class="nav-glyph" aria-hidden="true">±</span>
-                <span class="lbl-full">Изменения</span>
-                <span class="lbl-short">Чендж</span>
-              </button>
+              <div class="nav-dropdown-menu" id="nav-menu-help" role="menu" hidden>
+                <button id="info-btn" class="btn btn-nav nav-dropdown-item" type="button" role="menuitem" title="Инфо по стратегиям">
+                  <span class="nav-glyph" aria-hidden="true">ⓘ</span>
+                  <span class="lbl-full">Инфо</span>
+                </button>
+                <button id="guide-btn" class="btn btn-nav nav-dropdown-item" type="button" role="menuitem" title="Инструкция">
+                  <span class="nav-glyph" aria-hidden="true">▸</span>
+                  <span class="lbl-full">Инструкция</span>
+                </button>
+                <button id="changelog-btn" class="btn btn-nav nav-dropdown-item" type="button" role="menuitem" title="Изменения">
+                  <span class="nav-glyph" aria-hidden="true">±</span>
+                  <span class="lbl-full">Изменения</span>
+                </button>
+                <button id="logs-btn" class="btn btn-nav nav-dropdown-item" type="button" role="menuitem" title="Логи">
+                  <span class="nav-glyph" aria-hidden="true">≡</span>
+                  <span class="lbl-full">Логи</span>
+                </button>
+              </div>
             </div>
-            <div class="nav-group nav-group-system" role="group" aria-label="Система">
-              <button id="logs-btn" class="btn btn-nav" type="button" title="Логи">
-                <span class="nav-glyph" aria-hidden="true">≡</span>
-                <span class="lbl-full">Логи</span>
-                <span class="lbl-short">Логи</span>
-              </button>
-              <button id="settings-btn" class="btn btn-nav" type="button" title="Настройки">
-                <span class="nav-glyph" aria-hidden="true">⚙</span>
-                <span class="lbl-full">Настройки</span>
-                <span class="lbl-short">Настр</span>
-              </button>
-              <button id="refresh-btn" class="btn btn-nav btn-nav-accent" type="button" title="Обновить">
-                <span class="nav-glyph" aria-hidden="true">↻</span>
-                <span class="lbl-full">Обновить</span>
-                <span class="lbl-short">↻</span>
-              </button>
-            </div>
+            <button id="settings-btn" class="btn btn-nav nav-settings-btn" type="button" title="Настройки">
+              <span class="nav-glyph" aria-hidden="true">⚙</span>
+              <span class="lbl-full">Настройки</span>
+            </button>
           </div>
           <div class="toolbar-row toolbar-meta">
             <div id="trades-summary" class="trades-summary" aria-live="polite">—</div>
@@ -135,7 +194,7 @@
     <div id="reconcile-banner" class="reconcile-banner hidden" role="alert" aria-live="polite"></div>
 
     <div id="dashboard-view">
-    <main class="grid-4">
+    <main class="grid-4" id="main-content" tabindex="-1">
       <section class="panel panel-test-strategies" id="panel-test-strategies" data-block="test_strategies">
         <div class="panel-head">
           <div class="panel-title">
@@ -150,8 +209,23 @@
               </details>
             </div>
             <p class="muted" id="test-strategy-active-name">—</p>
+            <label class="panel-trade-on">
+              <span>Биржа</span>
+              <select id="trade-on-test-select" aria-label="Биржа для тестовых стратегий">
+                <option value="bybit">Bybit</option>
+                <option value="binance">Binance</option>
+                <option value="all">Все</option>
+              </select>
+            </label>
           </div>
           <div class="panel-head-actions">
+            <button
+              type="button"
+              class="btn btn-sm primary hidden js-strategy-run-scan"
+              id="test-strategy-run-scan"
+              data-admin-only
+              title="Скан пар по включённым стратегиям → whitelist Signal Engine → reload"
+            >Запустить скан</button>
             <button type="button" class="btn ghost btn-sm panel-stats-btn" data-stats-scope="test_strategy">Статистика</button>
             <span class="badge" id="test-strategy-state">—</span>
           </div>
@@ -170,9 +244,26 @@
             <span class="collapsible-chevron" aria-hidden="true">▸</span>
           </button>
           <div class="collapsible-body" id="test-strategy-settings-body">
+            <div id="test-strategy-scan-actions" class="actions test-strategy-scan-actions"></div>
             <div id="test-strategy-risk-panel" class="strategy-risk-bar"></div>
+            <div id="test-strategy-time-close-panel" class="strategy-risk-bar"></div>
             <div class="stats" id="test-strategy-stats"></div>
           </div>
+        </div>
+        <div class="collapsible-section is-collapsed bot-balance-collapsible" id="test-strategy-balance-section">
+          <button
+            type="button"
+            class="collapsible-toggle"
+            id="test-strategy-balance-toggle"
+            data-collapsible-toggle
+            aria-expanded="false"
+            aria-controls="test-strategy-balance-body"
+          >
+            <span class="collapsible-title">Баланс и прибыль</span>
+            <span class="collapsible-sub muted" id="test-strategy-balance-summary">—</span>
+            <span class="collapsible-chevron" aria-hidden="true">▸</span>
+          </button>
+          <div class="collapsible-body" id="test-strategy-balance-body"></div>
         </div>
         <div class="collapsible-section is-collapsed" id="test-strategy-panel-section">
           <button
@@ -183,15 +274,13 @@
             aria-expanded="false"
             aria-controls="test-strategy-panel-body"
           >
-            <span class="collapsible-title">Тестовые стратегии</span>
+            <span class="collapsible-title-group">
+              <span class="collapsible-title">Тестовые стратегии</span>
+            </span>
             <span class="collapsible-sub muted" id="test-strategy-panel-summary">—</span>
             <span class="collapsible-chevron" aria-hidden="true">▸</span>
           </button>
           <div class="collapsible-body" id="test-strategy-panel-body">
-            <details class="ui-hint ui-hint-block">
-              <summary class="ui-hint-btn">О блоке</summary>
-              <div class="ui-hint-body">Тестовый блок #101–115. Админ переносит выбранные в «Стратегии» (Настройки → Размещение). Прод-оригиналы скрыты из UI.</div>
-            </details>
             <div id="test-strategy-enable-bulk" class="strategy-enable-bulk"></div>
             <div id="test-strategy-ml-conf-bulk" class="strategy-ml-conf-bulk"></div>
             <ul id="test-strategy-panel-toggles" class="strategy-toggle-list"></ul>
@@ -233,6 +322,107 @@
         </div>
       </section>
 
+      <section class="panel panel-htf1h hidden" id="panel-htf1h" data-block="htf1h">
+        <div class="panel-head">
+          <div class="panel-title">
+            <div class="panel-title-row">
+              <h2>1-часовые</h2>
+              <details class="ui-hint">
+                <summary class="ui-hint-btn" aria-label="Подсказка">i</summary>
+                <div class="ui-hint-body">
+                  Тот же бот стратегий, отдельный блок. Сигнал по закрытой часовой свече.<br />
+                  У админа здесь только тестовые. У пользователя — только те, что он сам перенёс в основные.<br />
+                  Перенос — в своих Настройках, меню «Перенос». Стейк, стоп и тейк — свои, для этого аккаунта.
+                </div>
+              </details>
+            </div>
+            <p class="muted" id="htf1h-active-name">—</p>
+          </div>
+          <div class="panel-head-actions">
+            <button type="button" class="btn ghost btn-sm panel-stats-btn" data-stats-scope="htf1h">Статистика</button>
+            <span class="badge" id="htf1h-state">—</span>
+          </div>
+        </div>
+        <div class="collapsible-section is-collapsed bot-settings-collapsible" id="htf1h-settings-section">
+          <button type="button" class="collapsible-toggle" id="htf1h-settings-toggle" data-collapsible-toggle aria-expanded="false" aria-controls="htf1h-settings-body">
+            <span class="collapsible-title">Настройки</span>
+            <span class="collapsible-sub muted" id="htf1h-settings-summary">развернуть</span>
+            <span class="collapsible-chevron" aria-hidden="true">▸</span>
+          </button>
+          <div class="collapsible-body" id="htf1h-settings-body">
+            <div class="stats" id="htf1h-stats"></div>
+            <div class="htf-stake-bar" id="htf1h-stake"></div>
+          </div>
+        </div>
+        <div class="collapsible-section is-collapsed bot-balance-collapsible" id="htf1h-balance-section">
+          <button
+            type="button"
+            class="collapsible-toggle"
+            id="htf1h-balance-toggle"
+            data-collapsible-toggle
+            aria-expanded="false"
+            aria-controls="htf1h-balance-body"
+          >
+            <span class="collapsible-title">Баланс и прибыль</span>
+            <span class="collapsible-sub muted" id="htf1h-balance-summary">—</span>
+            <span class="collapsible-chevron" aria-hidden="true">▸</span>
+          </button>
+          <div class="collapsible-body" id="htf1h-balance-body"></div>
+        </div>
+        <div class="collapsible-section is-collapsed" id="htf1h-panel-section">
+          <button
+            type="button"
+            class="collapsible-toggle"
+            id="htf1h-panel-toggle"
+            data-collapsible-toggle
+            aria-expanded="false"
+            aria-controls="htf1h-panel-body"
+          >
+            <span class="collapsible-title">1-часовые стратегии</span>
+            <span class="collapsible-sub muted" id="htf1h-panel-summary">—</span>
+            <span class="collapsible-chevron" aria-hidden="true">▸</span>
+          </button>
+          <div class="collapsible-body" id="htf1h-panel-body">
+            <div id="htf1h-enable-bulk" class="strategy-enable-bulk"></div>
+            <ul id="htf1h-panel-toggles" class="strategy-toggle-list"></ul>
+          </div>
+        </div>
+        <div class="collapsible-section is-collapsed trades-collapsible" id="htf1h-trades-section">
+          <button
+            type="button"
+            class="collapsible-toggle"
+            id="htf1h-trades-toggle"
+            data-collapsible-toggle
+            aria-expanded="false"
+            aria-controls="htf1h-trades-body"
+          >
+            <span class="collapsible-title">Открытые сделки</span>
+            <span class="collapsible-sub muted" id="htf1h-trades-summary">—</span>
+            <span class="collapsible-chevron" aria-hidden="true">▸</span>
+          </button>
+          <div class="collapsible-body" id="htf1h-trades-body">
+            <div class="trades-list" id="htf1h-trades"></div>
+          </div>
+        </div>
+        <div class="collapsible-section is-collapsed pairs-collapsible" id="htf1h-pairs-section">
+          <button
+            type="button"
+            class="collapsible-toggle"
+            id="htf1h-pairs-toggle"
+            data-collapsible-toggle
+            aria-expanded="false"
+            aria-controls="htf1h-pairs-body"
+          >
+            <span class="collapsible-title">Белый список</span>
+            <span class="collapsible-sub muted" id="htf1h-pairs-summary">—</span>
+            <span class="collapsible-chevron" aria-hidden="true">▸</span>
+          </button>
+          <div class="collapsible-body" id="htf1h-pairs-body">
+            <p class="pairs" id="htf1h-pairs"></p>
+          </div>
+        </div>
+      </section>
+
       <section class="panel panel-strategy" id="panel-strategy" data-block="strategy">
         <div class="panel-head">
           <div class="panel-title">
@@ -246,10 +436,56 @@
               </details>
             </div>
             <p class="muted strategy-active" id="strategy-active-name">—</p>
+            <label class="panel-trade-on">
+              <span>Биржа</span>
+              <select id="trade-on-main-select" aria-label="Биржа для основных стратегий">
+                <option value="bybit">Bybit</option>
+                <option value="binance">Binance</option>
+                <option value="all">Все</option>
+              </select>
+            </label>
           </div>
           <div class="panel-head-actions">
+            <button
+              type="button"
+              class="btn btn-sm primary hidden js-strategy-run-scan"
+              id="strategy-run-scan"
+              data-admin-only
+              title="Скан пар по включённым стратегиям → whitelist в Signal Engine → reload (открытие сделок через executor/ML gate)"
+            >Запустить скан</button>
             <button type="button" class="btn ghost btn-sm panel-stats-btn" data-stats-scope="strategy">Статистика</button>
             <span class="badge" id="strategy-state">—</span>
+          </div>
+        </div>
+        <div class="settings-section placement-in-strategy" data-placement-manage id="strategy-placement-section">
+          <div class="settings-section-head">
+            <h3>Размещение стратегий</h3>
+            <details class="ui-hint">
+              <summary class="ui-hint-btn" aria-label="Подсказка">i</summary>
+              <div class="ui-hint-body">Тестовые всегда показывают весь тестовый набор — только вкл/выкл (Demo API). «Перенос» копирует выбранные в Основные (из Тестовых не убирает). После копирования стратегия в Основных выключена.</div>
+            </details>
+          </div>
+          <p id="placement-msg" class="pair-msg hidden"></p>
+          <div class="placement-tags strategy-tickers" id="placement-tags" data-placement-tags-wrap>
+            <button type="button" class="strategy-tickers-btn" id="placement-tags-btn" data-placement-tags-btn aria-haspopup="dialog" aria-expanded="false" title="Перенос между тестовыми, 1-часовыми и основными">
+              <span class="strategy-tickers-label">Перенос</span>
+              <span class="strategy-tickers-value" id="placement-tags-count">0</span>
+              <span class="strategy-tickers-caret" aria-hidden="true">▾</span>
+            </button>
+            <div class="strategy-tickers-panel placement-tags-panel" id="placement-tags-panel" data-placement-tags-panel hidden>
+              <div class="placement-tag-group">
+                <div class="strategy-tickers-head" id="placement-test-head">Тестовые</div>
+                <div id="placement-test-list" class="placement-tag-list"></div>
+              </div>
+              <div class="placement-tag-group">
+                <div class="strategy-tickers-head">1-часовые</div>
+                <div id="placement-htf-list" class="placement-tag-list"></div>
+              </div>
+              <div class="placement-tag-group">
+                <div class="strategy-tickers-head">Основные</div>
+                <div id="placement-main-list" class="placement-tag-list"></div>
+              </div>
+            </div>
           </div>
         </div>
         <div class="collapsible-section is-collapsed bot-settings-collapsible" id="strategy-settings-section">
@@ -267,11 +503,27 @@
           </button>
           <div class="collapsible-body" id="strategy-settings-body">
             <div id="strategy-risk-panel" class="strategy-risk-bar"></div>
+            <div id="strategy-time-close-panel" class="strategy-risk-bar"></div>
             <div id="strategy-dual-hedge" class="strategy-dual-hedge"></div>
             <div class="stats" id="strategy-stats"></div>
             <div class="actions" id="strategy-actions"></div>
             <p class="muted strategy-scan-info" id="strategy-scan-info">Скан пар: —</p>
           </div>
+        </div>
+        <div class="collapsible-section is-collapsed bot-balance-collapsible" id="strategy-balance-section">
+          <button
+            type="button"
+            class="collapsible-toggle"
+            id="strategy-balance-toggle"
+            data-collapsible-toggle
+            aria-expanded="false"
+            aria-controls="strategy-balance-body"
+          >
+            <span class="collapsible-title">Баланс и прибыль</span>
+            <span class="collapsible-sub muted" id="strategy-balance-summary">—</span>
+            <span class="collapsible-chevron" aria-hidden="true">▸</span>
+          </button>
+          <div class="collapsible-body" id="strategy-balance-body"></div>
         </div>
         <div class="collapsible-section is-collapsed" id="strategy-panel-section">
           <button
@@ -282,18 +534,28 @@
             aria-expanded="false"
             aria-controls="strategy-panel-body"
           >
-            <span class="collapsible-title">Стратегии</span>
+            <span class="collapsible-title-group">
+              <span class="collapsible-title">Стратегии</span>
+            </span>
             <span class="collapsible-sub muted" id="strategy-panel-summary">—</span>
             <span class="collapsible-chevron" aria-hidden="true">▸</span>
           </button>
           <div class="collapsible-body" id="strategy-panel-body">
-            <details class="ui-hint ui-hint-block">
-              <summary class="ui-hint-btn">О блоке</summary>
-              <div class="ui-hint-body">Стратегии с ML gate. Включите нужные — вход по сигналу любой активной. Перенос из тестовых — в Настройки → Размещение.</div>
-            </details>
-            <div id="strategy-enable-bulk" class="strategy-enable-bulk"></div>
-            <div id="strategy-ml-conf-bulk" class="strategy-ml-conf-bulk"></div>
-            <ul id="strategy-panel-toggles" class="strategy-toggle-list"></ul>
+            <div class="strategy-mode-tags" id="strategy-live-wrap">
+              <div class="strategy-mode-tag-row">
+                <span class="mode-badge mode-badge-live">Live</span>
+                <span class="muted strategy-mode-hint" id="strategy-live-hint">Реальный API</span>
+              </div>
+              <div id="strategy-enable-bulk" class="strategy-enable-bulk"></div>
+              <div id="strategy-ml-conf-bulk" class="strategy-ml-conf-bulk"></div>
+              <ul id="strategy-panel-toggles" class="strategy-toggle-list"></ul>
+            </div>
+            <div class="strategy-mode-tags hidden" id="strategy-demo-wrap">
+              <div class="strategy-mode-tag-row">
+                <span class="mode-badge mode-badge-demo">Demo</span>
+                <span class="muted strategy-mode-hint">Те же основные стратегии на Demo API. Включение автоторговли — в Настройках (Demo).</span>
+              </div>
+            </div>
           </div>
         </div>
         <div class="collapsible-section is-collapsed trades-collapsible" id="strategy-trades-section">
@@ -332,11 +594,251 @@
         </div>
       </section>
 
-      <section class="panel panel-grid" id="panel-grid" data-block="grid">
+      <section class="panel panel-llm" id="panel-llm" data-block="llm">
         <div class="panel-head">
           <div class="panel-title">
-            <h2>Grid (волатильность) + ML gate</h2>
-            <p class="muted">Bollinger + ADX · ML-фильтр на входе</p>
+            <div class="panel-title-row">
+              <h2>DeepSeek</h2>
+              <details class="ui-hint">
+                <summary class="ui-hint-btn" aria-label="Подсказка">i</summary>
+                <div class="ui-hint-body">
+                  Отдельный бот, не из списка стратегий. Свечи 5m выбранных пар уходят в DeepSeek через sharellm (модель deepseek-v4.1-flash). Вход при уверенности не ниже порога на карточке (по умолчанию 65%). Стоп −2% фиксирован. Тейк, стейк, лимит, порог и список пар задаются здесь. Пары — в кнопке «Тикеры».
+                </div>
+              </details>
+            </div>
+            <p class="muted" id="llm-subtitle">BTC ETH SOL BNB XRP DOGE ADA AVAX LINK LTC DOT TON · цикл 30 мин · стоп −2%</p>
+          </div>
+          <div class="panel-head-actions">
+            <button type="button" class="btn ghost btn-sm panel-stats-btn" data-stats-scope="llm">Статистика</button>
+            <span class="badge" id="llm-state">—</span>
+          </div>
+        </div>
+        <div class="llm-settings" id="llm-settings">
+          <label class="llm-field">
+            <span>Тейк, %</span>
+            <input id="llm-tp" class="numeric-setting-input" type="number" min="0.5" max="20" step="0.1" value="3" />
+          </label>
+          <label class="llm-field">
+            <span>Стейк, USDT</span>
+            <input id="llm-stake" class="numeric-setting-input" type="number" min="1" max="100" step="1" value="5" />
+          </label>
+          <label class="llm-field">
+            <span>Макс. открытых</span>
+            <input id="llm-max" class="numeric-setting-input" type="number" min="0" max="10" step="1" value="1" />
+          </label>
+          <label class="llm-field">
+            <span>Уверенность, %</span>
+            <input id="llm-conf" class="numeric-setting-input" type="number" min="50" max="95" step="1" value="65" title="Минимальная уверенность модели для входа" />
+          </label>
+          <button type="button" class="btn btn-sm" id="llm-save">Сохранить</button>
+          <button type="button" class="btn btn-sm primary" id="llm-toggle">Старт</button>
+        </div>
+        <div class="strategy-tickers" id="llm-tickers" data-llm-tickers-wrap>
+          <button type="button" class="strategy-tickers-btn" id="llm-tickers-btn" data-strategy-tickers-btn="llm" aria-haspopup="dialog" aria-expanded="false" title="Пары этого бота">
+            <span class="strategy-tickers-label">Тикеры</span>
+            <span class="strategy-tickers-value" id="llm-tickers-count">0</span>
+            <span class="strategy-tickers-caret" aria-hidden="true">▾</span>
+          </button>
+          <div class="strategy-tickers-panel" id="llm-tickers-panel" hidden>
+            <div class="strategy-tickers-head">Тикеры · DeepSeek</div>
+            <ul class="strategy-tickers-list" id="llm-pairs"></ul>
+            <form class="strategy-tickers-add" id="llm-pair-form">
+              <input type="text" class="strategy-tickers-input" id="llm-pair-input" placeholder="BTC или BTC/USDT:USDT" autocomplete="off" />
+              <button type="submit" class="btn btn-sm" id="llm-pair-add">Добавить</button>
+            </form>
+          </div>
+        </div>
+        <p class="muted llm-decision" id="llm-decision">—</p>
+        <p class="pair-msg hidden" id="llm-msg"></p>
+        <div class="collapsible-section is-collapsed trades-collapsible" id="llm-trades-section">
+          <button
+            type="button"
+            class="collapsible-toggle"
+            id="llm-trades-toggle"
+            data-collapsible-toggle
+            aria-expanded="false"
+            aria-controls="llm-trades-body"
+          >
+            <span class="collapsible-title">Открытые сделки</span>
+            <span class="collapsible-sub muted" id="llm-trades-summary">—</span>
+            <span class="collapsible-chevron" aria-hidden="true">▸</span>
+          </button>
+          <div class="collapsible-body" id="llm-trades-body">
+            <div class="trades-list" id="llm-trades"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel panel-llm panel-llm50" id="panel-llm50" data-block="llm">
+        <div class="panel-head">
+          <div class="panel-title">
+            <div class="panel-title-row">
+              <h2>DeepSeek 50</h2>
+              <details class="ui-hint">
+                <summary class="ui-hint-btn" aria-label="Подсказка">i</summary>
+                <div class="ui-hint-body">
+                  Отдельный счёт модели на 50 USDT маржи и 25 пар. Плечо 3x. Тот же шлюз sharellm, модель deepseek-v4.1-flash. DeepSeek сам выбирает, что открыть, какого размера и когда закрыть. Ниже порога уверенности нет: режет только бюджет. Статистика — по сделкам этого бота.
+                </div>
+              </details>
+            </div>
+            <p class="muted" id="llm50-subtitle">бюджет 50 USDT · 25 пар · плечо 3x · цикл 30 мин</p>
+          </div>
+          <div class="panel-head-actions">
+            <button type="button" class="btn ghost btn-sm panel-stats-btn" data-stats-scope="llm50">Статистика</button>
+            <span class="badge" id="llm50-state">—</span>
+          </div>
+        </div>
+        <div class="llm50-stats" id="llm50-stats">
+          <div><span>Свободно</span><strong id="llm50-free">50</strong></div>
+          <div><span>В сделках</span><strong id="llm50-used">0</strong></div>
+          <div><span>Результат</span><strong id="llm50-pnl">0</strong></div>
+          <div><span>Сделки</span><strong id="llm50-count">0</strong></div>
+        </div>
+        <div class="llm-settings">
+          <button type="button" class="btn btn-sm primary" id="llm50-toggle">Старт</button>
+        </div>
+        <p class="muted llm-decision" id="llm50-decision">—</p>
+        <p class="pair-msg hidden" id="llm50-msg"></p>
+        <div class="collapsible-section is-collapsed trades-collapsible" id="llm50-trades-section">
+          <button
+            type="button"
+            class="collapsible-toggle"
+            id="llm50-trades-toggle"
+            data-collapsible-toggle
+            aria-expanded="false"
+            aria-controls="llm50-trades-body"
+          >
+            <span class="collapsible-title">Открытые сделки</span>
+            <span class="collapsible-sub muted" id="llm50-trades-summary">—</span>
+            <span class="collapsible-chevron" aria-hidden="true">▸</span>
+          </button>
+          <div class="collapsible-body" id="llm50-trades-body">
+            <div class="trades-list" id="llm50-trades"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel panel-llm hidden" id="panel-cursor" data-block="llm">
+        <div class="panel-head">
+          <div class="panel-title">
+            <div class="panel-title-row">
+              <h2>Cursor</h2>
+              <details class="ui-hint">
+                <summary class="ui-hint-btn" aria-label="Подсказка">i</summary>
+                <div class="ui-hint-body">
+                  Снят. Используйте Cursor 50 (vibe-trade).
+                </div>
+              </details>
+            </div>
+            <p class="muted" id="cursor-subtitle">retired</p>
+          </div>
+          <div class="panel-head-actions">
+            <button type="button" class="btn ghost btn-sm panel-stats-btn" data-stats-scope="cursor">Статистика</button>
+            <span class="badge" id="cursor-state">—</span>
+          </div>
+        </div>
+        <div class="llm-settings" id="cursor-settings">
+          <label class="llm-field">
+            <span>Тейк, %</span>
+            <input id="cursor-tp" class="numeric-setting-input" type="number" min="0.5" max="20" step="0.1" value="3" />
+          </label>
+          <label class="llm-field">
+            <span>Стейк, USDT</span>
+            <input id="cursor-stake" class="numeric-setting-input" type="number" min="1" max="100" step="1" value="5" />
+          </label>
+          <label class="llm-field">
+            <span>Макс. открытых</span>
+            <input id="cursor-max" class="numeric-setting-input" type="number" min="0" max="10" step="1" value="1" />
+          </label>
+          <label class="llm-field">
+            <span>Уверенность, %</span>
+            <input id="cursor-conf" class="numeric-setting-input" type="number" min="50" max="95" step="1" value="65" title="Минимальная уверенность модели для входа" />
+          </label>
+          <button type="button" class="btn btn-sm" id="cursor-save">Сохранить</button>
+          <button type="button" class="btn btn-sm primary" id="cursor-toggle">Старт</button>
+        </div>
+        <div class="strategy-tickers" id="cursor-tickers">
+          <button type="button" class="strategy-tickers-btn" id="cursor-tickers-btn" aria-haspopup="dialog" aria-expanded="false" title="Пары этого бота">
+            <span class="strategy-tickers-label">Тикеры</span>
+            <span class="strategy-tickers-value" id="cursor-tickers-count">0</span>
+            <span class="strategy-tickers-caret" aria-hidden="true">▾</span>
+          </button>
+          <div class="strategy-tickers-panel" id="cursor-tickers-panel" hidden>
+            <div class="strategy-tickers-head">Тикеры · Cursor</div>
+            <ul class="strategy-tickers-list" id="cursor-pairs"></ul>
+            <form class="strategy-tickers-add" id="cursor-pair-form">
+              <input type="text" class="strategy-tickers-input" id="cursor-pair-input" placeholder="BTC или BTC/USDT:USDT" autocomplete="off" />
+              <button type="submit" class="btn btn-sm" id="cursor-pair-add">Добавить</button>
+            </form>
+          </div>
+        </div>
+        <p class="muted llm-decision" id="cursor-decision">—</p>
+        <p class="pair-msg hidden" id="cursor-msg"></p>
+        <div class="collapsible-section is-collapsed trades-collapsible" id="cursor-trades-section">
+          <button type="button" class="collapsible-toggle" id="cursor-trades-toggle" data-collapsible-toggle aria-expanded="false" aria-controls="cursor-trades-body">
+            <span class="collapsible-title">Открытые сделки</span>
+            <span class="collapsible-sub muted" id="cursor-trades-summary">—</span>
+            <span class="collapsible-chevron" aria-hidden="true">▸</span>
+          </button>
+          <div class="collapsible-body" id="cursor-trades-body">
+            <div class="trades-list" id="cursor-trades"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel panel-llm panel-llm50 hidden" id="panel-cursor50" data-block="cursor50">
+        <div class="panel-head">
+          <div class="panel-title">
+            <div class="panel-title-row">
+              <h2>Cursor 50</h2>
+              <details class="ui-hint">
+                <summary class="ui-hint-btn" aria-label="Подсказка">i</summary>
+                <div class="ui-hint-body">
+                  Бюджет 50 USDT маржи и 25 пар, плечо 3x. Сигналы — multi-agent consensus vibe-trade (DebateOrchestrator): вход/выход, размер, стоп и тейк. Режет только бюджет; порога уверенности нет.
+                </div>
+              </details>
+            </div>
+            <p class="muted" id="cursor50-subtitle">бюджет 50 USDT · vibe-trade · 25 пар · плечо 3x · цикл 30 мин</p>
+          </div>
+          <div class="panel-head-actions">
+            <button type="button" class="btn ghost btn-sm panel-stats-btn" data-stats-scope="cursor50">Статистика</button>
+            <span class="badge" id="cursor50-state">—</span>
+          </div>
+        </div>
+        <div class="llm50-stats" id="cursor50-stats">
+          <div><span>Свободно</span><strong id="cursor50-free">50</strong></div>
+          <div><span>В сделках</span><strong id="cursor50-used">0</strong></div>
+          <div><span>Результат</span><strong id="cursor50-pnl">0</strong></div>
+          <div><span>Сделки</span><strong id="cursor50-count">0</strong></div>
+        </div>
+        <div class="llm-settings">
+          <button type="button" class="btn btn-sm primary" id="cursor50-toggle">Старт</button>
+        </div>
+        <p class="muted llm-decision" id="cursor50-decision">—</p>
+        <p class="pair-msg hidden" id="cursor50-msg"></p>
+        <div class="collapsible-section is-collapsed trades-collapsible" id="cursor50-trades-section">
+          <button type="button" class="collapsible-toggle" id="cursor50-trades-toggle" data-collapsible-toggle aria-expanded="false" aria-controls="cursor50-trades-body">
+            <span class="collapsible-title">Открытые сделки</span>
+            <span class="collapsible-sub muted" id="cursor50-trades-summary">—</span>
+            <span class="collapsible-chevron" aria-hidden="true">▸</span>
+          </button>
+          <div class="collapsible-body" id="cursor50-trades-body">
+            <div class="trades-list" id="cursor50-trades"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel panel-grid hidden" id="panel-grid" data-block="grid">
+        <div class="panel-head">
+          <div class="panel-title">
+            <div class="panel-title-row">
+              <h2>Grid · боковик</h2>
+              <details class="ui-hint">
+                <summary class="ui-hint-btn" aria-label="Подсказка">i</summary>
+                <div class="ui-hint-body" id="grid-ml-gate">Demo-счёт администратора. Канал 1м/5м, вход у края, тейк 65% ширины, стоп 50% за каналом. ML gate на входе.</div>
+              </details>
+            </div>
+            <p class="muted">Только администратор · торгует на Demo Bybit</p>
           </div>
           <div class="panel-head-actions">
             <button type="button" class="btn ghost btn-sm panel-stats-btn" data-stats-scope="grid">Статистика</button>
@@ -357,14 +859,25 @@
             <span class="collapsible-chevron" aria-hidden="true">▸</span>
           </button>
           <div class="collapsible-body" id="grid-settings-body">
-            <details class="ui-hint ui-hint-block">
-              <summary class="ui-hint-btn">ML gate</summary>
-              <div class="ui-hint-body" id="grid-ml-gate">ML gate · XGBoost · profit ≥60% — сценарий live_grid</div>
-            </details>
             <div class="stats" id="grid-stats"></div>
             <div class="actions" id="grid-actions"></div>
             <p class="muted grid-scan-info" id="grid-scan-info">Скан боковика: —</p>
           </div>
+        </div>
+        <div class="collapsible-section is-collapsed bot-balance-collapsible" id="grid-balance-section">
+          <button
+            type="button"
+            class="collapsible-toggle"
+            id="grid-balance-toggle"
+            data-collapsible-toggle
+            aria-expanded="false"
+            aria-controls="grid-balance-body"
+          >
+            <span class="collapsible-title">Баланс и прибыль</span>
+            <span class="collapsible-sub muted" id="grid-balance-summary">—</span>
+            <span class="collapsible-chevron" aria-hidden="true">▸</span>
+          </button>
+          <div class="collapsible-body" id="grid-balance-body"></div>
         </div>
         <div class="collapsible-section is-collapsed trades-collapsible" id="grid-trades-section">
           <button
@@ -402,10 +915,16 @@
         </div>
       </section>
 
-      <section class="panel panel-bybitgrid" id="panel-bybitgrid" data-block="bybitgrid">
+      <section class="panel panel-bybitgrid hidden" id="panel-bybitgrid" data-block="bybitgrid">
         <div class="panel-head">
           <div class="panel-title">
-            <h2>Bybit Grid</h2>
+            <div class="panel-title-row">
+              <h2>Bybit Grid</h2>
+              <details class="ui-hint">
+                <summary class="ui-hint-btn" aria-label="Подсказка">i</summary>
+                <div class="ui-hint-body">Нативная Futures Grid на Bybit. ML gate не использует. Лимит активных сеток — в настройках.</div>
+              </details>
+            </div>
             <p class="muted">Нативная сетка биржи · Long / Short / Neutral</p>
           </div>
           <div class="panel-head-actions">
@@ -434,6 +953,21 @@
             <h3 class="bybitgrid-defaults-title">Параметры по умолчанию</h3>
             <p class="pairs" id="bybitgrid-defaults"></p>
           </div>
+        </div>
+        <div class="collapsible-section is-collapsed bot-balance-collapsible" id="bybitgrid-balance-section">
+          <button
+            type="button"
+            class="collapsible-toggle"
+            id="bybitgrid-balance-toggle"
+            data-collapsible-toggle
+            aria-expanded="false"
+            aria-controls="bybitgrid-balance-body"
+          >
+            <span class="collapsible-title">Баланс и прибыль</span>
+            <span class="collapsible-sub muted" id="bybitgrid-balance-summary">—</span>
+            <span class="collapsible-chevron" aria-hidden="true">▸</span>
+          </button>
+          <div class="collapsible-body" id="bybitgrid-balance-body"></div>
         </div>
         <div class="collapsible-section is-collapsed trades-collapsible" id="bybitgrid-bots-section">
           <button
@@ -464,15 +998,22 @@
         </div>
       </section>
 
-      <section class="panel panel-finder panel-finder-retired" id="panel-finder" data-block="finder">
+      <section class="panel panel-finder hidden" id="panel-finder" data-block="finder">
         <div class="panel-head">
-          <h2>ML Finder</h2>
+          <div class="panel-title">
+            <div class="panel-title-row">
+              <h2>ML Finder</h2>
+              <details class="ui-hint">
+                <summary class="ui-hint-btn" aria-label="Подсказка">i</summary>
+                <div class="ui-hint-body">TradeFinderStrategy — barrier Transformer (thr≥60%). Не влияет на стратегии и Grid.</div>
+              </details>
+            </div>
+          </div>
           <div class="panel-head-actions">
             <button type="button" class="btn ghost btn-sm panel-stats-btn" data-stats-scope="finder">Статистика</button>
-            <span class="badge" id="finder-state" title="XGBoost scanner + pnl classifier gate">—</span>
+            <span class="badge" id="finder-state" title="Barrier Transformer scanner · thr ≥60%">—</span>
           </div>
         </div>
-        <p class="panel-retired-note">Пока отключён на сервере. TradeFinderStrategy — сканер рынка + pnl gate. Не влияет на стратегии и Grid.</p>
         <div class="collapsible-section is-collapsed bot-settings-collapsible" id="finder-settings-section">
           <button
             type="button"
@@ -490,6 +1031,21 @@
             <div class="stats" id="finder-stats"></div>
             <div class="actions" id="finder-actions"></div>
           </div>
+        </div>
+        <div class="collapsible-section is-collapsed bot-balance-collapsible" id="finder-balance-section">
+          <button
+            type="button"
+            class="collapsible-toggle"
+            id="finder-balance-toggle"
+            data-collapsible-toggle
+            aria-expanded="false"
+            aria-controls="finder-balance-body"
+          >
+            <span class="collapsible-title">Баланс и прибыль</span>
+            <span class="collapsible-sub muted" id="finder-balance-summary">—</span>
+            <span class="collapsible-chevron" aria-hidden="true">▸</span>
+          </button>
+          <div class="collapsible-body" id="finder-balance-body"></div>
         </div>
         <div class="collapsible-section is-collapsed trades-collapsible" id="finder-trades-section">
           <button
@@ -533,14 +1089,14 @@
       <div class="logs-toolbar">
         <button type="button" class="btn ghost" id="changelog-back-btn">← Панель</button>
         <h2 class="logs-title">Журнал изменений</h2>
-        <p class="muted changelog-sub">ML Finder · ML gate на Grid и Стратегиях · Bybit Grid</p>
+        <p class="muted changelog-sub">Стратегии</p>
         <div class="logs-filters changelog-filters" role="tablist" aria-label="Фильтр изменений">
           <button type="button" class="btn btn-sm changelog-filter is-active" data-changelog-filter="all">Все</button>
-          <button type="button" class="btn btn-sm changelog-filter" data-changelog-filter="bybit_grid">Bybit Grid</button>
-          <button type="button" class="btn btn-sm changelog-filter" data-changelog-filter="finder">ML Finder</button>
+          <button type="button" class="btn btn-sm changelog-filter hidden" data-changelog-filter="bybit_grid">Bybit Grid</button>
+          <button type="button" class="btn btn-sm changelog-filter hidden" data-changelog-filter="finder">ML Finder</button>
           <button type="button" class="btn btn-sm changelog-filter" data-changelog-filter="strategy">Стратегии</button>
-          <button type="button" class="btn btn-sm changelog-filter" data-changelog-filter="grid_ft">Grid FT</button>
-          <button type="button" class="btn btn-sm changelog-filter" data-changelog-filter="ranging_scanner">Сканер</button>
+          <button type="button" class="btn btn-sm changelog-filter hidden" data-changelog-filter="grid_ft">Grid FT</button>
+          <button type="button" class="btn btn-sm changelog-filter hidden" data-changelog-filter="ranging_scanner">Сканер</button>
           <button type="button" class="btn btn-sm changelog-filter" data-changelog-filter="ui_infra">UI</button>
         </div>
       </div>
@@ -554,11 +1110,11 @@
         <h2 class="logs-title">Логи в реальном времени</h2>
         <div class="logs-filters" role="tablist" aria-label="Фильтр логов">
           <button type="button" class="btn btn-sm logs-filter is-active" data-logs-filter="all">Все</button>
-          <button type="button" class="btn btn-sm logs-filter" data-logs-filter="finder">ML Finder</button>
+          <button type="button" class="btn btn-sm logs-filter" data-logs-filter="executor">Исполнитель</button>
+          <button type="button" class="btn btn-sm logs-filter" data-logs-filter="bybit">Bybit</button>
+          <button type="button" class="btn btn-sm logs-filter" data-logs-filter="binance">Binance</button>
           <button type="button" class="btn btn-sm logs-filter" data-logs-filter="strategy">Стратегии</button>
           <button type="button" class="btn btn-sm logs-filter" data-logs-filter="grid">Grid</button>
-          <button type="button" class="btn btn-sm logs-filter" data-logs-filter="scanner">Сканер Grid</button>
-          <button type="button" class="btn btn-sm logs-filter" data-logs-filter="strategy_scanner">Сканер страт.</button>
           <button type="button" class="btn btn-sm logs-filter" data-logs-filter="pair_config">UI API</button>
         </div>
         <div class="logs-actions">
@@ -581,14 +1137,21 @@
 
       <div class="history-filters pnl-dashboard-filters">
         <div class="history-filter-group">
+          <span class="history-filter-label">Свечи</span>
+          <div class="logs-filters" role="group" aria-label="Таймфрейм дашборда">
+            <button type="button" class="btn btn-sm pnl-dash-tf is-active" data-pnl-dash-tf="5m">5 мин</button>
+            <button type="button" class="btn btn-sm pnl-dash-tf" data-pnl-dash-tf="1h">1 ч</button>
+          </div>
+        </div>
+        <div class="history-filter-group pnl-dash-bot-group">
           <span class="history-filter-label">Бот</span>
           <div class="logs-filters" role="tablist" aria-label="Фильтр бота дашборда">
             <button type="button" class="btn btn-sm pnl-dash-scope is-active" data-pnl-dash-scope="all">Все</button>
-            <button type="button" class="btn btn-sm pnl-dash-scope" data-pnl-dash-scope="finder">ML Finder</button>
+            <button type="button" class="btn btn-sm pnl-dash-scope hidden" data-pnl-dash-scope="finder">ML Finder</button>
             <button type="button" class="btn btn-sm pnl-dash-scope" data-pnl-dash-scope="strategy">Стратегии</button>
             <button type="button" class="btn btn-sm pnl-dash-scope" data-pnl-dash-scope="test_strategy">Тестовые</button>
-            <button type="button" class="btn btn-sm pnl-dash-scope" data-pnl-dash-scope="grid">Grid</button>
-            <button type="button" class="btn btn-sm pnl-dash-scope" data-pnl-dash-scope="bybitgrid">Bybit Grid</button>
+            <button type="button" class="btn btn-sm pnl-dash-scope hidden" data-pnl-dash-scope="grid">Grid</button>
+            <button type="button" class="btn btn-sm pnl-dash-scope hidden" data-pnl-dash-scope="bybitgrid">Bybit Grid</button>
           </div>
         </div>
         <div class="history-filter-group history-period-group">
@@ -599,6 +1162,26 @@
             <button type="button" class="btn btn-sm pnl-dash-period" data-pnl-dash-period="7d">Неделя</button>
             <button type="button" class="btn btn-sm pnl-dash-period" data-pnl-dash-period="30d">Месяц</button>
             <button type="button" class="btn btn-sm pnl-dash-period is-active" data-pnl-dash-period="all">Всё</button>
+          </div>
+          <div class="history-date-range">
+            <label>С <input id="pnl-date-from" type="date" class="history-date-input" /></label>
+            <label>По <input id="pnl-date-to" type="date" class="history-date-input" /></label>
+          </div>
+        </div>
+        <div class="history-filter-group">
+          <span class="history-filter-label">Сторона</span>
+          <div class="logs-filters" role="group" aria-label="Сторона сделок дашборда">
+            <button type="button" class="btn btn-sm pnl-dash-side is-active" data-pnl-dash-side="all">Все</button>
+            <button type="button" class="btn btn-sm pnl-dash-side" data-pnl-dash-side="long">Лонг</button>
+            <button type="button" class="btn btn-sm pnl-dash-side" data-pnl-dash-side="short">Шорт</button>
+          </div>
+        </div>
+        <div class="history-filter-group">
+          <span class="history-filter-label">Live/Demo</span>
+          <div class="logs-filters" role="group" aria-label="Режим аккаунта дашборда">
+            <button type="button" class="btn btn-sm pnl-dash-mode is-active" data-pnl-dash-mode="all">Все</button>
+            <button type="button" class="btn btn-sm pnl-dash-mode" data-pnl-dash-mode="live">Live</button>
+            <button type="button" class="btn btn-sm pnl-dash-mode" data-pnl-dash-mode="demo">Demo</button>
           </div>
         </div>
       </div>
@@ -630,6 +1213,61 @@
       <p class="muted logs-footnote" id="pnl-dashboard-status">Загрузка…</p>
     </div>
 
+    <div id="stats-view" class="logs-view stats-view hidden" aria-hidden="true">
+      <div class="logs-toolbar history-toolbar">
+        <button type="button" class="btn ghost" id="stats-back-btn">← Панель</button>
+        <div class="rating-title-wrap">
+          <h2 class="logs-title" id="stats-view-title">Статистика сделок</h2>
+          <p class="muted rating-subtitle" id="stats-view-note">Все закрытые сделки по всем ботам, включая выключенные стратегии. Проценты в скобках — доля от общей прибыли или общих потерь.</p>
+        </div>
+        <div class="logs-actions">
+          <button type="button" class="btn btn-sm ghost" id="stats-refresh-btn">Обновить</button>
+        </div>
+      </div>
+
+      <div class="history-filters">
+        <div class="history-filter-group history-period-group">
+          <span class="history-filter-label">Период</span>
+          <div class="logs-filters" role="group" aria-label="Период статистики">
+            <button type="button" class="btn btn-sm stats-period-btn" data-period="today">Сегодня</button>
+            <button type="button" class="btn btn-sm stats-period-btn" data-period="yesterday">Вчера</button>
+            <button type="button" class="btn btn-sm stats-period-btn" data-period="7d">Неделя</button>
+            <button type="button" class="btn btn-sm stats-period-btn" data-period="30d">Месяц</button>
+            <button type="button" class="btn btn-sm stats-period-btn is-active" data-period="all">Всё время</button>
+          </div>
+          <div class="history-date-range">
+            <label>С <input id="stats-date-from" type="date" class="history-date-input" /></label>
+            <label>По <input id="stats-date-to" type="date" class="history-date-input" /></label>
+          </div>
+        </div>
+        <div class="history-filter-group">
+          <span class="history-filter-label">Live/Demo</span>
+          <div class="logs-filters" role="group" aria-label="Live или Demo статистики">
+            <button type="button" class="btn btn-sm stats-mode-btn is-active" data-stats-mode="all">Все</button>
+            <button type="button" class="btn btn-sm stats-mode-btn" data-stats-mode="live">Live</button>
+            <button type="button" class="btn btn-sm stats-mode-btn" data-stats-mode="demo">Demo</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="stats-summary" class="stats-summary-grid"></div>
+      <div class="stats-table-wrap">
+        <table class="stats-table" id="stats-table">
+          <thead>
+            <tr>
+              <th>Стратегия / модель</th>
+              <th>Успешные</th>
+              <th>Неуспешные</th>
+              <th>Прибыль</th>
+              <th>Потери</th>
+            </tr>
+          </thead>
+          <tbody id="stats-table-body"></tbody>
+        </table>
+      </div>
+      <p id="stats-footnote" class="muted logs-footnote stats-footnote"></p>
+    </div>
+
     <div id="rating-view" class="logs-view rating-view hidden" aria-hidden="true">
       <div class="logs-toolbar history-toolbar rating-toolbar">
         <button type="button" class="btn ghost" id="rating-back-btn">← Панель</button>
@@ -648,14 +1286,39 @@
             <span class="history-filter-label">Вкладка</span>
             <div class="logs-filters rating-scope-pills" role="tablist" aria-label="Тип рейтинга">
               <button type="button" class="btn btn-sm rating-scope is-active" data-rating-scope="strategies" role="tab" aria-selected="true">Рейтинг стратегий</button>
+              <button type="button" class="btn btn-sm rating-scope" data-rating-scope="stratpairs" role="tab" aria-selected="false">Стратегии/пары</button>
               <button type="button" class="btn btn-sm rating-scope" data-rating-scope="pairs" role="tab" aria-selected="false">Рейтинг пар</button>
+              <button type="button" class="btn btn-sm rating-scope" data-rating-scope="days" role="tab" aria-selected="false">По дням недели</button>
+              <button type="button" class="btn btn-sm rating-scope" data-rating-scope="matrix" role="tab" aria-selected="false">Стратегии × дни</button>
             </div>
           </div>
-          <div class="history-filter-group rating-user-group hidden" id="rating-user-group">
+          <div class="history-filter-group rating-user-group" id="rating-user-group">
             <span class="history-filter-label">Аккаунт</span>
             <select id="rating-user-filter" class="rating-user-select" aria-label="Аккаунт для рейтинга">
               <option value="">Все аккаунты</option>
+              <option value="self">Свой</option>
             </select>
+          </div>
+          <div class="history-filter-group" id="rating-mode-group">
+            <span class="history-filter-label">Live/Demo</span>
+            <div class="logs-filters rating-mode-pills" role="group" aria-label="Режим аккаунта рейтинга">
+              <button type="button" class="btn btn-sm rating-mode is-active" data-rating-mode="all">Все</button>
+              <button type="button" class="btn btn-sm rating-mode" data-rating-mode="live">Live</button>
+              <button type="button" class="btn btn-sm rating-mode" data-rating-mode="demo">Demo</button>
+            </div>
+          </div>
+          <div class="history-filter-group">
+            <span class="history-filter-label">Бот</span>
+            <div class="logs-filters rating-bot-pills" role="group" aria-label="Бот рейтинга">
+              <button type="button" class="btn btn-sm rating-bot is-active" data-rating-bot="all">Все</button>
+            </div>
+          </div>
+          <div class="history-filter-group">
+            <span class="history-filter-label">Свечи</span>
+            <div class="logs-filters rating-tf-pills" role="group" aria-label="Таймфрейм рейтинга">
+              <button type="button" class="btn btn-sm rating-tf is-active" data-rating-tf="5m">5 мин</button>
+              <button type="button" class="btn btn-sm rating-tf" data-rating-tf="1h">1 ч</button>
+            </div>
           </div>
           <div class="history-filter-group history-period-group">
             <span class="history-filter-label">Период</span>
@@ -665,6 +1328,18 @@
               <button type="button" class="btn btn-sm rating-period" data-rating-period="7d">Неделя</button>
               <button type="button" class="btn btn-sm rating-period" data-rating-period="30d">Месяц</button>
               <button type="button" class="btn btn-sm rating-period is-active" data-rating-period="all">Всё</button>
+            </div>
+            <div class="history-date-range">
+              <label>С <input id="rating-date-from" type="date" class="history-date-input" /></label>
+              <label>По <input id="rating-date-to" type="date" class="history-date-input" /></label>
+            </div>
+          </div>
+          <div class="history-filter-group">
+            <span class="history-filter-label">Сторона</span>
+            <div class="logs-filters rating-side-pills" role="group" aria-label="Сторона сделок рейтинга">
+              <button type="button" class="btn btn-sm rating-side is-active" data-rating-side="all">Все</button>
+              <button type="button" class="btn btn-sm rating-side" data-rating-side="long">Лонг</button>
+              <button type="button" class="btn btn-sm rating-side" data-rating-side="short">Шорт</button>
             </div>
           </div>
         </div>
@@ -681,6 +1356,7 @@
                 <th class="rating-sort" data-rating-sort="label" id="rating-col-label" title="Сортировать">Стратегия</th>
                 <th class="rating-sort num" data-rating-sort="trades" title="Сортировать">Сделок</th>
                 <th class="rating-sort num" data-rating-sort="winrate" title="Сортировать">WR%</th>
+                <th class="rating-sort num" data-rating-sort="conf_avg" title="Мин / сред / макс уверенность модели">Увер. мин/ср/макс</th>
                 <th class="rating-sort num" data-rating-sort="income" title="Сортировать">PnL</th>
                 <th class="rating-sort num" data-rating-sort="loss_abs" title="Сортировать">Убытки</th>
                 <th class="rating-sort num is-active" data-rating-sort="pnl" title="Сортировать">Чистый PnL</th>
@@ -708,11 +1384,12 @@
           <span class="history-filter-label">Бот</span>
           <div class="logs-filters history-bot-filters" role="tablist" aria-label="Фильтр бота">
             <button type="button" class="btn btn-sm history-filter is-active" data-history-scope="all">Все</button>
-            <button type="button" class="btn btn-sm history-filter" data-history-scope="finder">ML Finder</button>
+            <button type="button" class="btn btn-sm history-filter hidden" data-history-scope="finder">ML Finder</button>
             <button type="button" class="btn btn-sm history-filter" data-history-scope="strategy">Стратегии</button>
+            <button type="button" class="btn btn-sm history-filter" data-history-scope="htf1h">1-часовые</button>
             <button type="button" class="btn btn-sm history-filter" data-history-scope="test_strategy">Тестовые</button>
-            <button type="button" class="btn btn-sm history-filter" data-history-scope="grid">Grid</button>
-            <button type="button" class="btn btn-sm history-filter" data-history-scope="bybitgrid">Bybit Grid</button>
+            <button type="button" class="btn btn-sm history-filter hidden" data-history-scope="grid">Grid</button>
+            <button type="button" class="btn btn-sm history-filter hidden" data-history-scope="bybitgrid">Bybit Grid</button>
           </div>
         </div>
 
@@ -778,8 +1455,12 @@
               <th>Пара</th>
               <th>Сторона</th>
               <th>Стратегия</th>
+              <th>SL / TP</th>
               <th>ML %</th>
               <th>PnL</th>
+              <th>С комиссией</th>
+              <th title="Максимальная прибыль за время сделки">Макс. прибыль</th>
+              <th title="Максимальный убыток за время сделки">Макс. убыток</th>
               <th>Выход</th>
             </tr>
           </thead>
@@ -795,6 +1476,136 @@
       <p class="muted logs-footnote" id="history-status">Загрузка…</p>
     </div>
 
+    <div id="charts-view" class="logs-view charts-view hidden" aria-hidden="true">
+      <div class="logs-toolbar history-toolbar">
+        <button type="button" class="btn ghost" id="charts-back-btn">← Панель</button>
+        <div class="rating-title-wrap">
+          <h2 class="logs-title">Графики</h2>
+          <p class="muted rating-subtitle">Свечи окна входа и сделка. Зелёный фон — прибыль, красный — убыток. Повторно открывается сохранённый файл.</p>
+        </div>
+        <div class="logs-actions">
+          <button type="button" class="btn btn-sm ghost" id="charts-refresh-btn">Обновить</button>
+        </div>
+      </div>
+
+      <div class="history-filters charts-filters">
+        <div class="history-filter-group history-period-group">
+          <span class="history-filter-label">Период</span>
+          <div class="logs-filters charts-period-pills" role="group" aria-label="Период графиков">
+            <button type="button" class="btn btn-sm charts-pill" data-charts-period="today">Сегодня</button>
+            <button type="button" class="btn btn-sm charts-pill" data-charts-period="yesterday">Вчера</button>
+            <button type="button" class="btn btn-sm charts-pill" data-charts-period="7d">Неделя</button>
+            <button type="button" class="btn btn-sm charts-pill" data-charts-period="30d">Месяц</button>
+            <button type="button" class="btn btn-sm charts-pill is-active" data-charts-period="all">Всё</button>
+          </div>
+          <div class="history-date-range">
+            <label>С <input id="charts-date-from" type="date" class="history-date-input" /></label>
+            <label>По <input id="charts-date-to" type="date" class="history-date-input" /></label>
+          </div>
+        </div>
+        <div class="history-filter-group">
+          <span class="history-filter-label">Сторона</span>
+          <div class="logs-filters charts-side-pills" role="group" aria-label="Сторона сделок">
+            <button type="button" class="btn btn-sm charts-pill is-active" data-charts-side="all">Все</button>
+            <button type="button" class="btn btn-sm charts-pill" data-charts-side="long">Лонг</button>
+            <button type="button" class="btn btn-sm charts-pill" data-charts-side="short">Шорт</button>
+          </div>
+        </div>
+        <div class="history-filter-group charts-bot-group">
+          <span class="history-filter-label">Бот</span>
+          <div class="logs-filters charts-bot-pills" role="group" aria-label="Бот">
+            <button type="button" class="btn btn-sm charts-pill is-active" data-charts-bot="all">Все</button>
+            <button type="button" class="btn btn-sm charts-pill" data-charts-bot="strategy">Стратегии</button>
+            <button type="button" class="btn btn-sm charts-pill" data-charts-bot="grid">Grid bot</button>
+          </div>
+        </div>
+        <div class="history-filter-group">
+          <span class="history-filter-label">Стратегия</span>
+          <div class="logs-filters charts-strategy-pills" id="charts-strategy-pills" role="group" aria-label="Стратегия"></div>
+        </div>
+        <div class="history-filter-group charts-archive-group">
+          <span class="history-filter-label">Архив</span>
+          <button type="button" class="btn btn-sm primary" id="charts-download-all-btn">Скачать все в PNG</button>
+          <button type="button" class="btn btn-sm primary" id="charts-download-json-btn">Скачать все в JSON</button>
+          <span class="charts-archive-progress" id="charts-archive-progress" hidden aria-live="polite"></span>
+        </div>
+      </div>
+
+      <div class="history-table-wrap" id="charts-table-wrap">
+        <table class="stats-table stats-history-table charts-desktop-table" id="charts-table">
+          <thead>
+            <tr>
+              <th>Дата</th>
+              <th>Бот</th>
+              <th>Пара</th>
+              <th>Сторона</th>
+              <th>Стратегия</th>
+              <th>SL / TP</th>
+              <th>PnL</th>
+              <th>Выход</th>
+              <th>График</th>
+            </tr>
+          </thead>
+          <tbody id="charts-table-body"></tbody>
+        </table>
+        <div id="charts-cards" class="history-cards charts-cards" aria-live="polite"></div>
+      </div>
+      <div id="charts-pagination" class="history-pagination hidden" hidden>
+        <button type="button" class="btn btn-sm ghost" id="charts-page-prev">← Назад</button>
+        <span id="charts-page-info" class="history-page-info">—</span>
+        <button type="button" class="btn btn-sm ghost" id="charts-page-next">Вперёд →</button>
+      </div>
+      <p class="muted logs-footnote" id="charts-status">Загрузка…</p>
+    </div>
+
+    <div id="report-view" class="logs-view report-view hidden" aria-hidden="true">
+      <div class="logs-toolbar history-toolbar">
+        <button type="button" class="btn ghost" id="report-back-btn">← Панель</button>
+        <h2 class="logs-title">Отчёт</h2>
+        <div class="logs-toolbar-actions">
+          <button type="button" class="btn btn-sm ghost" id="report-json-btn" title="Скачать JSON сделок">JSON</button>
+          <button type="button" class="btn btn-sm primary" id="report-run-btn">Сформировать</button>
+        </div>
+      </div>
+      <div class="history-filters report-filters">
+        <div class="history-filter-group history-period-group">
+          <span class="history-filter-label">Период</span>
+          <div class="logs-filters report-period-filters" role="group" aria-label="Период отчёта">
+            <button type="button" class="btn btn-sm report-period-btn is-active" data-report-period="today">Сегодня</button>
+            <button type="button" class="btn btn-sm report-period-btn" data-report-period="yesterday">Вчера</button>
+            <button type="button" class="btn btn-sm report-period-btn" data-report-period="7d">Неделя</button>
+            <button type="button" class="btn btn-sm report-period-btn" data-report-period="custom">Интервал</button>
+          </div>
+          <div class="history-date-range report-date-range" id="report-date-range" hidden>
+            <label>С <input id="report-date-from" type="date" class="history-date-input" /></label>
+            <label>По <input id="report-date-to" type="date" class="history-date-input" /></label>
+          </div>
+        </div>
+      </div>
+      <div class="report-prompt-panel">
+        <div class="report-prompt-head">
+          <div class="report-prompt-head-text">
+            <span class="report-prompt-title">Промпт анализа</span>
+            <span class="report-prompt-hint muted">Пусто — дефолтный отчёт · свой текст заменяет инструкцию агента</span>
+          </div>
+        </div>
+        <textarea
+          id="report-prompt"
+          class="report-prompt-input"
+          rows="14"
+          placeholder="Например: разбери убыточные стратегии за период, сравни long/short, дай 3 конкретных рекомендации…"
+          autocomplete="off"
+          spellcheck="true"
+        ></textarea>
+      </div>
+      <div id="report-summary" class="stats-summary-grid report-summary"></div>
+      <div class="report-analysis-wrap">
+        <h3 class="report-analysis-title">Анализ агента</h3>
+        <div id="report-analysis" class="report-analysis" aria-live="polite">Выберите период и нажмите «Сформировать».</div>
+      </div>
+      <p class="muted logs-footnote" id="report-status">—</p>
+    </div>
+
     <div id="settings-view" class="logs-view settings-view hidden" aria-hidden="true">
       <div class="logs-toolbar settings-toolbar">
         <button type="button" class="btn ghost" id="settings-back-btn">← Панель</button>
@@ -803,19 +1614,216 @@
       <div class="settings-page">
         <div class="settings-section" data-user-secrets>
           <div class="settings-section-head">
-            <h3>Секреты биржи (Bybit)</h3>
+            <h3>Секреты бирж</h3>
             <details class="ui-hint">
               <summary class="ui-hint-btn" aria-label="Подсказка">i</summary>
-              <div class="ui-hint-body">API Key и Secret вашего аккаунта Bybit. Хранятся на сервере в зашифрованном виде.</div>
+              <div class="ui-hint-body">Ключи Live и Demo отдельно для Bybit и Binance. «Торговать на» ограничивает биржи для executor (по умолчанию Bybit). Раскройте биржу → Live/Demo, чтобы заменить ключи.</div>
             </details>
           </div>
-          <p id="secrets-status" class="muted strategy-desc">—</p>
-          <div class="settings-add secrets-form">
-            <label class="settings-field">API Key<input id="secrets-api-key" type="text" autocomplete="off" placeholder="Bybit API Key" /></label>
-            <label class="settings-field">API Secret<input id="secrets-api-secret" type="password" autocomplete="new-password" placeholder="Bybit API Secret" /></label>
-            <button id="secrets-save-btn" class="btn primary" type="button">Сохранить ключи</button>
+          <div class="secrets-toolbar" id="trade-on-setting">
+            <p id="secrets-status" class="muted secrets-toolbar-status">Биржи задаются на панелях «Тестовые» и «Стратегии».</p>
           </div>
+          <div class="secrets-exchanges">
+            <details class="secrets-ex-card" data-exchange="bybit">
+              <summary class="secrets-ex-summary">
+                <span class="secrets-ex-name">Bybit</span>
+                <span class="secrets-chips" aria-hidden="true">
+                  <span class="secrets-chip" id="secrets-bybit-live-chip" data-mode="live">Live</span>
+                  <span class="secrets-chip" id="secrets-bybit-demo-chip" data-mode="demo">Demo</span>
+                </span>
+              </summary>
+              <div class="secrets-ex-body">
+                <details class="secrets-key-row" data-secrets-mode="live" data-secrets-exchange="bybit">
+                  <summary class="secrets-key-summary">
+                    <span class="mode-badge mode-badge-live">Live</span>
+                    <span class="secrets-key-label">Реальный API</span>
+                    <span class="secrets-key-state" id="secrets-bybit-live-status">—</span>
+                  </summary>
+                  <div class="secrets-form secrets-form-compact">
+                    <label class="settings-field">API Key<input id="secrets-bybit-live-api-key" type="text" autocomplete="off" placeholder="Bybit Live API Key" /></label>
+                    <label class="settings-field">API Secret<input id="secrets-bybit-live-api-secret" type="password" autocomplete="new-password" placeholder="Bybit Live API Secret" /></label>
+                    <button id="secrets-bybit-live-save-btn" class="btn primary btn-sm" type="button" data-secrets-save="live" data-secrets-exchange="bybit">Сохранить</button>
+                  </div>
+                </details>
+                <details class="secrets-key-row" data-secrets-mode="demo" data-secrets-exchange="bybit">
+                  <summary class="secrets-key-summary">
+                    <span class="mode-badge mode-badge-demo">Demo</span>
+                    <span class="secrets-key-label">Demo Trading API</span>
+                    <span class="secrets-key-state" id="secrets-bybit-demo-status">—</span>
+                  </summary>
+                  <div class="secrets-form secrets-form-compact">
+                    <label class="settings-field">API Key<input id="secrets-bybit-demo-api-key" type="text" autocomplete="off" placeholder="Bybit Demo API Key" /></label>
+                    <label class="settings-field">API Secret<input id="secrets-bybit-demo-api-secret" type="password" autocomplete="new-password" placeholder="Bybit Demo API Secret" /></label>
+                    <button id="secrets-bybit-demo-save-btn" class="btn primary btn-sm" type="button" data-secrets-save="demo" data-secrets-exchange="bybit">Сохранить</button>
+                  </div>
+                </details>
+              </div>
+            </details>
+            <details class="secrets-ex-card" data-exchange="binance">
+              <summary class="secrets-ex-summary">
+                <span class="secrets-ex-name">Binance</span>
+                <span class="secrets-chips" aria-hidden="true">
+                  <span class="secrets-chip" id="secrets-binance-live-chip" data-mode="live">Live</span>
+                  <span class="secrets-chip" id="secrets-binance-demo-chip" data-mode="demo">Demo</span>
+                </span>
+              </summary>
+              <div class="secrets-ex-body">
+                <details class="secrets-key-row" data-secrets-mode="live" data-secrets-exchange="binance">
+                  <summary class="secrets-key-summary">
+                    <span class="mode-badge mode-badge-live">Live</span>
+                    <span class="secrets-key-label">Реальный API</span>
+                    <span class="secrets-key-state" id="secrets-binance-live-status">—</span>
+                  </summary>
+                  <div class="secrets-form secrets-form-compact">
+                    <label class="settings-field">API Key<input id="secrets-binance-live-api-key" type="text" autocomplete="off" placeholder="Binance Live API Key" /></label>
+                    <label class="settings-field">API Secret<input id="secrets-binance-live-api-secret" type="password" autocomplete="new-password" placeholder="Binance Live API Secret" /></label>
+                    <button id="secrets-binance-live-save-btn" class="btn primary btn-sm" type="button" data-secrets-save="live" data-secrets-exchange="binance">Сохранить</button>
+                  </div>
+                </details>
+                <details class="secrets-key-row" data-secrets-mode="demo" data-secrets-exchange="binance">
+                  <summary class="secrets-key-summary">
+                    <span class="mode-badge mode-badge-demo">Demo</span>
+                    <span class="secrets-key-label">Demo / Testnet</span>
+                    <span class="secrets-key-state" id="secrets-binance-demo-status">—</span>
+                  </summary>
+                  <div class="secrets-form secrets-form-compact">
+                    <label class="settings-field">API Key<input id="secrets-binance-demo-api-key" type="text" autocomplete="off" placeholder="Binance Demo API Key" /></label>
+                    <label class="settings-field">API Secret<input id="secrets-binance-demo-api-secret" type="password" autocomplete="new-password" placeholder="Binance Demo API Secret" /></label>
+                    <button id="secrets-binance-demo-save-btn" class="btn primary btn-sm" type="button" data-secrets-save="demo" data-secrets-exchange="binance">Сохранить</button>
+                  </div>
+                </details>
+              </div>
+            </details>
+          </div>
+          <!-- legacy ids kept for older JS paths -->
+          <p id="secrets-live-status" class="hidden" hidden aria-hidden="true"></p>
+          <p id="secrets-demo-status" class="hidden" hidden aria-hidden="true"></p>
+          <div id="secrets-profiles" class="secrets-profiles hidden" aria-live="polite"></div>
           <p id="secrets-msg" class="pair-msg hidden"></p>
+        </div>
+
+        <div class="settings-section" id="telegram-settings-section">
+          <div class="settings-section-head">
+            <h3>Telegram</h3>
+            <details class="ui-hint">
+              <summary class="ui-hint-btn" aria-label="Подсказка">i</summary>
+              <div class="ui-hint-body">Откройте бота → /start → скопируйте chat id → вставьте сюда. Типы уведомлений сохраняются в control_plane.sqlite и применяются сразу. Мини-приложение в боте открывает эту панель.</div>
+            </details>
+          </div>
+          <p id="telegram-status" class="muted strategy-desc">—</p>
+          <label class="settings-field">
+            Chat ID
+            <input id="telegram-chat-id" type="text" inputmode="numeric" autocomplete="off" placeholder="Напр. 123456789" />
+          </label>
+          <label class="settings-toggle-row">
+            <input type="checkbox" id="telegram-notify-enabled" checked />
+            <span>Присылать уведомления</span>
+          </label>
+          <div class="telegram-notify-kinds" id="telegram-notify-kinds" aria-label="Типы уведомлений">
+            <p class="muted telegram-notify-kinds-title">Какие уведомления получать</p>
+            <label class="settings-toggle-row">
+              <input type="checkbox" data-tg-notify="trade_open" checked />
+              <span>Открытия сделки</span>
+            </label>
+            <label class="settings-toggle-row">
+              <input type="checkbox" data-tg-notify="trade_close_profit" checked />
+              <span>Закрытие сделки (только успешные)</span>
+            </label>
+            <label class="settings-toggle-row">
+              <input type="checkbox" data-tg-notify="trade_close_loss" checked />
+              <span>Закрытие сделки (только минусовые)</span>
+            </label>
+            <label class="settings-toggle-row">
+              <input type="checkbox" data-tg-notify="trade_close_all" checked />
+              <span>Закрытие сделки (все)</span>
+            </label>
+            <label class="settings-toggle-row">
+              <input type="checkbox" data-tg-notify="bot_start" />
+              <span>Запуск ботов</span>
+            </label>
+            <label class="settings-toggle-row">
+              <input type="checkbox" data-tg-notify="bot_stop" />
+              <span>Остановка ботов</span>
+            </label>
+            <label class="settings-toggle-row">
+              <input type="checkbox" data-tg-notify="bot_reload" />
+              <span>Перезапуск конфигурации</span>
+            </label>
+            <label class="settings-toggle-row">
+              <input type="checkbox" data-tg-notify="other" checked />
+              <span>Другие</span>
+            </label>
+          </div>
+          <div class="settings-add" style="margin-top:0.5rem">
+            <button id="telegram-save-btn" class="btn primary" type="button">Сохранить Telegram</button>
+            <button id="telegram-clear-btn" class="btn ghost" type="button">Отвязать</button>
+          </div>
+          <p id="telegram-msg" class="pair-msg hidden"></p>
+        </div>
+
+        <div class="settings-section" id="trading-toggle-section">
+          <div class="settings-section-head">
+            <h3>Автоторговля (общий движок)</h3>
+            <details class="ui-hint">
+              <summary class="ui-hint-btn" aria-label="Подсказка">i</summary>
+              <div class="ui-hint-body">Signal Engine один на всех — сигналы общие. При включении бот открывает сделки на вашем Bybit по вашим ключам, лимитам и включённым стратегиям.</div>
+            </details>
+          </div>
+          <p id="shared-stack-status" class="muted strategy-desc">—</p>
+          <label class="settings-toggle-row" id="trading-strategy-live-row">
+            <input type="checkbox" id="trading-strategy-enabled" />
+            <span><span class="mode-badge mode-badge-live">Live</span> Торговля стратегиями</span>
+          </label>
+          <label class="settings-toggle-row hidden" id="trading-strategy-demo-row">
+            <input type="checkbox" id="trading-strategy-demo-enabled" />
+            <span><span class="mode-badge mode-badge-demo">Demo</span> Торговля стратегиями</span>
+          </label>
+          <p id="trading-toggle-msg" class="pair-msg hidden"></p>
+        </div>
+
+        <div class="settings-section hidden" data-admin-only id="scan-freq-settings-section">
+          <div class="settings-section-head">
+            <h3>Частота сканирования</h3>
+            <details class="ui-hint">
+              <summary class="ui-hint-btn" aria-label="Подсказка">i</summary>
+              <div class="ui-hint-body">Как часто pair-config пересканирует пары для Strategy/Grid и шагает Finder, пока есть свободные слоты. Сохраняется в control_plane.sqlite и применяется сразу. «Адаптивно» — 5→10→15→30 мин. «Фиксировано» — один интервал. При заполненных слотах сканы пар не гоняются.</div>
+            </details>
+          </div>
+          <p id="scan-freq-status" class="muted strategy-desc">—</p>
+          <label class="settings-field">
+            Режим
+            <select id="scan-freq-mode">
+              <option value="adaptive">Адаптивно (5→10→15→30 мин)</option>
+              <option value="fixed">Фиксированный интервал</option>
+            </select>
+          </label>
+          <label class="settings-field" id="scan-freq-fixed-wrap">
+            Интервал
+            <select id="scan-freq-fixed">
+              <option value="5">Каждые 5 мин</option>
+              <option value="10">Каждые 10 мин</option>
+              <option value="15">Каждые 15 мин</option>
+              <option value="30">Каждые 30 мин</option>
+              <option value="60">Каждые 60 мин</option>
+            </select>
+          </label>
+          <div class="settings-add" style="margin-top:0.5rem">
+            <button id="scan-freq-save-btn" class="btn primary" type="button">Сохранить частоту</button>
+          </div>
+          <p id="scan-freq-msg" class="pair-msg hidden"></p>
+        </div>
+
+        <div class="settings-section hidden" data-admin-only id="strategy-bot-restart-section">
+          <div class="settings-section-head">
+            <h3>Бот стратегий</h3>
+            <details class="ui-hint">
+              <summary class="ui-hint-btn" aria-label="Подсказка">i</summary>
+              <div class="ui-hint-body">Перезапуск общего signal-engine. Открытые сделки продолжает вести trade-executor. Кнопка только у администратора, не в чужой сессии.</div>
+            </details>
+          </div>
+          <p class="muted strategy-desc">Если бот завис и сигналы не идут, перезапустите его. На время старта новые сигналы не публикуются.</p>
+          <button id="strategy-bot-restart-btn" class="btn primary" type="button">Перезапустить бот стратегий</button>
+          <p id="strategy-bot-restart-msg" class="pair-msg hidden"></p>
         </div>
 
         <div class="settings-section">
@@ -823,7 +1831,7 @@
             <h3>Торговые пары</h3>
             <details class="ui-hint">
               <summary class="ui-hint-btn" aria-label="Подсказка">i</summary>
-              <div class="ui-hint-body">Добавление пар вручную — для ML Finder (whitelist в config.json). Grid и Стратегии — сканер + ML gate. Лимиты / stake / стратегии — на карточках панели.</div>
+              <div class="ui-hint-body">Пары стратегий подбирает сканер. Лимиты, stake и список стратегий — на карточке бота.</div>
             </details>
           </div>
           <div class="settings-add">
@@ -855,27 +1863,6 @@
 
         <div class="settings-section hidden" data-admin-only>
           <div class="settings-section-head">
-            <h3>Размещение стратегий</h3>
-            <details class="ui-hint">
-              <summary class="ui-hint-btn" aria-label="Подсказка">i</summary>
-              <div class="ui-hint-body">Перенос между блоками «Тестовые» и «Стратегии». После переноса стратегия выключена. Бывший прод-набор скрыт из UI (остаётся в sim / истории).</div>
-            </details>
-          </div>
-          <p id="placement-msg" class="pair-msg hidden"></p>
-          <div class="placement-grid">
-            <div class="placement-col">
-              <h4>Тестовые</h4>
-              <ul id="placement-test-list" class="placement-list"></ul>
-            </div>
-            <div class="placement-col">
-              <h4>Основной блок</h4>
-              <ul id="placement-main-list" class="placement-list"></ul>
-            </div>
-          </div>
-        </div>
-
-        <div class="settings-section hidden" data-admin-only>
-          <div class="settings-section-head">
             <h3>Пользователи</h3>
             <details class="ui-hint">
               <summary class="ui-hint-btn" aria-label="Подсказка">i</summary>
@@ -886,14 +1873,16 @@
             <input id="users-new-name" type="text" placeholder="Логин" autocomplete="off" />
             <input id="users-new-pass" type="password" placeholder="Пароль" autocomplete="new-password" />
             <button id="users-create-btn" class="btn primary" type="button">Создать</button>
+            <button id="users-migrate-demo-btn" class="btn ghost" type="button" title="Удалить legacy *_demo логины, перенести данные в dual-key">Миграция Demo</button>
           </div>
+          <p class="muted strategy-desc">Один логин: Live и Demo API-ключи в настройках. Боты по умолчанию выкл.</p>
           <p id="users-msg" class="pair-msg hidden"></p>
           <ul id="users-list" class="users-list"></ul>
         </div>
       </div>
     </div>
 
-    <div id="user-perms-modal" class="modal hidden" aria-hidden="true">
+    <div id="user-perms-modal" class="modal hidden" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="user-perms-title">
       <div class="modal-backdrop" data-close="user-perms"></div>
       <div class="modal-card modal-card-wide user-perms-card">
         <div class="modal-head">
@@ -904,7 +1893,7 @@
               <div class="ui-hint-body">Пустой список = ничего не доступно. «Все» снимает ограничение (полный доступ). Сохранение выключает у пользователя стратегии вне списка.</div>
             </details>
           </div>
-          <button class="btn ghost btn-sm" id="user-perms-close" type="button">✕</button>
+          <button class="btn ghost btn-sm" id="user-perms-close" type="button" aria-label="Закрыть права пользователя">✕</button>
         </div>
         <input type="hidden" id="user-perms-id" value="" />
         <div class="user-perms-section">
@@ -936,53 +1925,12 @@
     </div>
   </div>
 
-  <div id="stats-modal" class="modal hidden" aria-hidden="true">
-    <div class="modal-backdrop" data-close="stats"></div>
-    <div class="modal-card modal-card-wide">
-      <div class="modal-head stats-modal-head">
-        <div class="stats-modal-head-main">
-          <div class="panel-title-row">
-            <h2 id="stats-modal-title">Статистика сделок</h2>
-            <details class="ui-hint">
-              <summary class="ui-hint-btn" aria-label="Подсказка">i</summary>
-              <div class="ui-hint-body" id="stats-modal-note">Все закрытые сделки по всем ботам, включая выключенные стратегии. Проценты в скобках — доля от общей прибыли или общих потерь.</div>
-            </details>
-          </div>
-          <div class="stats-period-toggle" role="group" aria-label="Период статистики">
-            <button type="button" class="btn btn-sm stats-period-btn" data-period="today">Сегодня</button>
-            <button type="button" class="btn btn-sm stats-period-btn" data-period="yesterday">Вчера</button>
-            <button type="button" class="btn btn-sm stats-period-btn" data-period="7d">Неделя</button>
-            <button type="button" class="btn btn-sm stats-period-btn" data-period="30d">Месяц</button>
-            <button type="button" class="btn btn-sm stats-period-btn is-active" data-period="all">Всё время</button>
-          </div>
-        </div>
-        <button class="btn ghost btn-sm" id="stats-close" type="button">✕</button>
-      </div>
-      <div id="stats-summary" class="stats-summary-grid"></div>
-      <div class="stats-table-wrap">
-        <table class="stats-table" id="stats-table">
-          <thead>
-            <tr>
-              <th>Стратегия / модель</th>
-              <th>Успешные</th>
-              <th>Неуспешные</th>
-              <th>Прибыль</th>
-              <th>Потери</th>
-            </tr>
-          </thead>
-          <tbody id="stats-table-body"></tbody>
-        </table>
-      </div>
-      <p id="stats-footnote" class="muted stats-footnote"></p>
-    </div>
-  </div>
-
-  <div id="guide-modal" class="modal hidden" aria-hidden="true">
+  <div id="guide-modal" class="modal hidden" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="guide-modal-title">
     <div class="modal-backdrop" data-close="guide"></div>
     <div class="modal-card modal-card-wide guide-card">
       <div class="modal-head">
-        <h2>Инструкция CriptoTools</h2>
-        <button class="btn ghost btn-sm" id="guide-close" type="button">✕</button>
+        <h2 id="guide-modal-title">Инструкция CriptoTools</h2>
+        <button class="btn ghost btn-sm" id="guide-close" type="button" aria-label="Закрыть инструкцию">✕</button>
       </div>
       <p class="muted modal-note">
         Как пользоваться панелью: вход, ключи Bybit, боты, стратегии, сделки, статистика и дашборд.
@@ -1040,25 +1988,17 @@
         </section>
 
         <section class="guide-section" id="guide-bots">
-          <h3>3. Четыре бота на главной</h3>
+          <h3>3. Боты на главной</h3>
           <ul class="guide-bots">
-            <li>
-              <strong>ML Finder</strong> — сканер рынка по ML-модели TradeFinder + фильтр входа.
-              Часто выключен на admin; у user работает со своими ключами, если включён.
-            </li>
             <li>
               <strong>Стратегии + ML gate</strong> — основной бот. Несколько алгоритмов одновременно;
               сделка открывается по сигналу любой включённой стратегии, но только если ML gate пропускает вход.
             </li>
             <li>
-              <strong>Grid + ML</strong> — внутренний grid CryptoTools (волатильность / боковик) с ML-фильтром.
-            </li>
-            <li>
-              <strong>Bybit Grid</strong> — нативная сетка прямо на бирже Bybit. Создаётся с панели.
-              ML gate не использует. Лимит активных сеток — в настройках.
+              Скор 0–8 и фильтры ликвидности; свои пары, стейк, R/R и лимит открытых сделок.
             </li>
           </ul>
-          <p>На карточке бота: статус, баланс и PnL, <strong>Старт / Стоп</strong>, открытые сделки, кнопка «Статистика» по этому боту.</p>
+          <p>На карточке бота: статус, баланс и PnL, <strong>Старт / Стоп</strong>, открытые сделки, кнопка «Статистика».</p>
         </section>
 
         <section class="guide-section" id="guide-strategies">
@@ -1067,8 +2007,8 @@
             <li>Откройте <strong>Настройки</strong> (или блок стратегий на карточке бота).</li>
             <li>Включите нужные алгоритмы. Хотя бы одна должна быть активна, иначе сигналов не будет.</li>
             <li>
-              Переключатель <strong>«SL/TP из обучения»</strong> — стоп и тейк из сценария обучения.
-              Если выключен — используются глобальные SL/TP из настроек риска.
+              Переключатель <strong>«Свой SL/TP»</strong> — стоп и тейк, выбранные на строке стратегии.
+              Если выключен — общий SL/TP.
             </li>
             <li>
               <strong>Лимиты ботов</strong>: «макс. сделок» — сколько позиций одновременно;
@@ -1077,13 +2017,11 @@
               он не торгует, пока не поставите 1 или больше.
             </li>
             <li>
-              У нового user по умолчанию <strong>1</strong> слот на Finder / Strategy / Grid и <strong>1</strong> Bybit Grid.
-              Можно поднять (до 50 позиций / до 5 Bybit Grid), как у admin.
+              У нового user по умолчанию <strong>1</strong> слот на стратегии.
             </li>
           </ol>
           <p class="guide-note">
             ML gate на стратегиях: режим profit_only, порог уверенности от ~45% (у каждой стратегии может быть свой).
-            Grid и Finder — свои пороги. Bybit Grid без ML.
           </p>
         </section>
 
@@ -1112,6 +2050,9 @@
               <strong>История</strong> — все закрытые сделки с фильтрами (бот, стратегия, период, пары) и экспортом CSV.
             </li>
             <li>
+              <strong>Графики</strong> — свечной график по каждой сделке: окно входа и сама сделка подсвечены зелёным при прибыли и красным при убытке. Фильтры: период, бот (все, стратегии, Grid bot), сторона и стратегия. Можно скачать один PNG или все отфильтрованные графики архивом PNG и таким же архивом JSON.
+            </li>
+            <li>
               <strong>Логи</strong> — поток логов в реальном времени (если нужно разобраться, почему бот не входит или остановился).
             </li>
           </ul>
@@ -1121,15 +2062,9 @@
           <h3>7. Меню панели</h3>
           <ul>
             <li><strong>CriptoTools</strong> (иконка / название) — на главную.</li>
-            <li><strong>Статистика</strong> — сводная таблица PnL.</li>
-            <li><strong>Дашборд</strong> — диаграммы долей стратегий.</li>
-            <li><strong>История</strong> — журнал сделок.</li>
-            <li><strong>Инфо</strong> — описание стратегий и ML.</li>
-            <li><strong>Инструкция</strong> — этот текст.</li>
-            <li><strong>Изменения</strong> — журнал смены настроек.</li>
-            <li><strong>Логи</strong> — диагностика.</li>
+            <li><strong>Аналитика</strong> — Статистика, Дашборд, Рейтинг, История, Графики, Отчёт.</li>
+            <li><strong>Справка</strong> — Инфо, Инструкция, Изменения, Логи.</li>
             <li><strong>Настройки</strong> — ключи, лимиты, стратегии, пары.</li>
-            <li><strong>Обновить</strong> — принудительно обновить данные панелей.</li>
           </ul>
         </section>
 
@@ -1139,7 +2074,7 @@
             <li><strong>Настройки → Пользователи</strong> — создать логин и пароль нового user.</li>
             <li>User входит сам, указывает <strong>свои</strong> ключи Bybit и получает свой контур ботов.</li>
             <li>Можно отключить аккаунт или сбросить пароль.</li>
-            <li>Admin продолжает торговать на общем стеке сервера (strategy / grid / finder).</li>
+            <li>Admin продолжает торговать на общем стеке сервера (стратегии).</li>
           </ol>
           <p class="guide-note">Не передавайте пароль admin и серверные секреты пользователям — у каждого свой изолированный контур.</p>
         </section>
@@ -1147,12 +2082,12 @@
     </div>
   </div>
 
-  <div id="info-modal" class="modal hidden" aria-hidden="true">
+  <div id="info-modal" class="modal hidden" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="info-modal-title">
     <div class="modal-backdrop" data-close="info"></div>
     <div class="modal-card modal-card-wide">
       <div class="modal-head">
-        <h2>Справка по стратегиям</h2>
-        <button class="btn ghost btn-sm" id="info-close" type="button">✕</button>
+        <h2 id="info-modal-title">Справка по стратегиям</h2>
+        <button class="btn ghost btn-sm" id="info-close" type="button" aria-label="Закрыть справку">✕</button>
       </div>
       <p class="muted modal-note">
         Бот «Стратегии» использует включённые алгоритмы и <strong>ML gate</strong> (XGBoost): сделка откроется только при прогнозе profit с уверенностью ≥60%. Сигнал — от любой активной стратегии, в пределах лимита позиций.
@@ -1161,12 +2096,10 @@
         <h3>ML gate (прод, июл 2026)</h3>
         <p class="info-desc">
           Модель <strong>pnl_classifier</strong> (XGBoost + isotonic) обучена на sim trade_db (~5900 сделок).
-          Режим <strong>profit_only ≥60%</strong> — все боты CriptoTools (ML Finder, Стратегии, Grid).
-          Сканер Finder дополнительно требует ≥52% на своей модели.
-          <strong>Bybit Grid</strong> ML не использует.
+          Режим <strong>profit_only ≥60%</strong> — бот «Стратегии».
         </p>
       </div>
-      <div class="info-block">
+      <div class="info-block hidden">
         <h3>Bybit Grid (нативный, 4-й бот)</h3>
         <p class="info-desc">
           <strong>Futures Grid на бирже Bybit</strong> — сетка ордеров в заданном диапазоне цен.
@@ -1174,14 +2107,14 @@
           TP/SL, trailing. Управляется через API Bybit, не через ботов CriptoTools.
         </p>
       </div>
-      <div class="info-block">
+      <div class="info-block hidden">
         <h3>Grid-бот (отдельный процесс)</h3>
         <p class="info-desc">
           <strong>VolatilityGridStrategy</strong> — боковик при волатильности (Bollinger + ADX).
           Частичный TP у середины BB, cooldown после SL. На входе — <strong>ML gate</strong> (сценарий live_grid).
         </p>
       </div>
-      <div class="info-block panel-finder">
+      <div class="info-block panel-finder hidden">
         <h3>ML Finder (отдельный бот)</h3>
         <p class="info-desc">
           <strong>TradeFinderStrategy + XGBoost</strong> — сканер рынка по OHLCV-фичам, long/short.
@@ -1193,18 +2126,18 @@
     </div>
   </div>
 
-  <div id="bybitgrid-modal" class="modal hidden" aria-hidden="true">
+  <div id="bybitgrid-modal" class="modal hidden" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="bybitgrid-modal-title">
     <div class="modal-backdrop" data-close="bybitgrid"></div>
     <div class="modal-card">
       <div class="modal-head">
         <div class="panel-title-row">
-          <h2>Создать Bybit Grid</h2>
+          <h2 id="bybitgrid-modal-title">Создать Bybit Grid</h2>
           <details class="ui-hint">
             <summary class="ui-hint-btn" aria-label="Подсказка">i</summary>
             <div class="ui-hint-body">Сетка размещается на бирже Bybit (Futures Grid API). Нужны API-ключи с правом торговли.</div>
           </details>
         </div>
-        <button class="btn ghost btn-sm" id="bybitgrid-close" type="button">✕</button>
+        <button class="btn ghost btn-sm" id="bybitgrid-close" type="button" aria-label="Закрыть форму Bybit Grid">✕</button>
       </div>
       <label>Пара<input id="bg-pair" type="text" placeholder="SOL/USDT:USDT" /></label>
       <label>Режим
@@ -1242,6 +2175,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=20260815r"></script>
+  <script src="app.js?v=20261108bot" defer></script>
 </body>
 </html>

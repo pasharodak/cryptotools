@@ -1040,7 +1040,7 @@ class BotSessionManager:
                 msg = str(exc)
                 # Drop pairs ctengine rejects for missing leverage tiers, then retry.
                 m = re.search(
-                    r"Pairs\s+(.+?)\s+got no leverage\s*tiers",
+                    r"Pairs\s+(.+?)\s+got\s+no\s+leverage\s*tiers",
                     msg,
                     flags=re.S,
                 )
@@ -1063,7 +1063,17 @@ class BotSessionManager:
                     continue
                 break
         if last_err is not None:
-            raise last_err
+            # Last batch may be only no-leverage pairs — treat as empty, not fatal.
+            if not remaining:
+                print(f"  [{sid}] all pairs rejected (no leverage), empty trades", flush=True)
+                raw_trades = []
+                minimal_roi = dict(sc.get("minimal_roi") or {})
+                stoploss = float(sc.get("stoploss") if sc.get("stoploss") is not None else -0.1)
+                cfg = {}
+                parsed = {}
+                eligible = []
+            else:
+                raise last_err
         trades_by_pair: dict[str, list[dict]] = {p: [] for p in eligible}
         for raw in raw_trades:
             pair = raw.get("pair")

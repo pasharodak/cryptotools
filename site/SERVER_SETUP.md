@@ -1,66 +1,76 @@
-﻿# Настройка VPS — CryptoTools (Bybit)
+﻿# Настройка VPS — CryptoTools (Contabo)
 
-Стек: **3 бота** + **pair-config** + **custom-ui** + **ML entry-gate**.  
-ОС: Ubuntu 22.04/24.04/26.04 LTS. Рекомендуется ≥4 CPU / 6 GB RAM.
+**Текущий прод:** Contabo **`194.163.149.122`**  
+UI: [https://194.163.149.122:8443/](https://194.163.149.122:8443/)  
+App: `/home/cryptotools/app` (= `site/`) · UI files: `/var/www/criptotools-ui/`  
+User: `cryptotools` · secrets: `/home/cryptotools/.cryptotools.env`  
+SSH: `site/deploy/id_rsa/id_rsa` as `root` (VPN off, если timeout).
 
-Корень приложения на сервере: `/home/cryptotools/app` (= содержимое `site/`).  
-Linux-пользователь: `cryptotools`. Секреты: `/home/cryptotools/.cryptotools.env`.
+Старый хост `77.222.35.209` не используется.
+
+ОС: Ubuntu 24.04 LTS (ориентир). С Finder (PyTorch) лучше ≥8 GB RAM.
 
 ---
 
 ## Сервисы
 
-| systemd unit | Роль | Порт API |
-|--------------|------|----------|
-| `cryptotools-strategy` | Strategy (`MultiStrategyRouter`) | 8081 |
-| `cryptotools-grid` | Grid (`VolatilityGridStrategy`) | 8082 |
-| `cryptotools-finder` | ML Finder (`TradeFinderStrategy`, обычно off) | 8080 |
-| `pair-config` | whitelist / лимиты / UI API | 8090 |
-| nginx | UI + прокси `:8443` | — |
+| systemd | Роль | Порт |
+|---------|------|------|
+| `cryptotools-signal-engine` | MultiStrategyRouter (`CT_SIGNAL_ONLY`) | 8081 |
+| `trade-executor` | Исполнение сигналов | — |
+| `cryptotools-grid` | VolatilityGridStrategy | 8082 |
+| `cryptotools-finder` | TradeFinderStrategy | 8080 |
+| `pair-config` | UI API, control-plane, reconcile | 8090 |
+| `cryptotools-telegram-bot` | Telegram | — |
+| nginx | UI + proxy | 8443 |
 
-UI API: `/api/finder/`, `/api/strategy/`, `/api/grid/`, `/api/pair-config/`.
+Путь Strategy: **signal-engine → trade-executor**.
 
-Strategy risk: **SL −15%**, **ROI +5%**.
+### Sudo wrappers (обязательно)
 
-Первый реbrand с legacy: `site/scripts/deploy_cutover_rebrand.ps1`.
+`cryptotools` не может вызывать plain `systemctl` (polkit → *Interactive authentication required*).
+
+| Wrapper | Для чего |
+|---------|----------|
+| `deploy/admin-systemctl.sh` | admin units: finder, grid, signal-engine, trade-executor |
+| `deploy/tenant-systemctl.sh` | `cryptotools-{grid,finder}@user` |
+| `/etc/sudoers.d/cryptotools-tenants` | NOPASSWD на оба wrapper |
+
+Файлы wrappers живут **на сервере** в `/home/cryptotools/app/deploy/` и в git не публикуются (удалены в `f74b321`).
+Проверка: `sudo -n /home/cryptotools/app/deploy/admin-systemctl.sh status cryptotools-finder`; sudoers — `visudo -cf /etc/sudoers.d/cryptotools-tenants`.
 
 ---
 
 ## Деплой с ПК
 
-```powershell
-cd D:\cryptotools\site\scripts
-.\deploy_prod_ml.ps1
-```
+> В репозитории нет деплой-скриптов: `site/deploy/*` и `deploy_*.ps1` удалены в `f74b321`.
+> Используйте приватный деплой-набор владельца; на сервере остаются установленные units/nginx/sudo-wrappers.
 
-Секреты: `site/.env` → на VPS `~/.cryptotools.env`.  
-SSH-ключ: `site/deploy/id_rsa/`.
+SSH (VPN off): `ssh -i site/deploy/id_rsa/id_rsa root@194.163.149.122`.
 
-```bash
-sudo cp /home/cryptotools/app/deploy/nginx-cryptotools.conf /etc/nginx/sites-available/cryptotools
-sudo nginx -t && sudo systemctl reload nginx
-sudo systemctl restart pair-config cryptotools-strategy cryptotools-grid
-```
-
----
-
-## Новый VPS (кратко)
+Секреты: локально `site/.env` → на сервере `~/.cryptotools.env`.
 
 ```bash
-apt update && apt upgrade -y
-adduser cryptotools && usermod -aG sudo cryptotools
-ufw allow OpenSSH && ufw allow 8443/tcp && ufw enable
-timedatectl set-timezone UTC && timedatectl set-ntp true
+systemctl restart pair-config cryptotools-signal-engine trade-executor cryptotools-grid
+# Finder по необходимости:
+systemctl restart cryptotools-finder
 ```
 
-Дальше — `deploy_prod_ml.ps1` / скрипты в `deploy/`.
+UI после правки `custom-ui`:
+
+```bash
+cp /tmp/custom-ui/* /var/www/criptotools-ui/
+chown -R www-data:www-data /var/www/criptotools-ui
+```
 
 ---
 
 ## Проверка
 
 ```bash
-systemctl is-active cryptotools-strategy cryptotools-grid pair-config
-curl -sk https://127.0.0.1:8443/api/strategy/ping
+systemctl is-active cryptotools-signal-engine trade-executor cryptotools-grid cryptotools-finder pair-config
 curl -sk https://127.0.0.1:8443/api/pair-config/state
+curl -sk https://127.0.0.1:8443/api/strategy/ping
 ```
+
+См. также корневой [`README.md`](../README.md) и [`AGENTS.md`](../AGENTS.md).

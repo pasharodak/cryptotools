@@ -1,4 +1,5 @@
 {
+    "fee": 0.001,
     "entry_pricing": {
         "price_side": "other",
         "use_order_book": false,

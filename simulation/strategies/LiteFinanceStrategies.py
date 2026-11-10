@@ -61,7 +61,7 @@ class _LiteBase(IStrategy):
 class LitePositionStrategy(_LiteBase):
     """HODL — EMA50/200 cross only in clear trend + volume."""
 
-    stoploss = -0.08
+    stoploss = -0.044
     minimal_roi = {"0": 0.05, "2880": 0.025, "7200": 0.01, "14400": 0}
     pair_cooldown_minutes = 1440
 
@@ -92,7 +92,7 @@ class LitePositionStrategy(_LiteBase):
 class LiteSwingStrategy(_LiteBase):
     """Swing — RSI pullback in trend + volume confirmation."""
 
-    stoploss = -0.05
+    stoploss = -0.019
     minimal_roi = {"0": 0.025, "720": 0.015, "2880": 0.008, "5760": 0}
 
     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
@@ -120,7 +120,7 @@ class LiteSwingStrategy(_LiteBase):
 class LiteIntradayStrategy(_LiteBase):
     """Intraday — selective MACD; max ~few trades/day per pair."""
 
-    stoploss = -0.022
+    stoploss = -0.016
     minimal_roi = {"0": 0.022, "480": 0.012, "960": 0}
     pair_cooldown_minutes = 360
 
@@ -165,7 +165,7 @@ class LiteIntradayStrategy(_LiteBase):
 class LiteRangeStrategy(_LiteBase):
     """Range — BB bounce with rejection; 5x leverage in sim profile."""
 
-    stoploss = -0.018
+    stoploss = -0.012
     minimal_roi = {"0": 0.022, "40": 0.012, "100": 0}
     pair_cooldown_minutes = 360
     sim_leverage = 1.0
@@ -208,7 +208,7 @@ class LiteRangeStrategy(_LiteBase):
 class LiteScalpingStrategy(_LiteBase):
     """Scalping — EMA cross with min volatility; ROI covers ~0.12% fees."""
 
-    stoploss = -0.009
+    stoploss = -0.003
     minimal_roi = {"0": 0.007, "30": 0.004, "75": 0}
     pair_cooldown_minutes = 150
 
@@ -272,7 +272,7 @@ class LiteHftStrategy(_LiteBase):
 class LiteArbitrageStrategy(_LiteBase):
     """Mean-reversion — z-score extremes only in quiet flat regimes."""
 
-    stoploss = -0.008
+    stoploss = -0.002
     minimal_roi = {"0": 0.005, "20": 0.0025, "60": 0}
     pair_cooldown_minutes = 180
 
@@ -303,7 +303,7 @@ class LiteArbitrageStrategy(_LiteBase):
 class SimLegacyFinderProxyStrategy(_LiteBase):
     """Legacy hybrid proxy — rare trend impulses only (no ML)."""
 
-    stoploss = -0.04
+    stoploss = -0.034
     minimal_roi = {"0": 0.035, "120": 0.018, "360": 0.005, "720": 0}
     pair_cooldown_minutes = 4320
     startup_candle_count = 210

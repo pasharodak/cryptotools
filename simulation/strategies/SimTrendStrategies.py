@@ -24,14 +24,32 @@ def _resample_4h(dataframe: DataFrame) -> DataFrame:
     return ohlc.dropna(subset=["close"]).reset_index()
 
 
+def _candle_timeframe(dataframe: DataFrame) -> str:
+    """Base candle size from median bar spacing. 5m stays 5m; 1h/4h runs stay aligned."""
+    if dataframe is None or len(dataframe) < 3 or "date" not in dataframe.columns:
+        return "5m"
+    delta = dataframe["date"].diff().dt.total_seconds().dropna()
+    if delta.empty:
+        return "5m"
+    minutes = float(delta.median()) / 60.0
+    if minutes >= 180:
+        return "4h"
+    if minutes >= 45:
+        return "1h"
+    if minutes >= 10:
+        return "15m"
+    return "5m"
+
+
 def _merge_4h(dataframe: DataFrame, informative: DataFrame) -> DataFrame:
-    return merge_informative_pair(dataframe, informative, "5m", "4h", ffill=True)
+    base_tf = _candle_timeframe(dataframe)
+    return merge_informative_pair(dataframe, informative, base_tf, "4h", ffill=True)
 
 
 class SimEmaGoldenCross(_LiteBase):
     """EMA 50/200 golden cross on 4H (resampled), retest EMA50 on 5m, ADX>22."""
 
-    stoploss = -0.025
+    stoploss = -0.019
     minimal_roi = {"0": 0.04, "240": 0.02, "720": 0.01, "1440": 0}
     pair_cooldown_minutes = 720
     startup_candle_count = 250
@@ -82,7 +100,7 @@ class SimEmaGoldenCross(_LiteBase):
 class SimBreakoutRetest(_LiteBase):
     """Range breakout with volume, retest zone entry."""
 
-    stoploss = -0.022
+    stoploss = -0.016
     minimal_roi = {"0": 0.03, "180": 0.015, "480": 0.008, "960": 0}
     pair_cooldown_minutes = 480
     startup_candle_count = 200
@@ -151,7 +169,7 @@ class SimBreakoutRetest(_LiteBase):
 class SimBreakoutRetestTest(SimBreakoutRetest):
     """Breakout-Retest test block: 1x, wider SL, no RSI/range chase, exit if close loses EMA20."""
 
-    stoploss = -0.03
+    stoploss = -0.014
     minimal_roi = {"0": 0.02, "60": 0.012, "180": 0.008, "480": 0}
     pair_cooldown_minutes = 360
     sim_leverage = 1.0
@@ -204,7 +222,7 @@ class SimBreakoutRetestTest(SimBreakoutRetest):
 class SimFibPullback(_LiteBase):
     """Fib 0.618–0.786 pullback in 4H uptrend; DCA entries."""
 
-    stoploss = -0.03
+    stoploss = -0.024
     minimal_roi = {"0": 0.035, "360": 0.02, "720": 0.01, "1440": 0}
     pair_cooldown_minutes = 600
     startup_candle_count = 250
@@ -249,7 +267,7 @@ class SimFibPullback(_LiteBase):
 class SimLiquiditySweep(_LiteBase):
     """Liquidity sweep below swing low + pin bar + volume spike."""
 
-    stoploss = -0.018
+    stoploss = -0.012
     minimal_roi = {"0": 0.025, "90": 0.012, "240": 0.006, "480": 0}
     pair_cooldown_minutes = 360
     startup_candle_count = 120
@@ -290,7 +308,7 @@ class SimLiquiditySweep(_LiteBase):
 class SimChannelMeanRev(_LiteBase):
     """Horizontal channel mean-reversion: RSI 30/70 + ADX<20."""
 
-    stoploss = -0.02
+    stoploss = -0.014
     minimal_roi = {"0": 0.02, "60": 0.012, "180": 0.006, "480": 0}
     pair_cooldown_minutes = 300
     startup_candle_count = 150

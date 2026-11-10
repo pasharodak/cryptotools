@@ -21,7 +21,7 @@ def _stoch_fast(series: Series, period: int) -> Series:
 class SchaffTrendCycleStrategy(_LiteBase):
     """Schaff Trend Cycle — MACD + double stochastic (LiteFinance STC scalp)."""
 
-    stoploss = -0.016
+    stoploss = -0.01
     minimal_roi = {"0": 0.011, "40": 0.0055, "110": 0}
     pair_cooldown_minutes = 90
     startup_candle_count = 80
@@ -63,7 +63,7 @@ class SchaffTrendCycleStrategy(_LiteBase):
 class QqeCrossStrategy(_LiteBase):
     """QQE — smoothed RSI vs signal EMA; band filter for volatility-adjusted timing."""
 
-    stoploss = -0.015
+    stoploss = -0.009
     minimal_roi = {"0": 0.01, "40": 0.005, "110": 0}
     pair_cooldown_minutes = 90
     startup_candle_count = 80
@@ -120,7 +120,7 @@ class QqeCrossStrategy(_LiteBase):
 class DemarkerReclaimStrategy(_LiteBase):
     """DeMarker — fade extremes reclaiming 0.30 / 0.70."""
 
-    stoploss = -0.015
+    stoploss = -0.009
     minimal_roi = {"0": 0.01, "40": 0.005, "110": 0}
     pair_cooldown_minutes = 90
 
@@ -153,7 +153,7 @@ class DemarkerReclaimStrategy(_LiteBase):
 class KstSignalStrategy(_LiteBase):
     """Know Sure Thing — weighted multi-ROC with signal EMA (Pring)."""
 
-    stoploss = -0.017
+    stoploss = -0.011
     minimal_roi = {"0": 0.012, "50": 0.006, "150": 0}
     pair_cooldown_minutes = 110
     startup_candle_count = 120
@@ -203,7 +203,7 @@ class KstSignalStrategy(_LiteBase):
 class RviCrossStrategy(_LiteBase):
     """Relative Vigor Index — RVI / signal cross (open-close vs range)."""
 
-    stoploss = -0.015
+    stoploss = -0.009
     minimal_roi = {"0": 0.01, "40": 0.005, "110": 0}
     pair_cooldown_minutes = 90
 
@@ -253,7 +253,7 @@ class RviCrossStrategy(_LiteBase):
 class VwapReclaimStrategy(_LiteBase):
     """Session-rolling VWAP reclaim — institutional fair-value bounce (2026 TA guides)."""
 
-    stoploss = -0.014
+    stoploss = -0.008
     minimal_roi = {"0": 0.009, "35": 0.0045, "90": 0}
     pair_cooldown_minutes = 80
     startup_candle_count = 80
@@ -290,7 +290,7 @@ class VwapReclaimStrategy(_LiteBase):
 class RsiDivergenceStrategy(_LiteBase):
     """Regular RSI divergence vs swing highs/lows (preferred over raw RSI levels in 2026 guides)."""
 
-    stoploss = -0.016
+    stoploss = -0.01
     minimal_roi = {"0": 0.011, "45": 0.0055, "120": 0}
     pair_cooldown_minutes = 120
     startup_candle_count = 80
@@ -345,7 +345,7 @@ class RsiDivergenceStrategy(_LiteBase):
 class ChandelierFlipStrategy(_LiteBase):
     """Chandelier Exit flip — ATR trail from highest high / lowest low (trend following)."""
 
-    stoploss = -0.02
+    stoploss = -0.008
     minimal_roi = {"0": 0.014, "60": 0.007, "180": 0}
     pair_cooldown_minutes = 120
     startup_candle_count = 80
@@ -382,7 +382,7 @@ class ChandelierFlipStrategy(_LiteBase):
 class ZscoreMeanRevStrategy(_LiteBase):
     """Z-score mean reversion — fade |z|>2 when ADX low / ATR not expanding (Vantixs/BloFin)."""
 
-    stoploss = -0.014
+    stoploss = -0.008
     minimal_roi = {"0": 0.009, "35": 0.0045, "90": 0}
     pair_cooldown_minutes = 80
     startup_candle_count = 80
@@ -424,7 +424,7 @@ class ZscoreMeanRevStrategy(_LiteBase):
 class TtmSqueezeStrategy(_LiteBase):
     """TTM Squeeze — BB inside Keltner then momentum release (LazyBear-style)."""
 
-    stoploss = -0.018
+    stoploss = -0.012
     minimal_roi = {"0": 0.013, "50": 0.006, "150": 0}
     pair_cooldown_minutes = 100
     startup_candle_count = 80

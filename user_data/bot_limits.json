@@ -1,8 +1,8 @@
 {
     "max_open_trades": {
-        "finder": 2,
-        "strategy": 19,
-        "grid": 1
+        "finder": 100,
+        "strategy": 100,
+        "grid": 20
     },
     "stake_amount": {
         "grid": 1.0,
@@ -12,5 +12,6 @@
     "strategy_risk": {
         "stoploss": -0.15,
         "take_profit": 0.05
-    }
+    },
+    "max_open_trades_per_strategy": 0
 }

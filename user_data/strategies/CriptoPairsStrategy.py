@@ -24,7 +24,7 @@ class CriptoPairsStrategy(IStrategy):
         "240": 0,
     }
 
-    stoploss = -0.05
+    stoploss = -0.024
     trailing_stop = False
 
     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:

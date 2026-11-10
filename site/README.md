@@ -1,34 +1,48 @@
-﻿# CryptoTools — site (прод)
+﻿# CryptoTools — site (прод Contabo)
 
-Live на Bybit USDT Perp: **Strategy** + **Grid** + **ML Finder**, панель **custom-ui**, **pair-config**, **ML gate**.
+Live Bybit USDT Perp на **Contabo `194.163.149.122`**: shared Strategy + Grid + ML Finder, **custom-ui**, **pair-config**, ML gate, multi-user Live/Demo.
 
-Симуляции: `../simulation/`.
+- UI: https://194.163.149.122:8443/
+- App на VPS: `/home/cryptotools/app`
+- Static UI: `/var/www/criptotools-ui/`
+- Обзор и правила: [`../README.md`](../README.md) · агент: [`../AGENTS.md`](../AGENTS.md) · сервер: [`SERVER_SETUP.md`](SERVER_SETUP.md)
 
-## Боты
+Симуляции: `../simulation/`. Старый VPS `77.222.35.209` не использовать.
 
-| Unit (VPS) | Config | Стратегия | Порт | UI API |
-|------------|--------|-----------|------|--------|
-| strategy | `config_strategy.json` | `MultiStrategyRouter` | 8081 | `/api/strategy/` |
-| grid | `config_grid.json` | `VolatilityGridStrategy` | 8082 | `/api/grid/` |
-| finder | `config.json` | `TradeFinderStrategy` | 8080 | `/api/finder/` |
+## Сервисы
 
-systemd-имена на сервере: `cryptotools-strategy`, `cryptotools-grid`, `ctengine` (исторические имена unit-файлов).
+| Unit | Config / код | Порт |
+|------|--------------|------|
+| `cryptotools-signal-engine` | `config_signal_engine.json` | 8081 |
+| `trade-executor` | `scripts/trade_executor.py` | — |
+| `cryptotools-grid` | `config_grid.json` | 8082 |
+| `cryptotools-finder` | `config.json` | 8080 |
+| `pair-config` | `scripts/pair_config_server.py` | 8090 |
+| nginx | конфиг на сервере (в git не входит) | 8443 |
 
-Strategy: **SL −15%**, **ROI `{"0": 0.05}`**.
+Start/Stop: control-plane + `bot_reconcile` через серверные `deploy/admin-systemctl.sh` / `tenant-systemctl.sh` (в git их нет).
 
 ## Локально
 
 ```powershell
 cd D:\cryptotools\site
 .\scripts\load_env.ps1
-.\.venv\Scripts\ctbot.exe trade --config user_data\config_strategy.json --strategy MultiStrategyRouter
+.\scripts\start_local_site.ps1
 ```
 
-## Деплой
+## Важные скрипты
 
-```powershell
-cd D:\cryptotools\site\scripts
-.\deploy_prod_ml.ps1
-```
+| Скрипт | Назначение |
+|--------|------------|
+| `bot_reconcile.py` | desired → process (systemd wrappers) |
+| `control_plane.py` | desired/observed + user_settings |
+| `pair_entry_guard.py` | first-wins по паре |
+| `reconcile_positions.py` | призраки / дубли vs Bybit |
+| `signal_bus.py` | очередь сигналов → executor |
 
-См. [`SERVER_SETUP.md`](SERVER_SETUP.md).
+## Деплой Contabo
+
+> Деплой-инструменты в репозиторий не входят (`site/deploy/*` и `deploy_*.ps1` удалены в `f74b321`).
+> На сервере остаются установленные units/nginx/sudo-wrappers; деплой — приватным набором скриптов владельца.
+
+SSH (VPN off): `ssh -i site/deploy/id_rsa/id_rsa root@194.163.149.122`.

@@ -975,6 +975,13 @@ class RPC:
             return {"status": "already running"}
 
         self._ctengine.state = State.RUNNING
+        # Allow one fresh "trader is not running" log if stopped again later.
+        try:
+            from ctengine.rpc.api_server.webserver import ApiServer
+
+            ApiServer._trader_not_running_logged = False
+        except Exception:  # noqa: BLE001
+            pass
         return {"status": "starting trader ..."}
 
     def _rpc_stop(self) -> dict[str, str]:

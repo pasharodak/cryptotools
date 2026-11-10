@@ -168,6 +168,7 @@ class LiveMlGate:
         self.model_path = self.user_data / "models/pnl_classifier/pnl_classifier.joblib"
         self.grid_model_path = self.user_data / GRID_MODEL_REL
         self.config = self._load_config()
+        self._config_mtime: float | None = self._config_path_mtime()
         self._pipe = None
         self._grid_pipe = None
         self._scenario_pipes: dict[str, Any] = {}
@@ -176,14 +177,36 @@ class LiveMlGate:
         self._grid_ready = False
         self._armed_at_ms = int(datetime.now(tz=UTC).timestamp() * 1000)
 
+    def _config_path_mtime(self) -> float | None:
+        try:
+            return self.config_path.stat().st_mtime if self.config_path.is_file() else None
+        except OSError:
+            return None
+
     def _load_config(self) -> dict[str, Any]:
         if not self.config_path.is_file():
             return dict(DEFAULT_CONFIG)
         cfg = json.loads(self.config_path.read_text(encoding="utf-8"))
         return {**DEFAULT_CONFIG, **cfg}
 
+    def _refresh_config(self) -> None:
+        """Hot-reload ml_entry_gate.json when the file changes (no bot restart)."""
+        mtime = self._config_path_mtime()
+        if mtime is None or mtime == self._config_mtime:
+            return
+        try:
+            self.config = self._load_config()
+            self._config_mtime = mtime
+            logger.info(
+                "ML gate config reloaded (grid=%s)",
+                self.config.get("grid_bots") or {},
+            )
+        except (json.JSONDecodeError, OSError) as exc:
+            logger.warning("ML gate config reload failed: %s", exc)
+
     @property
     def enabled(self) -> bool:
+        self._refresh_config()
         return bool(self.config.get("enabled"))
 
     def _ensure_grid_model(self) -> bool:
@@ -357,6 +380,7 @@ class LiveMlGate:
         return feature_columns()
 
     def _resolve_gate_rules(self, scenario: dict[str, Any] | None) -> tuple[str, float]:
+        self._refresh_config()
         sid = (scenario or {}).get("scenario_id") or ""
         strategy = (scenario or {}).get("strategy") or ""
         if strategy == FINDER_STRATEGY:
