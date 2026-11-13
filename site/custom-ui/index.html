@@ -9,7 +9,7 @@
   <title>CriptoTools — панель управления</title>
   <link rel="icon" type="image/png" href="bitcoin-icon.png?v=20260801" />
   <link rel="apple-touch-icon" href="bitcoin-icon.png?v=20260801" />
-  <link rel="stylesheet" href="styles.css?v=20261108bot" />
+  <link rel="stylesheet" href="styles.css?v=20261113board12" />
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script>
     (function () {
@@ -194,7 +194,56 @@
     <div id="reconcile-banner" class="reconcile-banner hidden" role="alert" aria-live="polite"></div>
 
     <div id="dashboard-view">
-    <main class="grid-4" id="main-content" tabindex="-1">
+    <main class="grid-4 is-trade-board" id="main-content" tabindex="-1">
+      <div class="board-switch-bar">
+        <div class="board-switch" role="group" aria-label="Вид панели">
+          <button
+            type="button"
+            class="board-switch-btn"
+            data-board="bots"
+            aria-pressed="false"
+            title="Боты"
+            aria-label="Боты"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <rect x="3.5" y="3.5" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7"/>
+              <rect x="13.5" y="3.5" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7"/>
+              <rect x="3.5" y="13.5" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7"/>
+              <rect x="13.5" y="13.5" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7"/>
+            </svg>
+          </button>
+          <button
+            type="button"
+            class="board-switch-btn"
+            data-board="trades"
+            aria-pressed="false"
+            title="Сделки с графиками"
+            aria-label="Сделки с графиками"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" d="M7 4.5v2.2M7 14.2V19.5M12 4.5V7M12 14.5V19.5M17 4.5v5.2M17 16.2V19.5"/>
+              <rect x="5" y="6.7" width="4" height="7.5" rx="0.7" fill="currentColor"/>
+              <rect x="10" y="7" width="4" height="7.5" rx="0.7" fill="currentColor"/>
+              <rect x="15" y="9.7" width="4" height="6.5" rx="0.7" fill="currentColor"/>
+            </svg>
+          </button>
+          <button
+            type="button"
+            class="board-switch-btn is-active"
+            data-board="summary"
+            aria-pressed="true"
+            title="Сводка сделок"
+            aria-label="Сводка сделок"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" d="M8.2 6.5H19.5M8.2 12H19.5M8.2 17.5H19.5"/>
+              <path fill="currentColor" d="M4.2 5.2h2.3v2.6H4.2zM4.2 10.7h2.3v2.6H4.2zM4.2 16.2h2.3v2.6H4.2z"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div id="trade-charts-board" class="trade-charts-board hidden" hidden aria-hidden="true"></div>
+      <div id="trade-summary-board" class="trade-summary-board" aria-hidden="false"><p class="empty">Сводка…</p></div>
       <section class="panel panel-test-strategies" id="panel-test-strategies" data-block="test_strategies">
         <div class="panel-head">
           <div class="panel-title">
@@ -835,7 +884,7 @@
               <h2>Grid · боковик</h2>
               <details class="ui-hint">
                 <summary class="ui-hint-btn" aria-label="Подсказка">i</summary>
-                <div class="ui-hint-body" id="grid-ml-gate">Demo-счёт администратора. Канал 1м/5м, вход у края, тейк 65% ширины, стоп 50% за каналом. ML gate на входе.</div>
+                <div class="ui-hint-body" id="grid-ml-gate">Demo-счёт администратора. Канал 1м/5м, вход у края, тейк 65% ширины, стоп −15% от стейка. ML gate на входе.</div>
               </details>
             </div>
             <p class="muted">Только администратор · торгует на Demo Bybit</p>
@@ -1473,6 +1522,9 @@
         <span id="history-page-info" class="history-page-info">—</span>
         <button type="button" class="btn btn-sm ghost" id="history-page-next">Вперёд →</button>
       </div>
+      <section id="history-dist" class="history-dist" aria-label="Распределение данных">
+        <p class="muted history-dist-lead">Распределение появится после загрузки сделок.</p>
+      </section>
       <p class="muted logs-footnote" id="history-status">Загрузка…</p>
     </div>
 
@@ -2175,6 +2227,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=20261108bot" defer></script>
+  <script src="app.js?v=20261113board11" defer></script>
 </body>
 </html>

@@ -1553,6 +1553,69 @@ def _fetch_bot_open_trades_live(
         return None
 
 
+_PRICE_BOOK_TTL = 8.0
+_price_book_lock = threading.Lock()
+_price_book_cache: dict[str, tuple[float, dict[str, float]]] = {}
+
+
+def _fetch_last_prices(exchange: str) -> dict[str, float]:
+    """One public ticker book. Live and demo share the same mark prices."""
+    out: dict[str, float] = {}
+    if exchange == "binance":
+        url = "https://fapi.binance.com/fapi/v1/ticker/price"
+        req = urllib.request.Request(url, headers={"User-Agent": "cryptotools"})
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            data = json.loads(resp.read().decode())
+        if isinstance(data, list):
+            for row in data:
+                if not isinstance(row, dict):
+                    continue
+                sym = str(row.get("symbol") or "")
+                try:
+                    px = float(row.get("price") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if sym and px > 0:
+                    out[sym] = px
+        return out
+    url = "https://api.bybit.com/v5/market/tickers?category=linear"
+    req = urllib.request.Request(url, headers={"User-Agent": "cryptotools"})
+    with urllib.request.urlopen(req, timeout=6) as resp:
+        data = json.loads(resp.read().decode())
+    items = ((data.get("result") or {}).get("list") or []) if isinstance(data, dict) else []
+    for row in items:
+        if not isinstance(row, dict):
+            continue
+        sym = str(row.get("symbol") or "")
+        try:
+            px = float(row.get("lastPrice") or 0)
+        except (TypeError, ValueError):
+            continue
+        if sym and px > 0:
+            out[sym] = px
+    return out
+
+
+def _public_last_prices(exchange: str) -> dict[str, float]:
+    ex = "binance" if str(exchange) == "binance" else "bybit"
+    now = time.monotonic()
+    with _price_book_lock:
+        hit = _price_book_cache.get(ex)
+        if hit and now - hit[0] < _PRICE_BOOK_TTL:
+            return hit[1]
+    try:
+        book = _fetch_last_prices(ex)
+    except Exception as exc:  # noqa: BLE001
+        _server_log.warning("last prices %s: %s", ex, exc)
+        with _price_book_lock:
+            hit = _price_book_cache.get(ex)
+            return hit[1] if hit else {}
+    if book:
+        with _price_book_lock:
+            _price_book_cache[ex] = (time.monotonic(), book)
+    return book
+
+
 def load_open_trades_from_db(bot: str, *, llm_mode: str = "exclude") -> list[dict[str, Any]]:
     """Open trades from sqlite with mark-to-market PnL for the UI.
 
@@ -1582,26 +1645,28 @@ def load_open_trades_from_db(bot: str, *, llm_mode: str = "exclude") -> list[dic
             conn.row_factory = sqlite3.Row
             rows = conn.execute(query).fetchall()
         marks: dict[str, float] = {}
+        price_book: dict[str, float] | None = None
         try:
-            from exchange.user_exchange import fetch_public_klines, ft_pair_to_symbol
+            from exchange.user_exchange import ft_pair_to_symbol
         except Exception:  # noqa: BLE001
-            fetch_public_klines = None  # type: ignore[assignment]
             ft_pair_to_symbol = None  # type: ignore[assignment]
 
         def _mark_for(pair: str) -> float | None:
-            if not fetch_public_klines or not ft_pair_to_symbol:
-                return None
+            nonlocal price_book
             if pair in marks:
                 val = marks[pair]
                 return None if val != val else val
-            try:
-                sym = ft_pair_to_symbol(str(pair))
-                tick_rows = fetch_public_klines(sym, interval="1", limit=1)
-                if tick_rows:
-                    marks[pair] = float(tick_rows[-1][4])
-                    return marks[pair]
-            except Exception:  # noqa: BLE001
-                marks[pair] = float("nan")
+            if price_book is None:
+                user = tc.current_user() or {}
+                cid = str(user.get("id") or "")
+                ex = "bybit" if cid in ("", "admin") else tm.context_exchange(cid)
+                price_book = _public_last_prices(ex)
+            sym = ft_pair_to_symbol(str(pair)) if ft_pair_to_symbol else str(pair).replace("/", "").replace(":USDT", "")
+            px = float(price_book.get(sym) or 0)
+            if px > 0:
+                marks[pair] = px
+                return px
+            marks[pair] = float("nan")
             return None
 
         out: list[dict[str, Any]] = []
@@ -1892,6 +1957,364 @@ def get_open_trades_bundle(*, refresh: bool = False) -> dict[str, Any]:
         }
 
 
+def _open_trades_login_id(user: dict | None) -> str:
+    user = user or {}
+    uid = str(user.get("id") or "")
+    if tm.is_admin(user) and not tm.is_impersonating(user):
+        return "admin"
+    return tm.parent_user_id_of_context(uid) or uid
+
+
+_SUMMARY_FEE = 0.001
+
+
+def _summary_db_rows(bot: str) -> list[dict[str, Any]]:
+    """Open rows for the summary. No mark requests and no ML attach."""
+    bot = resolve_bot(bot)
+    db_path = _bot_db_path(bot)
+    if not db_path:
+        return []
+    query = """
+        SELECT pair, strategy, enter_tag, is_short, open_rate, stake_amount, amount, leverage
+        FROM trades
+        WHERE is_open = 1
+    """
+    try:
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            fetched = conn.execute(query).fetchall()
+    except sqlite3.Error as exc:
+        _server_log.warning("summary trades %s: %s", bot, exc)
+        return []
+    out: list[dict[str, Any]] = []
+    for r in fetched:
+        if bot == "strategy" and (
+            _trade_is_llm(r["enter_tag"], r["strategy"])
+            or _trade_is_book(r["enter_tag"], r["strategy"])
+            or _trade_is_cursor(r["enter_tag"], r["strategy"])
+            or _trade_is_cursor_book(r["enter_tag"], r["strategy"])
+            or _trade_is_price_action(r["enter_tag"], r["strategy"])
+        ):
+            continue
+        if not r["pair"]:
+            continue
+        out.append(
+            {
+                "bot": bot,
+                "pair": r["pair"],
+                "strategy": r["strategy"],
+                "enter_tag": r["enter_tag"],
+                "is_short": bool(r["is_short"]),
+                "open_rate": float(r["open_rate"] or 0),
+                "stake_amount": float(r["stake_amount"] or 0),
+                "amount": float(r["amount"] or 0),
+                "leverage": float(r["leverage"] or 1) or 1.0,
+            }
+        )
+    return out
+
+
+def _week_db_rows(bot: str, since_ms: float) -> list[dict[str, Any]]:
+    """Closed trades since ``since_ms``. Net PnL includes the round-trip fee."""
+    bot = resolve_bot(bot)
+    db_path = _bot_db_path(bot)
+    if not db_path:
+        return []
+    cutoff = datetime.fromtimestamp(since_ms / 1000.0, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    query = """
+        SELECT strategy, enter_tag, close_profit_abs, amount, open_rate, close_rate,
+               stake_amount, leverage, close_date
+        FROM trades
+        WHERE is_open = 0 AND close_date >= ?
+    """
+    query_legacy = """
+        SELECT strategy, enter_tag, close_profit_abs, open_rate, close_rate,
+               stake_amount, close_date
+        FROM trades
+        WHERE is_open = 0 AND close_date >= ?
+    """
+    try:
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            try:
+                fetched = conn.execute(query, (cutoff,)).fetchall()
+            except sqlite3.Error:
+                fetched = conn.execute(query_legacy, (cutoff,)).fetchall()
+    except sqlite3.Error as exc:
+        _server_log.warning("week trades %s: %s", bot, exc)
+        return []
+    out: list[dict[str, Any]] = []
+    keys = set(fetched[0].keys()) if fetched else set()
+    for r in fetched:
+        close_ms = _parse_close_date_ms(r["close_date"])
+        if close_ms is None or close_ms < since_ms:
+            continue
+        if bot == "strategy" and (
+            _trade_is_llm(r["enter_tag"], r["strategy"])
+            or _trade_is_book(r["enter_tag"], r["strategy"])
+            or _trade_is_cursor(r["enter_tag"], r["strategy"])
+            or _trade_is_cursor_book(r["enter_tag"], r["strategy"])
+            or _trade_is_price_action(r["enter_tag"], r["strategy"])
+        ):
+            continue
+        gross = r["close_profit_abs"]
+        try:
+            gross_f = float(gross) if gross is not None else None
+        except (TypeError, ValueError):
+            gross_f = None
+        net = None
+        if gross_f is not None:
+            net = _pnl_net_of_fees(
+                gross_f,
+                amount=float(r["amount"] or 0) if "amount" in keys else None,
+                open_rate=float(r["open_rate"] or 0),
+                close_rate=float(r["close_rate"] or 0),
+                stake_amount=float(r["stake_amount"] or 0),
+                leverage=float(r["leverage"] or 1) if "leverage" in keys else 1.0,
+            )
+        out.append(
+            {
+                "bot": bot,
+                "strategy": r["strategy"],
+                "enter_tag": r["enter_tag"],
+                "pnl": net,
+            }
+        )
+    return out
+
+
+def _summary_rows_as_context(user: dict, context_id: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    exchange = tm.context_exchange(context_id)
+    switched = dict(user or {})
+    switched["id"] = context_id
+    if context_id != "admin":
+        switched.pop("_imp_by", None)
+        switched["role"] = "user"
+    since_ms = time.time() * 1000.0 - 7 * 86400000.0
+    token = tc.set_request_user(switched)
+    try:
+        rows: list[dict[str, Any]] = []
+        week: list[dict[str, Any]] = []
+        for bot in ("strategy", "grid"):
+            for row in _summary_db_rows(bot):
+                row["exchange"] = exchange
+                rows.append(row)
+            for row in _week_db_rows(bot, since_ms):
+                row["exchange"] = exchange
+                week.append(row)
+        return rows, week
+    finally:
+        tc.reset_request_user(token)
+
+
+def _summary_strategy_name(bot: str, enter_tag: Any, strategy: Any, labels: dict[str, str]) -> str:
+    if bot == "grid":
+        return "Grid (BB+ADX) + ML gate"
+    raw = str(enter_tag or "")
+    tag = raw
+    for _ in range(2):
+        low = tag.lower()
+        if low.endswith(":hedge"):
+            tag = tag[: -len(":hedge")]
+        elif low.endswith(":inv"):
+            tag = tag[: -len(":inv")]
+    bits: list[str] = []
+    low_raw = raw.lower()
+    if ":inv" in low_raw:
+        bits.append("инв")
+    if ":hedge" in low_raw:
+        bits.append("хедж")
+    base = labels.get(tag) if tag else None
+    if not base and strategy and str(strategy) != "MultiStrategyRouter":
+        base = labels.get(str(strategy))
+    if not base:
+        base = tag or "Без тега"
+    if bits:
+        return f"{base} · {' · '.join(bits)}"
+    return base
+
+
+def _summary_net(row: dict[str, Any], mark: float | None) -> float | None:
+    open_rate = float(row.get("open_rate") or 0)
+    stake = float(row.get("stake_amount") or 0)
+    amount = float(row.get("amount") or 0)
+    lev = float(row.get("leverage") or 1) or 1.0
+    if mark is None or mark <= 0 or open_rate <= 0:
+        return None
+    if row.get("is_short"):
+        ratio = ((open_rate - mark) / open_rate) * lev
+    else:
+        ratio = ((mark - open_rate) / open_rate) * lev
+    gross = ratio * stake
+    if amount > 0:
+        fees = amount * open_rate * _SUMMARY_FEE + amount * mark * _SUMMARY_FEE
+    elif stake > 0:
+        fees = 2 * stake * lev * _SUMMARY_FEE
+    else:
+        fees = 0.0
+    return gross - fees
+
+
+def _group_summary_rows(raw_rows: list[dict[str, Any]], books: dict[str, dict[str, float]]) -> list[dict[str, Any]]:
+    from exchange.user_exchange import ft_pair_to_symbol
+
+    labels = _strategy_label_map()
+    exchanges = {str(row.get("exchange") or "bybit") for row in raw_rows}
+    show_ex = len(exchanges) > 1
+    groups: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in raw_rows:
+        ex = str(row.get("exchange") or "bybit")
+        try:
+            sym = ft_pair_to_symbol(str(row.get("pair") or ""))
+        except Exception:  # noqa: BLE001
+            sym = str(row.get("pair") or "")
+        mark = float((books.get(ex) or {}).get(sym) or 0)
+        net = _summary_net(row, mark if mark > 0 else None)
+        name = _summary_strategy_name(row.get("bot") or "strategy", row.get("enter_tag"), row.get("strategy"), labels)
+        if show_ex:
+            name = f"{name} · {'Binance' if ex == 'binance' else 'Bybit'}"
+        side = "short" if row.get("is_short") else "long"
+        bucket = groups.get((name, side))
+        if bucket is None:
+            bucket = {
+                "name": name,
+                "side": side,
+                "count": 0,
+                "pnl": 0.0,
+                "known": False,
+                "wins": 0,
+                "losses": 0,
+                "win_pnl": 0.0,
+                "loss_pnl": 0.0,
+            }
+            groups[(name, side)] = bucket
+        bucket["count"] += 1
+        if net is None:
+            continue
+        bucket["pnl"] += net
+        bucket["known"] = True
+        if net > 0:
+            bucket["wins"] += 1
+            bucket["win_pnl"] += net
+        elif net < 0:
+            bucket["losses"] += 1
+            bucket["loss_pnl"] += net
+    rows = [
+        {
+            "name": bucket["name"],
+            "side": bucket["side"],
+            "count": bucket["count"],
+            "pnl": round(float(bucket["pnl"]), 4) if bucket["known"] else None,
+            "wins": bucket["wins"],
+            "losses": bucket["losses"],
+            "win_pnl": round(float(bucket["win_pnl"]), 4),
+            "loss_pnl": round(float(bucket["loss_pnl"]), 4),
+        }
+        for bucket in groups.values()
+        if bucket["count"]
+    ]
+    rows.sort(key=lambda item: (str(item["name"]).lower(), 0 if item["side"] == "long" else 1))
+    return rows
+
+
+def _group_week_rows(raw_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Closed trades for the last 7 days, one line per strategy."""
+    labels = _strategy_label_map()
+    exchanges = {str(row.get("exchange") or "bybit") for row in raw_rows}
+    show_ex = len(exchanges) > 1
+    groups: dict[str, dict[str, Any]] = {}
+    for row in raw_rows:
+        ex = str(row.get("exchange") or "bybit")
+        name = _summary_strategy_name(row.get("bot") or "strategy", row.get("enter_tag"), row.get("strategy"), labels)
+        if show_ex:
+            name = f"{name} · {'Binance' if ex == 'binance' else 'Bybit'}"
+        bucket = groups.get(name)
+        if bucket is None:
+            bucket = {"name": name, "count": 0, "pnl": 0.0, "known": False}
+            groups[name] = bucket
+        bucket["count"] += 1
+        net = row.get("pnl")
+        if net is not None:
+            bucket["pnl"] += float(net)
+            bucket["known"] = True
+    rows = [
+        {
+            "name": bucket["name"],
+            "count": bucket["count"],
+            "pnl": round(float(bucket["pnl"]), 4) if bucket["known"] else None,
+        }
+        for bucket in groups.values()
+        if bucket["count"]
+    ]
+    rows.sort(key=lambda item: str(item["name"]).lower())
+    return rows
+
+
+def _summary_bucket_mode(context_id: str) -> str:
+    """Admin house id is ``admin``, but those Bybit keys are often Demo API keys."""
+    mode = tm.context_mode(context_id)
+    if context_id != "admin":
+        return mode
+    try:
+        import trading.trade_executor as te
+
+        if te.uses_demo_api("admin"):
+            return "demo"
+    except Exception as exc:  # noqa: BLE001
+        _server_log.warning("admin demo flag: %s", exc)
+    return mode
+
+
+def get_open_trades_accounts() -> dict[str, Any]:
+    """Ready Live/Demo summary. Sqlite first, one ticker book per exchange, then grouped rows."""
+    user = tc.current_user() or {}
+    login = _open_trades_login_id(user)
+    collected: dict[str, list[dict[str, Any]]] = {"live": [], "demo": []}
+    week_collected: dict[str, list[dict[str, Any]]] = {"live": [], "demo": []}
+    active: dict[str, bool] = {"live": False, "demo": False}
+    exchanges: dict[str, list[str]] = {"live": [], "demo": []}
+    needed: set[str] = set()
+    for mode in ("live", "demo"):
+        for ex in tm.SUPPORTED_EXCHANGES:
+            try:
+                if not tm.has_mode_secrets(login, mode, exchange=ex):
+                    continue
+                cid = tm.exchange_context_id(login, exchange=ex, mode=mode)
+            except Exception as exc:  # noqa: BLE001
+                _server_log.warning("open trades secrets %s %s %s: %s", login, mode, ex, exc)
+                continue
+            bucket = _summary_bucket_mode(cid)
+            active[bucket] = True
+            if ex not in exchanges[bucket]:
+                exchanges[bucket].append(ex)
+            try:
+                rows, week_rows = _summary_rows_as_context(user, cid)
+            except Exception as exc:  # noqa: BLE001
+                _server_log.warning("open trades context %s: %s", cid, exc)
+                rows, week_rows = [], []
+            if rows:
+                needed.add(ex)
+            collected[bucket].extend(rows)
+            week_collected[bucket].extend(week_rows)
+    books = {ex: _public_last_prices(ex) for ex in needed}
+    accounts = []
+    for mode in ("live", "demo"):
+        accounts.append(
+            {
+                "mode": mode,
+                "active": active[mode],
+                "exchanges": exchanges[mode],
+                "rows": _group_summary_rows(collected[mode], books),
+                "week": _group_week_rows(week_collected[mode]),
+            }
+        )
+    return {
+        "account_mode": "all",
+        "accounts": accounts,
+        "built_at": int(time.time() * 1000),
+    }
+
+
 def start_open_trades_cache_scheduler() -> None:
     """Keep open-trade lists warm so UI is not blocked on slow ctbot /status."""
 
@@ -2180,6 +2603,23 @@ def _store_stats_bundle(key: str, payload: dict[str, Any], *, user_id: str | Non
         }
 
 
+def _stats_user_for_key(
+    user: dict[str, Any] | None, key: str
+) -> dict[str, Any] | None:
+    """Login id stored on a cache entry. A ``:demo`` key reads that user's demo tenant.
+
+    The warmer and the stale rebuild both pass the login user. Building a demo
+    key with that id copies the live sqlite into the demo bundle, and
+    account_mode=all then lists every closed trade twice.
+    """
+    if not user or not str(key).endswith(":demo"):
+        return user
+    login = tm.parent_user_id_of_context(str(user.get("id") or ""))
+    if not login:
+        return user
+    return {**user, "id": tm.demo_context_id(login)}
+
+
 def _build_and_store_stats(
     key: str,
     user: dict[str, Any] | None,
@@ -2187,8 +2627,9 @@ def _build_and_store_stats(
 ) -> dict[str, Any]:
     token = None
     try:
-        if user is not None:
-            token = tc.set_request_user(user)
+        build_user = _stats_user_for_key(user, key)
+        if build_user is not None:
+            token = tc.set_request_user(build_user)
         payload = build_stats_bundle(limit)
         uid = str((user or {}).get("id") or "") or None
         _store_stats_bundle(key, payload, user_id=uid)
@@ -8722,8 +9163,12 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/open-trades":
             qs = parse_qs(parsed.query)
             refresh = str((qs.get("refresh") or [""])[0]).lower() in ("1", "true", "yes")
+            account_mode = str((qs.get("account_mode") or qs.get("mode") or [""])[0]).strip().lower()
             try:
-                self._json(200, get_open_trades_bundle(refresh=refresh))
+                if account_mode == "all":
+                    self._json(200, get_open_trades_accounts())
+                else:
+                    self._json(200, get_open_trades_bundle(refresh=refresh))
             except Exception as exc:  # noqa: BLE001
                 self._json(500, {"error": str(exc)})
             return

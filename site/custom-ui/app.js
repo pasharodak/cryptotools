@@ -2492,7 +2492,780 @@ function renderHistoryTable(entries) {
   }
 
   renderHistoryPagination(entries.length);
+  renderHistoryDistribution(entries);
 }
+
+/* history-dist-start */
+/** Distribution, tertiles and Pearson correlation for the history panel. */
+
+function fmtHistoryDuration(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return "—";
+  const min = ms / 60000;
+  if (min < 1) return "< 1 мин";
+  if (min < 90) return `${Math.round(min)} мин`;
+  const hours = min / 60;
+  if (hours < 48) {
+    const rounded = hours < 10 ? Math.round(hours * 10) / 10 : Math.round(hours);
+    return `${rounded} ч`;
+  }
+  const days = hours / 24;
+  const rounded = days < 10 ? Math.round(days * 10) / 10 : Math.round(days);
+  return `${rounded} д`;
+}
+
+function distNum(n) {
+  if (!Number.isFinite(n)) return "0";
+  return String(Math.round(n * 100) / 100);
+}
+
+function distClamp01(t) {
+  if (!Number.isFinite(t)) return 0;
+  return Math.min(1, Math.max(0, t));
+}
+
+function distScale(v, min, max) {
+  if (!Number.isFinite(v) || !Number.isFinite(min) || !Number.isFinite(max) || max === min) return 0.5;
+  return (v - min) / (max - min);
+}
+
+function distQuantile(sorted, p) {
+  const n = sorted.length;
+  if (!n) return null;
+  if (n === 1) return sorted[0];
+  const idx = (n - 1) * Math.min(1, Math.max(0, p));
+  const lo = Math.floor(idx);
+  const hi = Math.ceil(idx);
+  if (lo === hi) return sorted[lo];
+  const w = idx - lo;
+  return sorted[lo] * (1 - w) + sorted[hi] * w;
+}
+
+function distRows(points, key) {
+  return (points || []).filter((row) => Number.isFinite(row?.[key]));
+}
+
+function distMeanOf(rows, key) {
+  if (!rows || !rows.length) return null;
+  let sum = 0;
+  for (const row of rows) sum += row[key];
+  return sum / rows.length;
+}
+
+function distMedianOf(rows, key) {
+  if (!rows || !rows.length) return null;
+  const values = rows.map((row) => row[key]).sort((a, b) => a - b);
+  return distQuantile(values, 0.5);
+}
+
+function distDescribe(rows, key) {
+  const sorted = rows.slice().sort((a, b) => a[key] - b[key]);
+  const values = sorted.map((row) => row[key]);
+  const n = values.length;
+  if (!n) return null;
+  const q1 = distQuantile(values, 0.25);
+  const q3 = distQuantile(values, 0.75);
+  const median = distQuantile(values, 0.5);
+  let sum = 0;
+  for (const value of values) sum += value;
+  const iqr = q3 - q1;
+  const fenceLo = q1 - 1.5 * iqr;
+  const fenceHi = q3 + 1.5 * iqr;
+  const classify = n >= 8;
+  const outliers = [];
+  const inliers = [];
+  for (const row of sorted) {
+    const value = row[key];
+    if (classify && (value < fenceLo || value > fenceHi)) outliers.push(row);
+    else inliers.push(row);
+  }
+  let lowN = 0;
+  let highN = 0;
+  for (const row of outliers) {
+    if (row[key] < fenceLo) lowN += 1;
+    else highN += 1;
+  }
+  return {
+    sorted,
+    values,
+    n,
+    q1,
+    q3,
+    median,
+    mean: sum / n,
+    iqr,
+    fenceLo,
+    fenceHi,
+    outliers,
+    inliers,
+    lowN,
+    highN,
+    min: values[0],
+    max: values[n - 1],
+    whiskerLo: inliers.length ? inliers[0][key] : values[0],
+    whiskerHi: inliers.length ? inliers[inliers.length - 1][key] : values[n - 1],
+    classify,
+  };
+}
+
+function historyDistBinCount(n) {
+  if (n <= 1) return 1;
+  if (n < 8) return Math.min(5, n);
+  const sturges = Math.round(Math.log2(n) + 1);
+  return Math.max(6, Math.min(14, sturges));
+}
+
+function distHistogram(values, binCount) {
+  const n = values.length;
+  if (!n) return [];
+  let min = values[0];
+  let max = values[0];
+  for (const value of values) {
+    if (value < min) min = value;
+    if (value > max) max = value;
+  }
+  const binsN = Math.max(1, binCount);
+  if (min === max) return [{ from: min, to: max, mid: min, count: n }];
+  const width = (max - min) / binsN;
+  const bins = [];
+  for (let i = 0; i < binsN; i++) {
+    const from = min + i * width;
+    const to = min + (i + 1) * width;
+    bins.push({ from, to, mid: (from + to) / 2, count: 0 });
+  }
+  for (const value of values) {
+    let i = Math.floor((value - min) / width);
+    if (i < 0) i = 0;
+    if (i >= binsN) i = binsN - 1;
+    bins[i].count += 1;
+  }
+  return bins;
+}
+
+function distPearson(xs, ys) {
+  const n = xs.length;
+  if (n < 3 || ys.length !== n) return null;
+  let sx = 0;
+  let sy = 0;
+  for (let i = 0; i < n; i++) {
+    sx += xs[i];
+    sy += ys[i];
+  }
+  const mx = sx / n;
+  const my = sy / n;
+  let num = 0;
+  let dx = 0;
+  let dy = 0;
+  for (let i = 0; i < n; i++) {
+    const a = xs[i] - mx;
+    const b = ys[i] - my;
+    num += a * b;
+    dx += a * a;
+    dy += b * b;
+  }
+  if (dx <= 0 || dy <= 0) return null;
+  const r = num / Math.sqrt(dx * dy);
+  if (!Number.isFinite(r)) return null;
+  return Math.max(-1, Math.min(1, r));
+}
+
+function distLinreg(xs, ys) {
+  const n = xs.length;
+  if (n < 2 || ys.length !== n) return null;
+  let sx = 0;
+  let sy = 0;
+  for (let i = 0; i < n; i++) {
+    sx += xs[i];
+    sy += ys[i];
+  }
+  const mx = sx / n;
+  const my = sy / n;
+  let num = 0;
+  let den = 0;
+  for (let i = 0; i < n; i++) {
+    const a = xs[i] - mx;
+    num += a * (ys[i] - my);
+    den += a * a;
+  }
+  if (den <= 0) return null;
+  const slope = num / den;
+  return { slope, intercept: my - slope * mx };
+}
+
+function distTertileBands(rows, key) {
+  const sorted = rows.slice().sort((a, b) => a[key] - b[key]);
+  const n = sorted.length;
+  if (n < 3) return null;
+  const i1 = Math.floor(n / 3);
+  const i2 = Math.floor((2 * n) / 3);
+  const low = sorted.slice(0, i1);
+  const mid = sorted.slice(i1, i2);
+  const high = sorted.slice(i2);
+  if (!low.length || !mid.length || !high.length) return null;
+  return { low, mid, high };
+}
+
+function distTertiles(rows, key, higherIsBetter) {
+  const bands = distTertileBands(rows, key);
+  if (!bands) return null;
+  if (higherIsBetter) return { best: bands.high, mid: bands.mid, worst: bands.low };
+  return { best: bands.low, mid: bands.mid, worst: bands.high };
+}
+
+function distSamplePairs(pairs, max) {
+  if (pairs.length <= max) return pairs.slice();
+  const want = new Set();
+  const last = pairs.length - 1;
+  const steps = Math.max(1, max - 1);
+  for (let i = 0; i < max; i++) want.add(Math.round((i * last) / steps));
+  let minI = 0;
+  let maxI = 0;
+  for (let i = 1; i < pairs.length; i++) {
+    if (pairs[i].y < pairs[minI].y) minI = i;
+    if (pairs[i].y > pairs[maxI].y) maxI = i;
+  }
+  want.add(minI);
+  want.add(maxI);
+  return [...want].sort((a, b) => a - b).map((i) => pairs[i]);
+}
+
+const HISTORY_DIST_METRICS = [
+  {
+    key: "net",
+    pctKey: "netPct",
+    title: "С комиссией",
+    hint: "Колонка «С комиссией»: результат после round-trip комиссии",
+    kind: "usd",
+    higherIsBetter: true,
+    color: "#60a5fa",
+    segment: true,
+    bestHint: "больший результат после комиссии",
+  },
+  {
+    key: "maxProfit",
+    pctKey: "maxProfitPct",
+    title: "Макс. прибыль",
+    hint: "Самый высокий PnL за время сделки",
+    kind: "usd",
+    higherIsBetter: true,
+    color: "#34d399",
+    segment: true,
+    bestHint: "больший пик",
+  },
+  {
+    key: "maxLoss",
+    pctKey: "maxLossPct",
+    title: "Макс. убыток",
+    hint: "Самый низкий PnL за время сделки. Лучшие — менее глубокая просадка",
+    kind: "usd",
+    higherIsBetter: true,
+    color: "#f87171",
+    segment: true,
+    bestHint: "менее глубокая просадка",
+  },
+  {
+    key: "durationMs",
+    pctKey: null,
+    title: "Длительность",
+    hint: "От открытия до закрытия",
+    kind: "duration",
+    higherIsBetter: false,
+    color: "#f59e0b",
+    segment: false,
+    bestHint: "",
+  },
+];
+
+function historyDistFormat(kind, value) {
+  if (!Number.isFinite(value)) return "—";
+  if (kind === "duration") return fmtHistoryDuration(value);
+  const digits = Math.abs(value) >= 100 ? 1 : 2;
+  return fmtUsdSigned(value, digits);
+}
+
+function historyDistTick(kind, value) {
+  if (!Number.isFinite(value)) return "—";
+  if (kind === "duration") return fmtHistoryDuration(value);
+  if (Math.abs(value) >= 1000) {
+    const text = `${(value / 1000).toFixed(1)}k`;
+    return value > 0 ? `+${text}` : text;
+  }
+  const digits = Math.abs(value) >= 100 ? 0 : Math.abs(value) >= 10 ? 1 : 2;
+  const text = value.toFixed(digits);
+  return value > 0 ? `+${text}` : text;
+}
+
+function historyDistPoints(entries) {
+  const out = [];
+  for (const entry of entries || []) {
+    if (entry?.kind === "bybit") {
+      const item = entry.item || {};
+      const net = Number(item.realised_pnl ?? item.pnl);
+      const openMs = parseAppInstant(item.created_at || item.started_at)?.getTime() || 0;
+      const closeMs = bybitCloseMs(item);
+      out.push({
+        pair: item.pair || item.symbol || "—",
+        when: fmtBybitHistoryDate(item),
+        net: Number.isFinite(net) ? net : null,
+        netPct: null,
+        maxProfit: null,
+        maxProfitPct: null,
+        maxLoss: null,
+        maxLossPct: null,
+        durationMs: openMs > 0 && closeMs >= openMs ? closeMs - openMs : null,
+      });
+      continue;
+    }
+    const trade = entry?.trade;
+    if (!trade) continue;
+    const net = closedTradePnlNet(trade);
+    const extremes = tradeMaxProfitLoss(trade, { requireTracked: true });
+    const openMs = parseAppInstant(trade.open_date)?.getTime() || 0;
+    const closeMs = tradeCloseMs(trade);
+    out.push({
+      pair: trade.pair || "—",
+      when: fmtTradeDate(trade),
+      net: Number.isFinite(net.abs) ? net.abs : null,
+      netPct: Number.isFinite(net.pct) ? net.pct : null,
+      maxProfit: extremes.maxProfit && Number.isFinite(extremes.maxProfit.abs) ? extremes.maxProfit.abs : null,
+      maxProfitPct: extremes.maxProfit && Number.isFinite(extremes.maxProfit.pct) ? extremes.maxProfit.pct : null,
+      maxLoss: extremes.maxLoss && Number.isFinite(extremes.maxLoss.abs) ? extremes.maxLoss.abs : null,
+      maxLossPct: extremes.maxLoss && Number.isFinite(extremes.maxLoss.pct) ? extremes.maxLoss.pct : null,
+      durationMs: openMs > 0 && closeMs >= openMs ? closeMs - openMs : null,
+    });
+  }
+  return out;
+}
+
+function historyDistEdgeLabel(rows, key, kind, sign) {
+  if (!rows.length) return "";
+  let extreme = rows[0][key];
+  for (const row of rows) {
+    if (sign < 0 ? row[key] < extreme : row[key] > extreme) extreme = row[key];
+  }
+  const text = historyDistTick(kind, extreme);
+  return rows.length > 1 ? `${text} · ${rows.length}` : text;
+}
+
+function historyDistBoxSvg(desc, metric) {
+  const lowRows = desc.outliers.filter((row) => row[metric.key] < desc.fenceLo);
+  const highRows = desc.outliers.filter((row) => row[metric.key] > desc.fenceHi);
+  const lowText = historyDistEdgeLabel(lowRows, metric.key, metric.kind, -1);
+  const highText = historyDistEdgeLabel(highRows, metric.key, metric.kind, 1);
+  const padL = lowText ? Math.min(112, Math.max(48, lowText.length * 6.4 + 12)) : 12;
+  const padR = highText ? Math.min(112, Math.max(48, highText.length * 6.4 + 12)) : 12;
+  const W = 360;
+  const H = 64;
+  const y = 24;
+  const span = desc.whiskerHi - desc.whiskerLo;
+  const lo = span === 0 ? desc.whiskerLo - 1 : desc.whiskerLo - span * 0.08;
+  const hi = span === 0 ? desc.whiskerHi + 1 : desc.whiskerHi + span * 0.08;
+  const plotW = W - padL - padR;
+  const xOf = (value) => padL + distClamp01(distScale(value, lo, hi)) * plotW;
+  const x1 = xOf(desc.whiskerLo);
+  const x2 = xOf(desc.whiskerHi);
+  const q1 = xOf(desc.q1);
+  const boxW = Math.max(2, xOf(desc.q3) - q1);
+  const med = xOf(desc.median);
+  const aria = escapeHtml(`Шкала ${metric.title}, медиана ${historyDistFormat(metric.kind, desc.median)}`);
+  const lowMark = lowText
+    ? `<text x="4" y="${y + 4}" fill="#f59e0b" font-size="10" text-anchor="start">${escapeHtml(lowText)}</text>`
+    : "";
+  const highMark = highText
+    ? `<text x="${W - 4}" y="${y + 4}" fill="#f59e0b" font-size="10" text-anchor="end">${escapeHtml(highText)}</text>`
+    : "";
+  return `<svg viewBox="0 0 ${W} ${H}" class="history-dist-svg" role="img" aria-label="${aria}">
+    ${lowMark}
+    ${highMark}
+    <line x1="${distNum(x1)}" y1="${y}" x2="${distNum(x2)}" y2="${y}" stroke="#8b9cb3" stroke-width="1.5"/>
+    <line x1="${distNum(x1)}" y1="${y - 7}" x2="${distNum(x1)}" y2="${y + 7}" stroke="#8b9cb3" stroke-width="1.5"/>
+    <line x1="${distNum(x2)}" y1="${y - 7}" x2="${distNum(x2)}" y2="${y + 7}" stroke="#8b9cb3" stroke-width="1.5"/>
+    <rect x="${distNum(q1)}" y="${y - 9}" width="${distNum(boxW)}" height="18" rx="3" fill="${metric.color}" fill-opacity="0.28" stroke="${metric.color}"/>
+    <line x1="${distNum(med)}" y1="${y - 9}" x2="${distNum(med)}" y2="${y + 9}" stroke="#e8eef7" stroke-width="2"/>
+    <text x="${distNum(x1)}" y="56" fill="#8b9cb3" font-size="10" text-anchor="start">${escapeHtml(historyDistTick(metric.kind, desc.whiskerLo))}</text>
+    <text x="${distNum(x2)}" y="56" fill="#8b9cb3" font-size="10" text-anchor="end">${escapeHtml(historyDistTick(metric.kind, desc.whiskerHi))}</text>
+  </svg>`;
+}
+
+function historyDistHistSvg(values, metric) {
+  const bins = distHistogram(values, historyDistBinCount(values.length));
+  if (!bins.length) return "";
+  const W = 360;
+  const H = 132;
+  const padL = 8;
+  const padR = 8;
+  const padT = 10;
+  const padB = 22;
+  const plotW = W - padL - padR;
+  const plotH = H - padT - padB;
+  let maxCount = 1;
+  for (const bin of bins) if (bin.count > maxCount) maxCount = bin.count;
+  const slot = plotW / bins.length;
+  const barW = Math.max(1, slot - (bins.length > 1 ? 3 : 0));
+  const parts = [];
+  if (metric.kind === "usd" && bins[0].from < 0 && bins[bins.length - 1].to > 0) {
+    const zx = padL + distClamp01(distScale(0, bins[0].from, bins[bins.length - 1].to)) * plotW;
+    parts.push(`<line x1="${distNum(zx)}" y1="${padT}" x2="${distNum(zx)}" y2="${padT + plotH}" stroke="#8b9cb3" stroke-dasharray="3 3" stroke-width="1"/>`);
+  }
+  bins.forEach((bin, i) => {
+    const h = (bin.count / maxCount) * plotH;
+    const x = padL + i * slot + (slot - barW) / 2;
+    const y = padT + plotH - h;
+    const fill = metric.kind === "duration" ? metric.color : bin.mid < 0 ? "#f87171" : "#34d399";
+    const title = `${historyDistTick(metric.kind, bin.from)} … ${historyDistTick(metric.kind, bin.to)}: ${bin.count}`;
+    parts.push(
+      `<rect x="${distNum(x)}" y="${distNum(y)}" width="${distNum(barW)}" height="${distNum(bin.count ? Math.max(h, 1.5) : 0)}" rx="2" fill="${fill}"><title>${escapeHtml(title)}</title></rect>`
+    );
+  });
+  const yText = H - 6;
+  const min = bins[0].from;
+  const max = bins[bins.length - 1].to;
+  parts.push(`<text x="${padL}" y="${yText}" fill="#8b9cb3" font-size="10" text-anchor="start">${escapeHtml(historyDistTick(metric.kind, min))}</text>`);
+  if (bins.length > 1 && max !== min) {
+    parts.push(`<text x="${W / 2}" y="${yText}" fill="#8b9cb3" font-size="10" text-anchor="middle">${escapeHtml(historyDistTick(metric.kind, (min + max) / 2))}</text>`);
+    parts.push(`<text x="${W - padR}" y="${yText}" fill="#8b9cb3" font-size="10" text-anchor="end">${escapeHtml(historyDistTick(metric.kind, max))}</text>`);
+  }
+  return `<svg viewBox="0 0 ${W} ${H}" class="history-dist-svg" role="img" aria-label="${escapeHtml(`Гистограмма «${metric.title}»`)}">${parts.join("")}</svg>`;
+}
+
+function historyDistStatsTable(desc, metric) {
+  const fmt = (value) => escapeHtml(historyDistFormat(metric.kind, value));
+  const lines = [
+    ["Сделок", String(desc.n)],
+    ["Минимум", fmt(desc.min)],
+    ["25%", fmt(desc.q1)],
+    ["Медиана", fmt(desc.median)],
+    ["75%", fmt(desc.q3)],
+    ["Максимум", fmt(desc.max)],
+    ["Среднее", fmt(desc.mean)],
+  ];
+  if (metric.pctKey) {
+    const pctRows = distRows(desc.sorted, metric.pctKey);
+    if (pctRows.length === desc.n) {
+      const pctDesc = distDescribe(pctRows, metric.pctKey);
+      if (pctDesc) {
+        lines.push(["Медиана %", escapeHtml(fmtPct(pctDesc.median))]);
+        lines.push(["Среднее %", escapeHtml(fmtPct(pctDesc.mean))]);
+      }
+    }
+  }
+  lines.push(["Выбросы", desc.classify ? String(desc.outliers.length) : "от 8 сделок"]);
+  const body = lines
+    .map(([label, value]) => `<tr><th scope="row">${escapeHtml(label)}</th><td>${value}</td></tr>`)
+    .join("");
+  return `<table class="history-dist-stats">${body}</table>`;
+}
+
+function historyDistOutlierHtml(desc, metric) {
+  if (!desc.classify) {
+    return `<p class="muted history-dist-note">Выбросы считаются от 8 сделок.</p>`;
+  }
+  if (!desc.outliers.length) {
+    return `<p class="muted history-dist-note">Выбросов нет: все значения внутри типичного разброса.</p>`;
+  }
+  const ranked = desc.outliers
+    .slice()
+    .sort((a, b) => Math.abs(b[metric.key] - desc.median) - Math.abs(a[metric.key] - desc.median));
+  const shown = ranked.slice(0, 6);
+  const extra = ranked.length - shown.length;
+  const body = shown
+    .map((row) => {
+      const value = row[metric.key];
+      const cls = metric.kind === "usd" ? pnlClass(value) : "";
+      const pct =
+        metric.pctKey && Number.isFinite(row[metric.pctKey])
+          ? `<br><span class="muted">${escapeHtml(fmtPct(row[metric.pctKey]))}</span>`
+          : "";
+      return `<tr>
+        <td>${escapeHtml(row.pair)}</td>
+        <td class="${cls}">${escapeHtml(historyDistFormat(metric.kind, value))}${pct}</td>
+        <td>${escapeHtml(row.when)}</td>
+      </tr>`;
+    })
+    .join("");
+  const more = extra > 0 ? `<p class="muted history-dist-note">Ещё ${extra}. В таблице самые далёкие от медианы.</p>` : "";
+  return `<p class="history-dist-tails"><span>Слева: ${desc.lowN}</span><span>Справа: ${desc.highN}</span></p>
+    <table class="history-dist-outliers">
+      <thead><tr><th>Пара</th><th>Значение</th><th>Дата</th></tr></thead>
+      <tbody>${body}</tbody>
+    </table>
+    ${more}`;
+}
+
+function historyDistCardHtml(metric, points) {
+  const rows = distRows(points, metric.key);
+  const cover =
+    rows.length === points.length ? `${rows.length} сделок` : `${rows.length} из ${points.length}`;
+  let coverTitle = "";
+  if (rows.length !== points.length && (metric.key === "maxProfit" || metric.key === "maxLoss")) {
+    coverTitle = "Нет записанных min/max цены";
+  } else if (rows.length !== points.length && metric.key === "durationMs") {
+    coverTitle = "Нет пары дат открытия и закрытия";
+  }
+  if (!rows.length) {
+    return `<article class="history-dist-card" data-metric="${metric.key}">
+      <header class="history-dist-card-head">
+        <div>
+          <h4>${escapeHtml(metric.title)}</h4>
+          <p class="muted">${escapeHtml(metric.hint)}</p>
+        </div>
+        <p class="history-dist-cover">${escapeHtml(cover)}</p>
+      </header>
+      <p class="history-dist-empty">Нет данных в выбранных сделках.</p>
+    </article>`;
+  }
+  const desc = distDescribe(rows, metric.key);
+  const histRows = desc.inliers.length ? desc.inliers : desc.sorted;
+  const histNote =
+    histRows.length === desc.n
+      ? "Высота столбца — число сделок. На шкале блок — середина 50% сделок."
+      : "Столбцы и шкала — без выбросов, чтобы был виден основной разброс. Жёлтые числа по краям шкалы и таблица ниже — выбросы.";
+  return `<article class="history-dist-card" data-metric="${metric.key}">
+    <header class="history-dist-card-head">
+      <div>
+        <h4>${escapeHtml(metric.title)}</h4>
+        <p class="muted">${escapeHtml(metric.hint)}</p>
+      </div>
+      <p class="history-dist-cover" title="${escapeHtml(coverTitle)}">${escapeHtml(cover)}</p>
+    </header>
+    <div class="history-dist-card-body">
+      ${historyDistStatsTable(desc, metric)}
+      <div class="history-dist-visual">
+        ${historyDistBoxSvg(desc, metric)}
+        ${historyDistHistSvg(histRows.map((row) => row[metric.key]), metric)}
+        <p class="muted history-dist-note">${escapeHtml(histNote)}</p>
+      </div>
+    </div>
+    ${historyDistOutlierHtml(desc, metric)}
+  </article>`;
+}
+
+function historyDistSegmentHtml(metric, points) {
+  const rows = distRows(points, metric.key);
+  const groups = distTertiles(rows, metric.key, metric.higherIsBetter);
+  if (!groups) {
+    return `<article class="history-seg-card">
+      <h4>${escapeHtml(metric.title)}</h4>
+      <p class="history-dist-empty">Нужно минимум 3 сделки с данными.</p>
+    </article>`;
+  }
+  const order = [
+    ["best", "Лучшие", groups.best],
+    ["mid", "Средние", groups.mid],
+    ["worst", "Худшие", groups.worst],
+  ];
+  const bar = order
+    .map(([id, , group]) => `<span class="history-seg-chunk is-${id}" style="flex:${group.length} 1 0"></span>`)
+    .join("");
+  const cards = order
+    .map(([id, label, group]) => {
+      const med = distMedianOf(group, metric.key);
+      const min = group[0][metric.key];
+      const max = group[group.length - 1][metric.key];
+      const pctRows = metric.pctKey ? group.filter((row) => Number.isFinite(row[metric.pctKey])) : [];
+      const pctMed = pctRows.length === group.length ? distMedianOf(pctRows, metric.pctKey) : null;
+      const range =
+        min === max
+          ? escapeHtml(historyDistFormat(metric.kind, min))
+          : `${escapeHtml(historyDistFormat(metric.kind, min))} — ${escapeHtml(historyDistFormat(metric.kind, max))}`;
+      const share = Math.round((group.length / rows.length) * 100);
+      const pct = pctMed != null ? `<div class="muted">${escapeHtml(fmtPct(pctMed))}</div>` : "";
+      return `<article class="history-seg-group is-${id}">
+        <div class="history-seg-label">${label}</div>
+        <div class="history-seg-count">${group.length} · ${share}%</div>
+        <div class="history-seg-median ${metric.kind === "usd" ? pnlClass(med) : ""}">${escapeHtml(historyDistFormat(metric.kind, med))}</div>
+        ${pct}
+        <div class="muted history-seg-range">${range}</div>
+      </article>`;
+    })
+    .join("");
+  return `<article class="history-seg-card">
+    <header class="history-seg-head">
+      <h4>${escapeHtml(metric.title)}</h4>
+      <p class="muted">Лучшие — ${escapeHtml(metric.bestHint)}. Крупная цифра — медиана группы.</p>
+    </header>
+    <div class="history-seg-bar" aria-hidden="true">${bar}</div>
+    <div class="history-seg-groups">${cards}</div>
+  </article>`;
+}
+
+function historyDistCorrPhrase(r, n) {
+  if (n < 3) return "Нужно минимум 3 сделки с длительностью и этой метрикой.";
+  if (r == null) return "Длительность или метрика почти не меняется, связь не считается.";
+  const abs = Math.abs(r);
+  const rText = `${r > 0 ? "+" : ""}${r.toFixed(2)}`;
+  let strength = "Сильная";
+  if (abs < 0.2) strength = "Слабая";
+  else if (abs < 0.4) strength = "Умеренная";
+  else if (abs < 0.7) strength = "Заметная";
+  let direction = "без выраженного наклона";
+  if (r >= 0.1) direction = "значение растёт вместе с длительностью";
+  else if (r <= -0.1) direction = "значение снижается у более долгих сделок";
+  const caution = n < 12 ? " Сделок мало, оценка грубая." : "";
+  return `${strength} связь, r = ${rText}: ${direction}.${caution}`;
+}
+
+function historyDistScatterSvg(pairs, metric) {
+  if (pairs.length < 3) return "";
+  const W = 360;
+  const H = 168;
+  const padL = 46;
+  const padR = 10;
+  const padT = 12;
+  const padB = 24;
+  const plotW = W - padL - padR;
+  const plotH = H - padT - padB;
+  let xMin = pairs[0].x;
+  let xMax = pairs[0].x;
+  for (const point of pairs) {
+    if (point.x < xMin) xMin = point.x;
+    if (point.x > xMax) xMax = point.x;
+  }
+  const yDesc = distDescribe(
+    pairs.map((point) => ({ y: point.y })),
+    "y"
+  );
+  let yMin = yDesc.whiskerLo;
+  let yMax = yDesc.whiskerHi;
+  if (yMax === yMin) {
+    yMin -= 1;
+    yMax += 1;
+  } else {
+    const padY = (yMax - yMin) * 0.1;
+    yMin -= padY;
+    yMax += padY;
+  }
+  const xOf = (x) => padL + distScale(x, xMin, xMax) * plotW;
+  const yOf = (y) => padT + (1 - distScale(y, yMin, yMax)) * plotH;
+  const clipId = `hd-clip-${metric.key}`;
+  const parts = [
+    `<defs><clipPath id="${clipId}"><rect x="${padL}" y="${padT}" width="${distNum(plotW)}" height="${distNum(plotH)}"/></clipPath></defs>`,
+    `<line x1="${padL}" y1="${padT + plotH}" x2="${padL + plotW}" y2="${padT + plotH}" stroke="#2a3648"/>`,
+    `<line x1="${padL}" y1="${padT}" x2="${padL}" y2="${padT + plotH}" stroke="#2a3648"/>`,
+  ];
+  if (yMin < 0 && yMax > 0) {
+    const zy = yOf(0);
+    parts.push(`<line x1="${padL}" y1="${distNum(zy)}" x2="${padL + plotW}" y2="${distNum(zy)}" stroke="#8b9cb3" stroke-dasharray="3 3"/>`);
+  }
+  const fitPoints = pairs.filter((point) => point.y >= yDesc.whiskerLo && point.y <= yDesc.whiskerHi);
+  const regSource = fitPoints.length >= 3 ? fitPoints : pairs;
+  const reg = distLinreg(
+    regSource.map((point) => point.x),
+    regSource.map((point) => point.y)
+  );
+  const sample = distSamplePairs(pairs, 220);
+  parts.push(`<g clip-path="url(#${clipId})">`);
+  if (reg) {
+    const y1 = reg.intercept + reg.slope * xMin;
+    const y2 = reg.intercept + reg.slope * xMax;
+    parts.push(
+      `<line x1="${distNum(xOf(xMin))}" y1="${distNum(yOf(y1))}" x2="${distNum(xOf(xMax))}" y2="${distNum(yOf(y2))}" stroke="${metric.color}" stroke-width="1.6"/>`
+    );
+  }
+  for (const point of sample) {
+    const outside = point.y < yMin || point.y > yMax;
+    const y = Math.min(yMax, Math.max(yMin, point.y));
+    const title = `${point.pair} · ${historyDistFormat(metric.kind, point.y)} · ${fmtHistoryDuration(point.x)}`;
+    parts.push(
+      `<circle cx="${distNum(xOf(point.x))}" cy="${distNum(yOf(y))}" r="${outside ? 3 : 2.4}" fill="${outside ? "#f59e0b" : metric.color}" fill-opacity="${outside ? "0.95" : "0.55"}"><title>${escapeHtml(title)}</title></circle>`
+    );
+  }
+  parts.push(`</g>`);
+  parts.push(`<text x="${padL - 4}" y="${padT + 8}" fill="#8b9cb3" font-size="10" text-anchor="end">${escapeHtml(historyDistTick(metric.kind, yMax))}</text>`);
+  parts.push(`<text x="${padL - 4}" y="${padT + plotH}" fill="#8b9cb3" font-size="10" text-anchor="end">${escapeHtml(historyDistTick(metric.kind, yMin))}</text>`);
+  parts.push(`<text x="${padL}" y="${H - 6}" fill="#8b9cb3" font-size="10" text-anchor="start">${escapeHtml(fmtHistoryDuration(xMin))}</text>`);
+  parts.push(`<text x="${W - padR}" y="${H - 6}" fill="#8b9cb3" font-size="10" text-anchor="end">${escapeHtml(fmtHistoryDuration(xMax))}</text>`);
+  return `<svg viewBox="0 0 ${W} ${H}" class="history-dist-svg" role="img" aria-label="${escapeHtml(`Корреляция «${metric.title}» и длительности`)}">${parts.join("")}</svg>`;
+}
+
+function historyDistBucketHtml(buckets, metric) {
+  let maxAbs = 0;
+  for (const bucket of buckets) {
+    if (Number.isFinite(bucket.value)) maxAbs = Math.max(maxAbs, Math.abs(bucket.value));
+  }
+  return buckets
+    .map((bucket) => {
+      const mag = maxAbs > 0 && Number.isFinite(bucket.value) ? (Math.abs(bucket.value) / maxAbs) * 50 : 0;
+      const positive = !(bucket.value < 0);
+      const left = positive ? 50 : 50 - mag;
+      return `<div class="history-corr-bucket">
+        <div class="history-corr-bucket-name">${escapeHtml(bucket.label)} <span class="muted">${escapeHtml(bucket.span)}</span></div>
+        <div class="history-corr-track">
+          <span class="history-corr-zero"></span>
+          <span class="history-corr-bar ${positive ? "is-pos" : "is-neg"}" style="left:${distNum(left)}%;width:${distNum(mag)}%"></span>
+        </div>
+        <div class="history-corr-bucket-val ${metric.kind === "usd" ? pnlClass(bucket.value) : ""}">${escapeHtml(historyDistFormat(metric.kind, bucket.value))}</div>
+      </div>`;
+    })
+    .join("");
+}
+
+function historyDistCorrHtml(metric, points) {
+  const pairs = [];
+  for (const row of points) {
+    if (Number.isFinite(row[metric.key]) && Number.isFinite(row.durationMs)) {
+      pairs.push({ x: row.durationMs, y: row[metric.key], pair: row.pair, when: row.when });
+    }
+  }
+  pairs.sort((a, b) => a.x - b.x || a.y - b.y);
+  const r = pairs.length >= 3 ? distPearson(pairs.map((point) => point.x), pairs.map((point) => point.y)) : null;
+  let body = `<p class="history-corr-phrase">${escapeHtml(historyDistCorrPhrase(r, pairs.length))}</p>`;
+  if (pairs.length >= 3) {
+    body += historyDistScatterSvg(pairs, metric);
+    const bands = distTertileBands(
+      pairs.map((point) => ({ durationMs: point.x, y: point.y })),
+      "durationMs"
+    );
+    if (bands) {
+      const buckets = [
+        ["Короткие", bands.low],
+        ["Средние", bands.mid],
+        ["Долгие", bands.high],
+      ].map(([label, group]) => ({
+        label: `${label} · ${group.length}`,
+        span: fmtHistoryDuration(distMedianOf(group, "durationMs")),
+        value: distMedianOf(group, "y"),
+      }));
+      body += `<div class="history-corr-buckets">${historyDistBucketHtml(buckets, metric)}</div>`;
+    }
+    const shown = Math.min(pairs.length, 220);
+    if (shown < pairs.length) {
+      body += `<p class="muted history-dist-note">На диаграмме ${shown} точек из ${pairs.length}. Коэффициент r по всем парам.</p>`;
+    }
+  }
+  return `<article class="history-corr-card"><h4>${escapeHtml(metric.title)}</h4>${body}</article>`;
+}
+
+function historyDistHtml(points) {
+  const head = `<header class="history-dist-head">
+      <h3 class="history-dist-title">Распределение данных</h3>
+      <p class="muted history-dist-lead">Все сделки текущего фильтра, не только эта страница. Выброс — значение за пределами типичного разброса между 25-м и 75-м процентилями.</p>
+    </header>`;
+  if (!points.length) {
+    return `${head}<p class="history-dist-empty">Нет закрытых сделок по выбранным фильтрам.</p>`;
+  }
+  const cards = HISTORY_DIST_METRICS.map((metric) => historyDistCardHtml(metric, points)).join("");
+  const segments = HISTORY_DIST_METRICS.filter((metric) => metric.segment)
+    .map((metric) => historyDistSegmentHtml(metric, points))
+    .join("");
+  const corrs = HISTORY_DIST_METRICS.filter((metric) => metric.segment)
+    .map((metric) => historyDistCorrHtml(metric, points))
+    .join("");
+  return `${head}
+    <div class="history-dist-grid">${cards}</div>
+    <h3 class="history-dist-subtitle">Сегменты</h3>
+    <p class="muted history-dist-lead">Три группы с равным числом сделок: лучшие, средние и худшие.</p>
+    <div class="history-seg-list">${segments}</div>
+    <h3 class="history-dist-subtitle">Корреляция с длительностью</h3>
+    <p class="muted history-dist-lead">Связь трёх метрик с продолжительностью сделки. r — коэффициент Пирсона от −1 до +1. Полосы — медиана коротких, средних и долгих сделок. Жёлтые точки — выбросы за пределами типичного разброса.</p>
+    <div class="history-corr-grid">${corrs}</div>`;
+}
+
+function renderHistoryDistribution(entries) {
+  const root = $("history-dist");
+  if (!root) return;
+  root.innerHTML = historyDistHtml(historyDistPoints(entries || []));
+}
+/* history-dist-end */
 
 function collectUniquePairs(data) {
   const pairs = new Set();
@@ -8012,7 +8785,7 @@ function renderTimeCloseLegHtml({
 
 function renderStrategyTimeCloseHtml() {
   const hint = uiHintHtml(
-    "Таймер считается от открытия каждой сделки отдельно. Проверка один раз, когда у этой сделки проходит указанное время (плюс несколько минут на цикл монитора): прибыль строго выше порога — закрыть. Если в этот момент порог не пройден, по времени сделка больше не закроется. Сделки с разным временем входа не закрываются вместе. «Закрытие убытков» — то же для убытка (по умолчанию выкл). PnL до комиссии. Обычные SL/TP работают независимо."
+    "Таймер считается от открытия каждой сделки отдельно. После указанного времени сделка закрывается, пока прибыль строго выше порога — в том числе если порог пройден позже дедлайна. Сделки с разным временем входа не закрываются вместе. «Закрытие убытков» — то же для убытка (по умолчанию выкл). PnL до комиссии. Обычные SL/TP работают независимо."
   );
   return `
     <div class="strategy-risk-bar-inner strategy-time-close-stack">
@@ -8159,7 +8932,7 @@ function renderTestStrategyRiskControls() {
 
 function renderTestStrategyTimeCloseHtml() {
   const hint = uiHintHtml(
-    "Таймер тестового блока считается от открытия каждой сделки отдельно. Проверка один раз, когда у этой сделки проходит указанное время (плюс несколько минут на цикл монитора): прибыль строго выше порога — закрыть. Если в этот момент порог не пройден, по времени сделка больше не закроется. «Закрытие убытков» — то же для убытка (по умолчанию выкл). PnL до комиссии. Обычные SL/TP работают независимо."
+    "Таймер тестового блока считается от открытия каждой сделки отдельно. После указанного времени сделка закрывается, пока прибыль строго выше порога — в том числе если порог пройден позже дедлайна. «Закрытие убытков» — то же для убытка (по умолчанию выкл). PnL до комиссии. Обычные SL/TP работают независимо."
   );
   return `
     <div class="strategy-risk-bar-inner strategy-time-close-stack">
@@ -9045,6 +9818,529 @@ function updateTradesSectionSummary(summaryId, trades, emptyLabel) {
   if (summary) summary.textContent = tradesSummaryText(trades, emptyLabel);
 }
 
+
+const BOARD_CHART_MS = 10 * 60 * 1000;
+let boardMode = "summary";
+let openSummarySeq = 0;
+let boardChartsAt = 0;
+
+function boardChartsStale() {
+  return Date.now() - boardChartsAt >= BOARD_CHART_MS;
+}
+
+function tradeBoardVisible() {
+  if (boardMode !== "trades") return false;
+  const dash = $("dashboard-view");
+  if (!dash || dash.classList.contains("hidden")) return false;
+  return panelIsActive();
+}
+
+function boardTradeKey(entry) {
+  const id = entry.trade.trade_id ?? entry.trade.id;
+  return `${entry.bot}:${id}`;
+}
+
+function boardTradePnl(entry) {
+  const t = entry.trade;
+  const abs = Number(t.profit_abs ?? t.total_profit_abs ?? 0);
+  const pct = Number(t.profit_pct ?? 0);
+  return {
+    abs: Number.isFinite(abs) ? abs : 0,
+    pct: Number.isFinite(pct) ? pct : 0,
+  };
+}
+
+function boardChartModel(entry, model) {
+  const pnl = boardTradePnl(entry);
+  const mark = Number(entry.trade.current_rate);
+  return {
+    ...model,
+    pnlAbs: pnl.abs,
+    pnlPct: pnl.pct,
+    closeRate: mark > 0 ? mark : model.closeRate,
+  };
+}
+
+function collectBoardTrades() {
+  const bots = ["strategy"];
+  if (userMayUseBlock("grid")) bots.push("grid");
+  if (userMayUseBlock("finder")) bots.push("finder");
+  const entries = [];
+  for (const bot of bots) {
+    for (const trade of botLiveCache[bot]?.trades || []) {
+      if (!trade?.pair || isRetiredTrade(trade)) continue;
+      const id = trade.trade_id ?? trade.id;
+      if (id == null || id === "") continue;
+      entries.push({ bot, trade, open: true });
+    }
+  }
+  entries.sort((a, b) => {
+    const ta = parseAppInstant(a.trade.open_date)?.getTime() || 0;
+    const tb = parseAppInstant(b.trade.open_date)?.getTime() || 0;
+    return tb - ta;
+  });
+  return entries;
+}
+
+function boardCardHtml(entry) {
+  const t = entry.trade;
+  const key = boardTradeKey(entry);
+  const pnl = boardTradePnl(entry);
+  const cls = pnlClass(pnl.abs);
+  const tradeId = t.trade_id ?? t.id;
+  const closeBtn =
+    settingsReadonly || demoMirrorAdmin
+      ? ""
+      : `<button type="button" class="btn danger btn-sm trade-chart-close" data-act="forceexit" data-bot="${escapeHtml(entry.bot)}" data-id="${escapeHtml(tradeId)}">Закрыть</button>`;
+  return `<article class="trade-chart-card ${cls}" data-board-key="${escapeHtml(key)}">
+    <div class="trade-chart-card-top">
+      <strong class="trade-chart-pair" title="${escapeHtml(t.pair || "")}">${escapeHtml(t.pair || "—")}</strong>
+      <div class="trade-chart-pnl ${cls}">
+        <span class="trade-chart-pnl-abs">${fmtUsdSigned(pnl.abs, 2)}</span>
+        <span class="trade-chart-pnl-pct">${fmtPct(pnl.pct)}</span>
+      </div>
+      ${closeBtn}
+    </div>
+    <div class="trade-chart-card-plot">
+      <canvas class="trade-chart-mini" data-board-chart="${escapeHtml(key)}" aria-label="График ${escapeHtml(t.pair || "сделки")}"></canvas>
+      <p class="trade-chart-mini-status muted">График…</p>
+    </div>
+  </article>`;
+}
+
+function updateBoardCard(card, entry) {
+  const pnl = boardTradePnl(entry);
+  const cls = pnlClass(pnl.abs);
+  card.classList.toggle("pos", cls === "pos");
+  card.classList.toggle("neg", cls === "neg");
+  const wrap = card.querySelector(".trade-chart-pnl");
+  if (wrap) {
+    wrap.classList.toggle("pos", cls === "pos");
+    wrap.classList.toggle("neg", cls === "neg");
+  }
+  const abs = card.querySelector(".trade-chart-pnl-abs");
+  const pct = card.querySelector(".trade-chart-pnl-pct");
+  if (abs) abs.textContent = fmtUsdSigned(pnl.abs, 2);
+  if (pct) pct.textContent = fmtPct(pnl.pct);
+}
+
+function boardChartCssSize(canvas) {
+  const width = Math.round(canvas.parentElement?.clientWidth || 0);
+  if (width < 80) return null;
+  const height = Math.round(Math.max(168, Math.min(280, width * 0.68)));
+  return { width, height };
+}
+
+function setBoardChartStatus(canvas, text) {
+  const status = canvas.parentElement?.querySelector(".trade-chart-mini-status");
+  if (!status) return;
+  status.textContent = text || "";
+  status.classList.toggle("is-hidden", !text);
+}
+
+async function paintBoardChart(entry, { fresh = false } = {}) {
+  const key = boardTradeKey(entry);
+  const canvas = document.querySelector(`canvas[data-board-chart="${key}"]`);
+  if (!canvas || !tradeBoardVisible()) return false;
+  const size = boardChartCssSize(canvas);
+  if (!size) return false;
+  const sameSize = canvas.dataset.w === String(size.width);
+  if (canvas.dataset.painting === "1") return false;
+  if (!fresh && sameSize && (canvas.dataset.ready === "1" || canvas.dataset.ready === "err")) return false;
+  canvas.dataset.painting = "1";
+  const gen = String((Number(canvas.dataset.gen) || 0) + 1);
+  canvas.dataset.gen = gen;
+  if (canvas.dataset.ready !== "1") setBoardChartStatus(canvas, "График…");
+  try {
+    if (fresh) chartsModelCache.delete(chartEntryKey(entry));
+    const model = boardChartModel(entry, await loadChartModel(entry));
+    if (canvas.dataset.gen !== gen || !canvas.isConnected || !tradeBoardVisible()) return false;
+    const next = boardChartCssSize(canvas) || size;
+    paintTradeChart(canvas, model, next.width, next.height);
+    canvas.dataset.w = String(next.width);
+    canvas.dataset.ready = "1";
+    setBoardChartStatus(canvas, "");
+    return true;
+  } catch (err) {
+    if (canvas.dataset.gen !== gen || !canvas.isConnected) return false;
+    canvas.dataset.w = String(size.width);
+    canvas.dataset.ready = "err";
+    setBoardChartStatus(canvas, chartErrorText(err));
+    return false;
+  } finally {
+    if (canvas.isConnected && canvas.dataset.gen === gen) canvas.dataset.painting = "0";
+  }
+}
+
+async function paintBoardCharts(entries, { fresh = false } = {}) {
+  const queue = entries.slice();
+  if (!queue.length) return;
+  const workers = Array.from({ length: 1 }, async () => {
+    while (queue.length && tradeBoardVisible()) {
+      const entry = queue.shift();
+      await paintBoardChart(entry, { fresh });
+    }
+  });
+  await Promise.all(workers);
+}
+
+function renderTradeChartsBoard({ repaint = false } = {}) {
+  const root = $("trade-charts-board");
+  if (!root || boardMode !== "trades") return;
+  const entries = collectBoardTrades();
+  const sig = entries.map(boardTradeKey).join("|");
+  if (root.dataset.sig !== sig) {
+    root.dataset.sig = sig;
+    root.innerHTML = entries.length
+      ? entries.map(boardCardHtml).join("")
+      : '<p class="empty trade-charts-empty">Нет открытых сделок</p>';
+  } else {
+    for (const entry of entries) {
+      const card = root.querySelector(`[data-board-key="${boardTradeKey(entry)}"]`);
+      if (card) updateBoardCard(card, entry);
+    }
+  }
+  if (!entries.length) return;
+  paintBoardCharts(entries, { fresh: repaint }).catch(() => {});
+}
+
+function syncTradeChartsBoard() {
+  if (!tradeBoardVisible()) return;
+  const repaint = boardChartsStale();
+  if (repaint) boardChartsAt = Date.now();
+  renderTradeChartsBoard({ repaint });
+}
+
+function setBoardPane(id, show) {
+  const node = $(id);
+  if (!node) return;
+  node.classList.toggle("hidden", !show);
+  node.hidden = !show;
+  node.setAttribute("aria-hidden", show ? "false" : "true");
+}
+
+function openTradeNetAbs(trade) {
+  const gross = Number(trade?.profit_abs);
+  if (!Number.isFinite(gross)) return null;
+  const mark = Number(trade.current_rate || trade.close_rate || trade.open_rate);
+  const fees = tradeRoundTripFees({
+    ...trade,
+    close_rate: mark > 0 ? mark : trade.open_rate,
+  });
+  return gross - fees;
+}
+
+function summarizeOpenTrades(trades) {
+  const list = (trades || []).filter((trade) => trade?.pair && !isRetiredTrade(trade));
+  const exchanges = new Set(list.map((trade) => trade.exchange || "bybit"));
+  const showEx = exchanges.size > 1;
+  const groups = new Map();
+  for (const trade of list) {
+    const side = trade.is_short ? "short" : "long";
+    const ex = String(trade.exchange || "bybit");
+    const exLabel = ex === "binance" ? "Binance" : "Bybit";
+    const name = tradeSourceLabel(trade, trade.bot || "strategy") + (showEx ? ` · ${exLabel}` : "");
+    const key = `${name}|${side}`;
+    let row = groups.get(key);
+    if (!row) {
+      row = { name, side, count: 0, pnl: 0, known: false, wins: 0, losses: 0, winPnl: 0, lossPnl: 0 };
+      groups.set(key, row);
+    }
+    row.count += 1;
+    const net = openTradeNetAbs(trade);
+    if (net != null) {
+      row.pnl += net;
+      row.known = true;
+      if (net > 0) {
+        row.wins += 1;
+        row.winPnl += net;
+      } else if (net < 0) {
+        row.losses += 1;
+        row.lossPnl += net;
+      }
+    }
+  }
+  return [...groups.values()].sort((a, b) => {
+    const byName = a.name.localeCompare(b.name, "ru");
+    if (byName) return byName;
+    return a.side === b.side ? 0 : a.side === "long" ? -1 : 1;
+  });
+}
+
+const openSummaryExpanded = new Set();
+
+function openSummaryRowKey(mode, row) {
+  return `${mode}|${row.name}`;
+}
+
+function foldSummaryStrategies(sideRows) {
+  const groups = new Map();
+  for (const row of sideRows) {
+    let group = groups.get(row.name);
+    if (!group) {
+      group = { name: row.name, count: 0, pnl: 0, known: false, long: null, short: null };
+      groups.set(row.name, group);
+    }
+    group.count += row.count;
+    if (row.known) {
+      group.pnl += row.pnl;
+      group.known = true;
+    }
+    group[row.side === "short" ? "short" : "long"] = row;
+  }
+  return [...groups.values()].sort((a, b) => a.name.localeCompare(b.name, "ru"));
+}
+
+function openSummarySideLine(label, side, row) {
+  const count = row?.count || 0;
+  const known = !!row?.known;
+  const pnl = known ? fmtUsdSigned(row.pnl, 2) : count ? "—" : fmtUsdSigned(0, 2);
+  const cls = known ? pnlClass(row.pnl) : "";
+  return `<div class="open-summary-side-line">
+    <span class="open-summary-side is-${side}">${label}</span>
+    <span class="open-summary-count">${count}</span>
+    <span class="open-summary-pnl ${cls}">${pnl}</span>
+  </div>`;
+}
+
+function openSummaryRowHtml(mode, row) {
+  const cls = row.known ? pnlClass(row.pnl) : "";
+  const pnl = row.known ? fmtUsdSigned(row.pnl, 2) : "—";
+  const key = openSummaryRowKey(mode, row);
+  const open = openSummaryExpanded.has(key);
+  return `<button type="button" class="open-summary-row open-summary-toggle" data-summary-key="${escapeHtml(key)}" aria-expanded="${open ? "true" : "false"}">
+    <span class="open-summary-count">${row.count}</span>
+    <span class="open-summary-name" title="${escapeHtml(row.name)}">${escapeHtml(row.name)}</span>
+    <span class="open-summary-pnl ${cls}">${pnl}</span>
+  </button>
+  <div class="open-summary-detail"${open ? "" : " hidden"}>
+    ${openSummarySideLine("Лонг", "long", row.long)}
+    ${openSummarySideLine("Шорт", "short", row.short)}
+  </div>`;
+}
+
+function openSummaryTotalHtml(label, count, pnl, known) {
+  const cls = known ? pnlClass(pnl) : "";
+  const value = known ? fmtUsdSigned(pnl, 2) : "—";
+  return `<div class="open-summary-total">
+    <span>${escapeHtml(label)} · ${count}</span>
+    <span class="open-summary-total-pnl ${cls}">${value}</span>
+  </div>`;
+}
+
+function renderOpenSummaryBoard(data) {
+  const root = $("trade-summary-board");
+  if (!root) return;
+  const accounts = (data?.accounts || []).filter(
+    (acc) => acc && (acc.active || (acc.rows || []).length || (acc.trades || []).length)
+  );
+  if (!accounts.length) {
+    root.innerHTML = `<p class="empty">Нет открытых сделок</p>`;
+    root.dataset.ready = "1";
+    return;
+  }
+  let grandCount = 0;
+  let grandPnl = 0;
+  let grandKnown = false;
+  const blocks = accounts.map((acc) => {
+    const mode = acc.mode === "demo" ? "demo" : "live";
+    const title = mode === "demo" ? "Demo" : "Live";
+    const sideRows = Array.isArray(acc.rows)
+      ? acc.rows
+          .map((row) => ({
+            name: row?.name || "—",
+            side: row?.side === "short" ? "short" : "long",
+            count: Number(row?.count) || 0,
+            pnl: Number(row?.pnl),
+            known: row?.pnl != null && Number.isFinite(Number(row.pnl)),
+          }))
+          .filter((row) => row.count > 0)
+      : summarizeOpenTrades(acc.trades);
+    const rows = foldSummaryStrategies(sideRows);
+    const count = rows.reduce((sum, row) => sum + row.count, 0);
+    const knownRows = rows.filter((row) => row.known);
+    const pnl = knownRows.reduce((sum, row) => sum + row.pnl, 0);
+    const known = knownRows.length > 0;
+    grandCount += count;
+    if (known) {
+      grandPnl += pnl;
+      grandKnown = true;
+    }
+    const body = rows.length
+      ? `<div class="open-summary-row open-summary-cols"><span>Кол-во</span><span>Стратегия</span><span>PNL</span></div>${rows.map((row) => openSummaryRowHtml(mode, row)).join("")}`
+      : `<p class="empty open-summary-empty">Нет открытых сделок</p>`;
+    return `<section class="open-summary-account">
+      <div class="open-summary-account-head">
+        <span class="mode-badge mode-badge-${mode}">${title}</span>
+        <span class="muted open-summary-fee">PNL с комиссией</span>
+      </div>
+      ${body}
+      ${openSummaryTotalHtml("Итого", count, pnl, known)}
+    </section>`;
+  });
+  const grand = accounts.length > 1
+    ? `<section class="open-summary-grand">${openSummaryTotalHtml("Итого по счетам", grandCount, grandPnl, grandKnown)}</section>`
+    : "";
+  root.innerHTML = blocks.join("") + grand + openSummaryWeekHtml(accounts);
+  root.dataset.ready = "1";
+}
+
+function openSummaryWeekRows(rows) {
+  return (rows || [])
+    .map((row) => ({
+      name: row?.name || "—",
+      count: Number(row?.count) || 0,
+      pnl: Number(row?.pnl),
+      known: row?.pnl != null && Number.isFinite(Number(row.pnl)),
+    }))
+    .filter((row) => row.count > 0);
+}
+
+function openSummaryStaticRowsHtml(rows) {
+  if (!rows.length) return `<p class="empty open-summary-empty">Нет закрытых сделок</p>`;
+  return `<div class="open-summary-row open-summary-cols"><span>Кол-во</span><span>Стратегия</span><span>PNL</span></div>${rows
+    .map((row) => {
+      const cls = row.known ? pnlClass(row.pnl) : "";
+      const pnl = row.known ? fmtUsdSigned(row.pnl, 2) : "—";
+      return `<div class="open-summary-row">
+        <span class="open-summary-count">${row.count}</span>
+        <span class="open-summary-name" title="${escapeHtml(row.name)}">${escapeHtml(row.name)}</span>
+        <span class="open-summary-pnl ${cls}">${pnl}</span>
+      </div>`;
+    })
+    .join("")}`;
+}
+
+function openSummaryWeekHtml(accounts) {
+  const shown = (accounts || []).filter((acc) => acc && (acc.active || (acc.week || []).length));
+  if (!shown.length) return "";
+  let grandCount = 0;
+  let grandPnl = 0;
+  let grandKnown = false;
+  const parts = shown.map((acc) => {
+    const mode = acc.mode === "demo" ? "demo" : "live";
+    const title = mode === "demo" ? "Demo" : "Live";
+    const rows = openSummaryWeekRows(acc.week);
+    const count = rows.reduce((sum, row) => sum + row.count, 0);
+    const knownRows = rows.filter((row) => row.known);
+    const pnl = knownRows.reduce((sum, row) => sum + row.pnl, 0);
+    const known = knownRows.length > 0;
+    grandCount += count;
+    if (known) {
+      grandPnl += pnl;
+      grandKnown = true;
+    }
+    const badge = shown.length > 1 ? `<div class="open-summary-week-mode"><span class="mode-badge mode-badge-${mode}">${title}</span></div>` : "";
+    return `${badge}${openSummaryStaticRowsHtml(rows)}${openSummaryTotalHtml("Итого", count, pnl, known)}`;
+  });
+  const grand = shown.length > 1
+    ? openSummaryTotalHtml("Итого по счетам", grandCount, grandPnl, grandKnown)
+    : "";
+  return `<section class="open-summary-account open-summary-week">
+    <div class="open-summary-account-head">
+      <strong>За последнюю неделю</strong>
+      <span class="muted open-summary-fee">PNL с комиссией</span>
+    </div>
+    ${parts.join("")}
+    ${grand}
+  </section>`;
+}
+
+async function syncOpenSummaryBoard() {
+  const root = $("trade-summary-board");
+  if (!root || boardMode !== "summary" || !panelIsActive()) return;
+  const seq = ++openSummarySeq;
+  if (!root.dataset.ready) root.innerHTML = `<p class="empty">Сводка…</p>`;
+  try {
+    const data = await pairConfigApi("/open-trades?account_mode=all");
+    if (seq !== openSummarySeq || boardMode !== "summary") return;
+    renderOpenSummaryBoard(data);
+  } catch (err) {
+    if (seq !== openSummarySeq || boardMode !== "summary") return;
+    if (err?.message === "auth") throw err;
+    root.innerHTML = `<p class="empty">${escapeHtml(err?.message || "Не удалось загрузить сводку")}</p>`;
+  }
+}
+
+function setBoardMode(mode) {
+  boardMode = mode === "trades" || mode === "summary" ? mode : "bots";
+  $("main-content")?.classList.toggle("is-trade-board", boardMode !== "bots");
+  setBoardPane("trade-charts-board", boardMode === "trades");
+  setBoardPane("trade-summary-board", boardMode === "summary");
+  document.querySelectorAll(".board-switch-btn[data-board]").forEach((btn) => {
+    const on = btn.dataset.board === boardMode;
+    btn.classList.toggle("is-active", on);
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+  });
+  if (boardMode === "trades") {
+    const hasTrades = ["strategy", "grid", "finder"].some((bot) => (botLiveCache[bot]?.trades || []).length);
+    if (hasTrades) {
+      const repaint = panelIsActive() && boardChartsStale();
+      if (repaint) boardChartsAt = Date.now();
+      renderTradeChartsBoard({ repaint });
+    } else {
+      const root = $("trade-charts-board");
+      if (root && !root.dataset.sig) root.innerHTML = `<p class="empty">Графики…</p>`;
+    }
+  } else if (boardMode === "bots") {
+    lastHeavyRefreshAt = 0;
+  }
+  refreshAll({ heavy: boardMode === "bots" }).catch((err) => {
+    if (err?.message === "auth") logout();
+  });
+}
+
+function bindBoardSwitch() {
+  document.querySelector(".board-switch")?.addEventListener("click", (ev) => {
+    const btn = ev.target.closest("[data-board]");
+    if (!btn || btn.dataset.board === boardMode) return;
+    setBoardMode(btn.dataset.board);
+  });
+  $("trade-summary-board")?.addEventListener("click", (ev) => {
+    const row = ev.target.closest("[data-summary-key]");
+    if (!row) return;
+    const key = row.dataset.summaryKey;
+    const detail = row.nextElementSibling;
+    const open = row.getAttribute("aria-expanded") === "true";
+    row.setAttribute("aria-expanded", open ? "false" : "true");
+    if (detail?.classList.contains("open-summary-detail")) detail.hidden = open;
+    if (open) openSummaryExpanded.delete(key);
+    else openSummaryExpanded.add(key);
+  });
+  $("trade-charts-board")?.addEventListener("click", async (ev) => {
+    const btn = ev.target.closest("[data-act=forceexit]");
+    if (!btn || btn.disabled) return;
+    ev.preventDefault();
+    const tradeBot = btn.dataset.bot;
+    const tradeId = btn.dataset.id;
+    if (!tradeBot || !tradeId) return;
+    if (!confirm(`Закрыть сделку #${tradeId}?`)) return;
+    const label = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "…";
+    try {
+      const result = await closeTrade(tradeBot, tradeId);
+      if (result?.result === "deleted") {
+        showToast(`Сделка #${tradeId} удалена из базы бота (на бирже уже была закрыта).`, "ok");
+      }
+      await refreshAll();
+    } catch (e) {
+      if (e.message === "auth") logout();
+      else showToast(formatApiError(e.message), "error");
+    } finally {
+      if (btn.isConnected) {
+        btn.disabled = false;
+        btn.textContent = label;
+      }
+    }
+  });
+  let resizeTimer = 0;
+  window.addEventListener("resize", () => {
+    if (!tradeBoardVisible()) return;
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => renderTradeChartsBoard({ repaint: false }), 200);
+  });
+}
 
 function renderTradesInto(el, bot, trades) {
   if (!el) return;
@@ -11332,6 +12628,11 @@ function stampLastUpdate() {
 
 async function refreshOpenTradesFast() {
   try {
+    if (boardMode === "summary") {
+      await syncOpenSummaryBoard();
+      stampLastUpdate();
+      return;
+    }
     if (openSummaryCache) renderTradesSummaryFromOpen(openSummaryCache);
     let cachedTrades = [];
     try {
@@ -11343,6 +12644,7 @@ async function refreshOpenTradesFast() {
     }
     renderTradesSummary(cachedTrades);
     stampLastUpdate();
+    if (boardMode === "trades") syncTradeChartsBoard();
   } catch (e) {
     if (e.message === "auth") logout();
     else console.error(e);
@@ -11363,45 +12665,53 @@ async function refreshPanelHeavy() {
       }
     }
 
-    pairConfigApi("/pairs")
-      .then((data) => {
-        syncTestSettingsFromPayload(data);
-        syncLimitsFromPairPayload(data);
-      })
-      .catch(() => {});
+    try {
+      const data = await pairConfigApi("/pairs");
+      syncTestSettingsFromPayload(data);
+      syncLimitsFromPairPayload(data);
+    } catch {
+      /* pairs are optional for the first bot paint */
+    }
 
-    refreshStrategyEnabled().catch((e) => {
-      if (e.message === "auth") logout();
-      else console.warn("refreshStrategyEnabled:", e.message);
-    });
+    try {
+      await refreshStrategyEnabled();
+    } catch (e) {
+      if (e.message === "auth") throw e;
+      console.warn("refreshStrategyEnabled:", e.message);
+    }
     const liveBots = ["strategy"];
     if (userMayUseBlock("grid")) liveBots.push("grid");
-    Promise.all(liveBots.map((b) => refreshBotSafe(b)))
-      .then((results) => {
-        const stratTrades = results[0] || [];
-        const gridTrades = liveBots.includes("grid") ? results[liveBots.indexOf("grid")] || [] : [];
-        const finderTrades = liveBots.includes("finder") ? results[liveBots.indexOf("finder")] || [] : [];
-        renderTradesSummary([
-          ...(stratTrades || []),
-          ...(gridTrades || []),
-          ...(finderTrades || []),
-        ]);
-        stampLastUpdate();
-      })
-      .catch(() => {});
+    const results = [];
+    for (const bot of liveBots) {
+      if (boardMode !== "bots") break;
+      results.push(await refreshBotSafe(bot));
+    }
+    if (boardMode === "bots") {
+      const stratTrades = results[0] || [];
+      const gridTrades = liveBots.includes("grid") ? results[liveBots.indexOf("grid")] || [] : [];
+      const finderTrades = liveBots.includes("finder") ? results[liveBots.indexOf("finder")] || [] : [];
+      renderTradesSummary([
+        ...(stratTrades || []),
+        ...(gridTrades || []),
+        ...(finderTrades || []),
+      ]);
+      stampLastUpdate();
+    }
 
-    const sideTasks = [
-      refreshPairlistMode().catch(() => {}),
-      refreshServerStats().catch(() => {}),
-      refreshReconcileBanner().catch(() => {}),
-      loadStrategyScanInfo().catch(() => {}),
-      refreshCursor50().catch((e) => {
-        if (e?.message === "auth") logout();
-        else console.warn("refreshCursor50:", e?.message || e);
-      }),
-    ];
-    Promise.all(sideTasks).catch(() => {});
-    prefetchStatsBundle().catch(() => {});
+    if (boardMode === "bots") {
+      const sideTasks = [
+        refreshPairlistMode().catch(() => {}),
+        refreshServerStats().catch(() => {}),
+        refreshReconcileBanner().catch(() => {}),
+        loadStrategyScanInfo().catch(() => {}),
+        refreshCursor50().catch((e) => {
+          if (e?.message === "auth") logout();
+          else console.warn("refreshCursor50:", e?.message || e);
+        }),
+      ];
+      Promise.all(sideTasks).catch(() => {});
+      prefetchStatsBundle().catch(() => {});
+    }
   } catch (e) {
     if (e.message === "auth") logout();
     else console.error(e);
@@ -11411,7 +12721,8 @@ async function refreshPanelHeavy() {
 async function refreshAll({ heavy = null } = {}) {
   if (!panelIsActive()) return;
   const wantHeavy =
-    heavy === true || (heavy !== false && Date.now() - lastHeavyRefreshAt >= HEAVY_REFRESH_MS);
+    boardMode === "bots" &&
+    (heavy === true || (heavy !== false && Date.now() - lastHeavyRefreshAt >= HEAVY_REFRESH_MS));
   const jobs = [];
   if (fastRefreshLock) {
     fastRefreshAgain = true;
@@ -13132,6 +14443,7 @@ bindCollapsibleSections();
 bindUiHints();
 updateBotSettingsSummaries();
 bindTradeLists();
+bindBoardSwitch();
 bindLlmControls();
 bindLlm50Controls();
 bindCursorControls();
